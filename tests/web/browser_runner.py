@@ -79,7 +79,8 @@ def _selected_tests(arguments: Sequence[str]) -> tuple[str, ...]:
 
 
 def _scratch_repository(artifact_root: Path) -> Path:
-    """Build one scratch repository whose packages and frontend the serving process reads."""
+    """Build one scratch repository whose packages, university table and frontend the serving
+    process reads."""
     repository = artifact_root / "repository"
     (repository / "src").mkdir(parents=True)
     for package in ("course_explorer", "course_explorer_web"):
@@ -88,6 +89,8 @@ def _scratch_repository(artifact_root: Path) -> Path:
             repository / "src" / package,
         )
     (repository / "native").symlink_to(_REPOSITORY_ROOT / "native", target_is_directory=True)
+    # The package loads the tracked university table from the repository root.
+    shutil.copy2(_REPOSITORY_ROOT / "universities.toml", repository / "universities.toml")
     (repository / "web").mkdir()
     (repository / "web" / "dist").symlink_to(
         _REPOSITORY_ROOT / "web" / "dist", target_is_directory=True

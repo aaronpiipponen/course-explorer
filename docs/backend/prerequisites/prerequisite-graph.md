@@ -28,9 +28,10 @@ The diagram shows one graph read returning the structure, the drawing and the al
 Finding the least expensive set of courses is a separate explicit calculation described in
 [Minimum route](/docs/backend/prerequisites/minimum-route.md). The machine route command compiles
 the same kind of structure through the same command module. The web response adds the serving
-dataset identity and the configured
-[allocation limit](/docs/reference/glossary.md#prerequisites-and-routes), so the browser needs no
-second read to calculate. A cached route passes directly to the route result and panel without a
+dataset identity, the configured
+[allocation limit](/docs/reference/glossary.md#prerequisites-and-routes) and the
+[assumed course credits](/docs/reference/glossary.md#courses-and-the-catalogue), so the browser needs
+no second read to calculate. A cached route passes directly to the route result and panel without a
 worker. The compiler, its calculation tables and the projector are described in
 [Prerequisite compiler](/docs/backend/prerequisites/prerequisite-compiler.md).
 
@@ -48,8 +49,8 @@ contributes no piece, no course and no read. The activity scope is a further inp
 
 A site bounds the inference toggle. When `WEB_INFERENCE_ENABLED` is false in that site's
 `config/web.toml`, the web read forwards the toggle as off whatever a request asks for. The switch
-bounds that one read alone: official data, the saved profile toggle, and the command and compiler
-match the source.
+bounds that one read alone: official data and the saved profile toggle are untouched, and the
+machine command and the compiler take the inference toggle from their caller.
 
 ## Official and inferred pools
 
@@ -168,6 +169,8 @@ piece bound to it is satisfied in the unmarked completed-only and chosen-basis c
 manual mark applies to the whole box. The page evaluates each drawn box's state from the report and
 writes nothing into it.
 
+The report also carries `max_compact_nodes` and `assumed_course_credits` as web-only metadata. A graph whose box evaluation counted a course at the configured assumed credit value shows one **Assumed credits used** caption beside its result, and a graph that only receives an unknown-credit input course does not. A shown route uses the route panel caption instead.
+
 A graph request carries the root, the selected and completed course sets, the **Recommended** and
 **Inferred** toggles and the activity scope. It carries no marks, no calculation basis and no
 excluded courses, and the two course sets serve only the retention of inactive courses under
@@ -189,8 +192,15 @@ calculation, and the drawing keeps the root and its requirements. Exclusions and
 browser and never enter a graph request.
 
 Under **Active only**, an inactive course that is not part of the request's selected courses is left
-out of the compiled structure, so it appears in neither the drawing nor the route. The graph root
-compiles its own official structure in either activity scope.
+out of the compiled structure, so it appears in neither the drawing nor the route. Under the
+all-courses scope an inactive course is allowed, and it exposes its retained official,
+substitution and inferred requirements in the same way as an active course. The graph root compiles its
+retained structure in either activity scope. A retained inactive basis course is in the structure
+and satisfies its dependants.
+
+An inferred set and an equivalence group a course already holds stay readable when the course turns
+inactive. The graph applies its ordinary activity scope to those results, so an inactive target in
+the all-courses scope shows its retained prerequisites.
 
 ## Unresolved requirements and ignored parts
 

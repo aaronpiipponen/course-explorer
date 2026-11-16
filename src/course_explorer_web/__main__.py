@@ -39,6 +39,7 @@ from types import FrameType
 
 from course_explorer.config import (
     embedding_configuration_for_site,
+    load_instance_settings,
     load_normalization_settings,
     load_search_settings,
     load_web_settings,
@@ -220,7 +221,9 @@ def _stop(roles: list[_Role]) -> None:
 def _preload_lookup_projection(serving) -> None:
     """Build the lookup projection before any child starts and dispose the dataset engine."""
     with database_context(serving.settings) as factory:
-        projection = build_lookup_projection(CurriculumRepository(factory))
+        projection = build_lookup_projection(
+            CurriculumRepository(factory, university=load_instance_settings().university)
+        )
     set_preloaded_lookup_projection(projection)
 
 

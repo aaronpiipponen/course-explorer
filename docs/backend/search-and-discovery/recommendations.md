@@ -20,7 +20,7 @@ The diagram follows one request from the basis chunks to the ordered list.
 
 The pool starts from the basis chunks: the content and learning-outcomes chunks of the basis courses that were stored under the embedding configuration in force. A basis course with no such chunk contributes nothing to it.
 
-A nearest search then asks for the stored closest chunks to each basis chunk, in the same language and in the same two fields, with the basis courses and the next courses excluded. It keeps at most `RECOMMENDATION_CHUNK_TOP_K` stored rows per basis chunk. The build stores up to `SEARCH_NEIGHBOR_TABLE_ROWS_PER_CHUNK` nearest rows per query chunk, so a request whose exclusions leave fewer stored rows returns fewer. The request's activity scope and exclusions apply to the stored rows, so a basis chunk fills the limit when at least that many stored rows survive. [Recommendation ranking](/docs/backend/search-and-discovery/recommendation-ranking.md#the-nearest-read) states how the build produces the stored rows.
+A nearest search then asks for the stored closest chunks to each basis chunk, in the same exact language code and in the same two fields, with the basis courses and the next courses excluded. A Swedish chunk therefore matches a Swedish basis chunk, and any further configured language behaves the same way. It keeps at most `RECOMMENDATION_CHUNK_TOP_K` stored rows per basis chunk. The build stores up to `SEARCH_NEIGHBOR_TABLE_ROWS_PER_CHUNK` nearest rows per query chunk, so a request whose exclusions leave fewer stored rows returns fewer. The request's activity scope and exclusions apply to the stored rows, so a basis chunk fills the limit when at least that many stored rows survive. [Recommendation ranking](/docs/backend/search-and-discovery/recommendation-ranking.md#the-nearest-read) states how the build produces the stored rows.
 
 The search decides the candidates, and the native scorer orders them. Each hit names one candidate course, and the hits of one course are reduced to a single entry that carries no score. A hit whose stored chunk belongs to a version that is not the representative version of its course is dropped, so only a current representative becomes a candidate.
 
@@ -60,7 +60,7 @@ Measuring one basis course at a time keeps a course that shares some content wit
 
 The candidate is also measured against the whole basis at once, over every basis course together, and that whole-basis overlap reduces the score by `RECOMMENDATION_OVERLAP_PENALTY_WEIGHT`. The penalty applies to the score alone, so the relatedness that the app shows is the calibrated cosine with the basis vector. A weight of 0 leaves the score equal to the raw basis-vector cosine percentage, so the whole-basis overlap does not change the order.
 
-The list is ordered by descending score, then by descending relatedness, then by the displayed official name and code key. The relatedness floor and the near-duplicate rule are the only cuts, so the list has no configured length limit.
+The list is ordered by descending score, then by descending relatedness, then by the displayed summary name and code key. The relatedness floor and the near-duplicate rule are the only cuts, so the list has no configured length limit.
 
 ## Derived text
 

@@ -95,7 +95,7 @@ private:
 
     Frag compile_course_requirements(const CourseFact &fact);
     void compile_category_pools(const CourseFact &fact, const Path &source,
-                                bool treat_inactive_as_active, Frag *required, Frag *recommended);
+                                Frag *required, Frag *recommended);
     std::vector<CompiledOption> compile_official_options(const CourseFact &fact,
                                                          int requirement_kind, const Path &source);
     Frag finish_official_options(const std::vector<CompiledOption> &options, int official_kind,
@@ -505,7 +505,7 @@ bool Compiler::select_version(const ModuleFact &fact, const Version **version, b
     const Version *chosen = nullptr;
     for (const auto &[value, candidate] : ranked) {
         if (value != best) continue;
-        if (chosen == nullptr || candidate->sisu > chosen->sisu) chosen = candidate;
+        if (chosen == nullptr || candidate->source_version_id > chosen->source_version_id) chosen = candidate;
     }
     *version = chosen;
     used_fallback = true;
@@ -718,8 +718,6 @@ Frag Compiler::compile_composite(const Rule &rule, const std::string &module_id,
                          "CompositeRule requires explicit require_min unless all-mandatory", source);
     if (rule.require_min > (int32_t) rule.children.size())
         return malformed(rule, module_id, "CompositeRule require_min exceeds child count", source);
-    if (rule.require_max != -1 && rule.require_max > (int32_t) rule.children.size())
-        return malformed(rule, module_id, "CompositeRule require_max exceeds child count", source);
     if (rule.require_max != -1 && rule.require_min > rule.require_max)
         return malformed(rule, module_id, "CompositeRule require_min exceeds require_max", source);
     std::vector<Frag> children = compile_rule_children(rule, module_id, source[2].text, source,
@@ -919,12 +917,12 @@ Frag Compiler::expand_module_requirement(const std::string &module_id, int offic
     if (fallback) {
         pending.push_back(ignored("module_version_fallback", official_kind, {module_id},
                                   "requested year " + std::to_string(year_) + "; selected "
-                                      + version->sisu,
+                                      + version->source_version_id,
                                   module_id));
     }
     ModuleSummaryRec summary;
     summary.group = module_id;
-    summary.sisu = version->sisu;
+    summary.source_version_id = version->source_version_id;
     const char *module_type = module_type_name(version->module_type);
     if (module_type == nullptr) {
         failed = true;
@@ -940,18 +938,18 @@ Frag Compiler::expand_module_requirement(const std::string &module_id, int offic
     summary.has_name_fi = version->has_name_fi;
     summary.has_name_en = version->has_name_en;
     module_summaries_[module_id] = summary;
-    Path module_source{text_part("module"), text_part(module_id), text_part(version->sisu)};
-    Path work_path{text_part(version->sisu)};
+    Path module_source{text_part("module"), text_part(module_id), text_part(version->source_version_id)};
+    Path work_path{text_part(version->source_version_id)};
     Frag compiled;
     if (!version->has_rule) {
         pending.push_back(ignored("unexpandable_content", official_kind, {module_id},
-                                  "module version " + version->sisu
+                                  "module version " + version->source_version_id
                                       + " has no stored rule tree",
                                   module_id));
     } else {
         auto ancestors = cycle_ancestors("module", module_id, ancestors_courses, ancestors_modules);
         std::string owner = ancestors_courses.empty() ? std::string() : ancestors_courses.back();
-        std::string key = "M|" + module_id + "|" + version->sisu + "|" + owner + "|";
+        std::string key = "M|" + module_id + "|" + version->source_version_id + "|" + owner + "|";
         for (const std::string &value : ancestors.first) key += "c" + value + ";";
         key += "|";
         for (const std::string &value : ancestors.second) key += "m" + value + ";";
@@ -963,7 +961,7 @@ Frag Compiler::expand_module_requirement(const std::string &module_id, int offic
             size_t body_offset = pending.size();
             std::vector<std::string> saved = ancestors_modules;
             ancestors_modules.push_back(module_id);
-            compiled = compile_rule(version->rule, module_id, version->sisu, module_source,
+            compiled = compile_rule(version->rule, module_id, version->source_version_id, module_source,
                                     work_path);
             ancestors_modules = saved;
             module_memo_[key] = finish_frag(body_offset, compiled.use);
@@ -1028,9 +1026,11 @@ Frag Compiler::expand_course_requirement(const std::string &group, int origin, i
     prov.inference = inference;
     if (!fact->active) {
         if (active_only && retained.count(group) == 0) return {};
-        Frag result;
-        result.use = leaf_course(group, false, prov, source, take_pending(offset));
-        return result;
+        if (!fact->has_rep) {
+            Frag result;
+            result.use = leaf_course(group, false, prov, source, take_pending(offset));
+            return result;
+        }
     }
     for (const std::string &ancestor : ancestors_courses) {
         if (ancestor != group) continue;
@@ -1048,7 +1048,7 @@ Frag Compiler::expand_course_requirement(const std::string &group, int origin, i
         set_error("represented course has no selected representative: " + group);
         return {};
     }
-    Path local_key{text_part(group), text_part(fact->rep.sisu), text_part("body")};
+    Path local_key{text_part(group), text_part(fact->rep.source_version_id), text_part("body")};
     Frag child;
     ancestors_courses.push_back(group);
     if (!direct_only) child = compile_course_requirements(*fact);
@@ -1399,11 +1399,9 @@ Frag Compiler::expand_inferred_expression(const Expr &expression, const Path &so
 
 Frag Compiler::compile_course_requirements(const CourseFact &fact)
 {
-    Frag empty;
-    if (!fact.active) return empty;
     std::string owner = ancestors_courses.empty() ? std::string() : ancestors_courses.back();
     auto ancestors = cycle_ancestors("course", fact.id, ancestors_courses, ancestors_modules);
-    std::string key = "C|" + fact.id + "|" + (fact.has_rep ? fact.rep.sisu : std::string()) + "|"
+    std::string key = "C|" + fact.id + "|" + (fact.has_rep ? fact.rep.source_version_id : std::string()) + "|"
         + owner + "|";
     for (const std::string &value : ancestors.first) key += "c" + value + ";";
     key += "|";
@@ -1414,10 +1412,10 @@ Frag Compiler::compile_course_requirements(const CourseFact &fact)
         return cached->second;
     }
     size_t offset = pending.size();
-    Path body{text_part(fact.id), text_part(fact.rep.sisu), text_part("body")};
+    Path body{text_part(fact.id), text_part(fact.rep.source_version_id), text_part("body")};
     Frag required;
     Frag recommended;
-    compile_category_pools(fact, body, false, &required, &recommended);
+    compile_category_pools(fact, body, &required, &recommended);
     std::vector<int> pools;
     if (!required.empty()) pools.push_back(required.use);
     if (!recommended.empty()) pools.push_back(recommended.use);
@@ -1596,17 +1594,15 @@ Frag Compiler::pool_category(const Frag &official, const std::vector<Frag> &infe
 }
 
 void Compiler::compile_category_pools(const CourseFact &fact, const Path &source,
-                                      bool treat_inactive_as_active, Frag *required,
-                                      Frag *recommended)
+                                      Frag *required, Frag *recommended)
 {
-    if (!fact.active && !treat_inactive_as_active) return;
     std::vector<CompiledOption> official_required =
         compile_official_options(fact, 0, source);
     std::vector<CompiledOption> official_recommended;
     if (include_recommended) official_recommended = compile_official_options(fact, 1, source);
     std::vector<Frag> inferred_required;
     std::vector<Frag> inferred_recommended;
-    if (include_inferred && fact.active) {
+    if (include_inferred) {
         const InferredFact *inferred = read_inferred(fact);
         if (inferred != nullptr) {
             Path path = extend(source, "inferred");
@@ -1684,7 +1680,7 @@ void Compiler::index_course_sources(std::string_view group_view, bool allow_subs
     const CourseFact *fact = course(group);
     if (fact == nullptr || !fact->has_rep) return;
     bool is_root = group == root_;
-    if (!fact->active && !is_root) return;
+    if (!fact->active && active_only && !is_root && retained.count(group) == 0) return;
     if (is_root || !direct_only) {
         for (const Option &option : fact->rep.options) {
             if (option.recommended && !include_recommended) continue;
@@ -1698,7 +1694,7 @@ void Compiler::index_course_sources(std::string_view group_view, bool allow_subs
                 }
             }
         }
-        if (include_inferred && fact->active) {
+        if (include_inferred) {
             const InferredFact *inferred = read_inferred(*fact);
             if (inferred != nullptr) index_expression(inferred->expression, group, successors);
         }
@@ -1941,10 +1937,10 @@ Frag Compiler::build()
     compilation_.include_inferred = include_inferred;
     compilation_.include_recommended = include_recommended;
     build_source_index();
-    Path root_source{text_part(root_), text_part(fact->rep.sisu), text_part("body")};
+    Path root_source{text_part(root_), text_part(fact->rep.source_version_id), text_part("body")};
     Frag required;
     Frag recommended;
-    compile_category_pools(*fact, root_source, true, &required, &recommended);
+    compile_category_pools(*fact, root_source, &required, &recommended);
     std::vector<int> pools;
     if (!required.empty()) pools.push_back(required.use);
     if (!recommended.empty()) pools.push_back(recommended.use);

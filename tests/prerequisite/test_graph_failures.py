@@ -327,10 +327,10 @@ def test_compiler_drops_direct_self_occurrences_but_preserves_indirect_cycles(na
     assert back_issue.kind == "course_cycle"
 
 
-def test_inactive_root_compiles_official_structure_and_active_only_drops_unretained_members(
+def test_inactive_root_compiles_retained_structure_and_active_only_drops_unretained_members(
     native_graph,
 ) -> None:
-    """An explicitly opened inactive root compiles its own official structure, and active-only drops
+    """An explicitly opened inactive root compiles its retained structure, and active-only drops
     its unretained members.
     """
     courses = (
@@ -387,9 +387,17 @@ def test_inactive_root_compiles_official_structure_and_active_only_drops_unretai
         active_only=True,
     )
 
-    # Both scopes compile the root's own official structure and never read an inferred set.
-    assert all_courses.solver.inferred_coverage == ()
-    assert active_only.solver.inferred_coverage == ()
+    # Both scopes compile the root's own official structure. All-course scope reads the retained
+    # inferred sets of the root and its inactive members, and active-only scope drops the
+    # unretained members.
+    assert {record.target_group_id for record in all_courses.solver.inferred_coverage} == {
+        "inactive-root",
+        "inactive-child",
+        "inactive-recommended",
+    }
+    assert {record.target_group_id for record in active_only.solver.inferred_coverage} == {
+        "inactive-root"
+    }
     assert all_courses.solver.active_only is False
     assert active_only.solver.active_only is True
 
@@ -397,27 +405,27 @@ def test_inactive_root_compiles_official_structure_and_active_only_drops_unretai
     all_root = all_courses.solver.root_use_id
     assert all_root is not None
     assert piece_of(all_courses.solver, all_root).kind == "and"
-    all_children = child_uses(all_courses.solver, all_root)
-    assert all(
-        fact_of(all_courses.solver, child).origin is PrerequisiteOrigin.OFFICIAL
-        for child in all_children
-    )
+    origins = {fact.origin for fact in all_courses.solver.facts}
+    assert PrerequisiteOrigin.OFFICIAL in origins
+    assert PrerequisiteOrigin.INFERRED not in origins
     assert {summary.group_id for summary in all_courses.solver.courses} == {
         "inactive-root",
         "inactive-child",
         "inactive-recommended",
+        "hidden-grandchild",
+        "hidden-substitute",
     }
-    # An inactive non-root member of the root's own structure is a leaf.
+    # An inactive non-root member exposes its retained official and substitution requirements.
     inactive_leaf = next(
         summary for summary in all_courses.solver.courses if summary.group_id == "inactive-child"
     )
     assert inactive_leaf.is_active is False
-    assert "hidden-grandchild" not in {summary.group_id for summary in all_courses.solver.courses}
-    assert "hidden-substitute" not in {summary.group_id for summary in all_courses.solver.courses}
     assert {node.course_group_id for node in course_nodes(all_courses.display)} == {
         "inactive-root",
         "inactive-child",
         "inactive-recommended",
+        "hidden-grandchild",
+        "hidden-substitute",
     }
 
     # Active-only drops the two unretained inactive non-root members, so the inactive root

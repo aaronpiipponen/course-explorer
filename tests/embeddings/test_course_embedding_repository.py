@@ -29,10 +29,10 @@ from course_explorer.embeddings.repository import CourseEmbeddingRepository
 from course_explorer.enums import (
     CourseEmbeddingStatus,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
 )
 from course_explorer.http_retry import RequestNotStarted
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.teaching_text.service import TeachingTextService
 from course_explorer_admin import lifecycle, mechanics
 from course_explorer_admin.lifecycle import (
@@ -200,6 +200,41 @@ def test_reconcile_embeds_and_reuses_matching_chunks(
     assert repository.coverage(("course-absent",)).total_chunk_count == 0
     assert repository.coverage(()).total_chunk_count == 0
 
+    # A retained chunk in a canonical code outside the configured languages counts in the scope
+    # total and has no configured per-cell row.
+    with session_scope(factory) as session:
+        template = session.scalars(
+            select(CourseEmbeddingChunk).where(
+                CourseEmbeddingChunk.course_version_id == ids["direct_version"],
+                CourseEmbeddingChunk.text_origin == TeachingTextOrigin.OFFICIAL,
+            )
+        ).first()
+        assert template is not None
+        session.add(
+            CourseEmbeddingChunk(
+                course_version_id=ids["direct_version"],
+                field=TeachingTextField.CONTENT,
+                language="de",
+                chunk_index=99,
+                text_origin=TeachingTextOrigin.OFFICIAL,
+                text=template.text,
+                representative_source_hash=template.representative_source_hash,
+                effective_text_hash=template.source_text_hash,
+                source_text_hash=template.source_text_hash,
+                chunk_text_hash=template.chunk_text_hash,
+                embedding_model=template.embedding_model,
+                embedding_artifact_sha256=template.embedding_artifact_sha256,
+                embedding_configuration_hash=template.embedding_configuration_hash,
+                status=CourseEmbeddingStatus.PENDING,
+                embedding=None,
+            )
+        )
+
+    scoped = repository.coverage(("course-a",))
+    assert scoped.total_chunk_count == report.desired_chunk_count + 1
+    assert scoped.fields == coverage.fields
+    assert all(count.language != "de" for count in scoped.fields)
+
 
 def test_reconcile_invalidates_translation_and_removes_inactive_representative_chunks(
     database: tuple[Engine, object],
@@ -230,12 +265,41 @@ def test_reconcile_invalidates_translation_and_removes_inactive_representative_c
 
     assert invalidated.invalidated_count == 1
     assert invalidated.reused_count == invalidated.desired_chunk_count - 1
-    content_key = (TeachingTextField.CONTENT, TeachingTextLanguage.FI)
-    name_en_key = (TeachingTextField.NAME, TeachingTextLanguage.EN)
+    content_key = (TeachingTextField.CONTENT, "fi")
+    name_en_key = (TeachingTextField.NAME, "en")
     # Matching chunk text holds its identity and vector.
     assert after[content_key] == before[content_key]
     # The changed translation's chunk is the only reset row.
     assert after[name_en_key] != before[name_en_key]
+
+    # The same generation seam configured for Swedish emits and reuses a Swedish chunk without a
+    # second provider or a different work key for the unchanged cells.
+    hanken_service, hanken_repository, hanken_provider, _, _ = compose(
+        database, university=UNIVERSITIES["hanken"]
+    )
+    hanken_report = hanken_service.run()
+    assert hanken_report is not None
+    assert hanken_report.inserted_count == 1
+    assert hanken_report.embedded_count == 1
+    with session_scope(factory) as session:
+        swedish = session.scalars(
+            select(CourseEmbeddingChunk).where(
+                CourseEmbeddingChunk.course_version_id == ids["direct_version"],
+                CourseEmbeddingChunk.field == TeachingTextField.CONTENT,
+                CourseEmbeddingChunk.language == "sv",
+            )
+        ).one()
+        assert swedish.status is CourseEmbeddingStatus.COMPLETED
+        assert swedish.embedding is not None
+    hanken_provider.calls.clear()
+    hanken_rerun = hanken_service.run()
+    assert hanken_rerun is not None
+    assert hanken_rerun.embedded_count == 0
+    assert hanken_rerun.reused_count == hanken_rerun.desired_chunk_count
+    assert hanken_provider.calls == []
+    assert hanken_repository.coverage(("course-a",)).total_chunk_count == (
+        hanken_report.desired_chunk_count
+    )
 
     # Move the representative: switch current-year membership to the archived version and prove
     # the outgoing representative's rows are deleted.

@@ -1,12 +1,12 @@
 """One generated Compose environment bridge for the Docker Compose stack.
 
-Docker Compose needs environment syntax for the set of interpolation keys in
-``docker-compose.yml``. This module is the sole owner of that bridge: it projects the validated raw
-database and embedding runtime settings onto exactly those interpolation aliases, writes them into
-an invocation-owned mode-0700 temporary directory as a mode-0600 file, runs the ``sudo docker
-compose`` command with that file, and removes the directory when the subprocess completes. The
-bridge carries only those interpolation aliases. A caller-supplied Docker Compose project name is
-forwarded as an explicit ``--project-name``.
+Docker Compose needs environment syntax for the interpolation keys in the runtime and example
+Compose files. This module is the sole owner of that bridge: it projects the validated raw
+database, embedding runtime and instance settings onto exactly those interpolation aliases, writes
+them into an invocation-owned mode-0700 temporary directory as a mode-0600 file, runs the
+``sudo docker compose`` command with that file, and removes the directory when the subprocess
+completes. The bridge carries only those interpolation aliases. A caller-supplied Docker Compose
+project name is forwarded as an explicit ``--project-name``.
 
 It is invoked through ``mechanics.compose_prefix()`` on both the server and the worker, so each
 host generates its own bridge locally.
@@ -25,7 +25,9 @@ from pathlib import Path
 from course_explorer import administration
 from course_explorer.config import (
     load_embedding_runtime_settings,
+    load_instance_settings,
     load_raw_database_settings,
+    load_shared_storage_settings,
 )
 
 # Docker Compose's own process-level project selector. When the caller supplies it, the bridge
@@ -35,10 +37,17 @@ COMPOSE_PROJECT_NAME_ALIAS = "COMPOSE_PROJECT_NAME"
 
 
 def compose_environment() -> dict[str, str]:
-    """Project the raw database and embedding settings onto the Compose interpolation aliases."""
+    """Project the raw database, embedding and instance settings onto Compose interpolation
+    aliases.
+    """
     database = load_raw_database_settings()
     embedding = load_embedding_runtime_settings()
+    instance = load_instance_settings()
+    artifact = load_shared_storage_settings().resolve_embedding_artifact(
+        embedding.embedding_artifact_path
+    )
     return {
+        "COURSE_EXPLORER_PROJECT_NAME": f"course-explorer-{instance.instance_key}",
         "POSTGRES_DB": database.postgres_db,
         "POSTGRES_USER": database.postgres_user,
         "POSTGRES_PASSWORD": database.postgres_password.get_secret_value(),
@@ -53,7 +62,7 @@ def compose_environment() -> dict[str, str]:
         "EMBEDDING_CONTEXT_SIZE": str(embedding.embedding_context_size),
         "EMBEDDING_POOLING": embedding.embedding_pooling,
         "EMBEDDING_NORMALIZATION": str(embedding.embedding_normalization),
-        "EMBEDDING_ARTIFACT_PATH": str(embedding.embedding_artifact_path),
+        "EMBEDDING_ARTIFACT_PATH": str(artifact),
     }
 
 

@@ -30,6 +30,7 @@ import "./shared/dialog.css";
 import "./shared/help.css";
 import "./features/compare/compare.css";
 import "./shared/activity-switch.css";
+import "./shared/assumed-note.css";
 import "./shared/disclosure.css";
 import "./shared/picker-overlay.css";
 import "./shared/course/tile.css";
@@ -42,6 +43,7 @@ import "./features/prerequisites/route/route.css";
 import "./features/structure/structure.css";
 import "./features/discover/discover.css";
 import "./features/profiles/profiles.css";
+import "./features/imports/imports.css";
 import "./styles/mobile-scale.css";
 
 const root = createRoot(document.getElementById("root")!);

@@ -6,7 +6,6 @@ import json
 import uuid
 from pathlib import Path
 
-from pydantic import AnyHttpUrl, TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -16,9 +15,9 @@ from course_explorer.ingestion.manifest import RawCaptureStore
 from course_explorer.ingestion.repository import CaptureRepository
 from course_explorer.ingestion.source import CapturedResponse, CurriculumPeriodRef
 from course_explorer.prerequisite.domain import CurrentEquivalenceGroup, InferredSetReadResult
+from tests.ingestion._capture_support import SISU_PARSER
 
 FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "kori" / "normalization"
-GUIDE_URL = TypeAdapter(AnyHttpUrl).validate_python("https://sisu.tuni.fi/student/courseunit")
 
 
 class _NoInferredSetRead:
@@ -55,7 +54,7 @@ def fixture_response_inputs(
     modules_body: bytes,
     *,
     duplicate_first_course_response: bool = False,
-) -> tuple[tuple[CapturedResponse, SourceObjectType | None, tuple[object, ...]], ...]:
+) -> tuple[tuple[CapturedResponse, SourceObjectType | None], ...]:
     """Build the shared period/course/module captured-response input tuple.
 
     The tuple uses the exact fixture periods and public ``CapturedResponse`` assembly shared by the
@@ -63,23 +62,20 @@ def fixture_response_inputs(
     """
     periods_body = fixture_bytes("periods.json")
     course_values = json.loads(courses_body)
-    response_inputs: list[tuple[CapturedResponse, SourceObjectType | None, tuple[object, ...]]] = [
+    response_inputs: list[tuple[CapturedResponse, SourceObjectType | None]] = [
         (
             CapturedResponse(
                 "/api/curriculum-periods", (("universityOrgId", "fixture"),), periods_body
             ),
             None,
-            (),
         ),
         (
             CapturedResponse("/api/course-units", (("id", "fixture-course-batch"),), courses_body),
             SourceObjectType.COURSE_UNIT,
-            tuple(course_values),
         ),
         (
             CapturedResponse("/api/modules", (("id", "fixture-module-batch"),), modules_body),
             SourceObjectType.MODULE,
-            tuple(json.loads(modules_body)),
         ),
     ]
     if duplicate_first_course_response:
@@ -94,7 +90,6 @@ def fixture_response_inputs(
                     duplicate_body,
                 ),
                 SourceObjectType.COURSE_UNIT,
-                (course_values[0],),
             )
         )
     return tuple(response_inputs)
@@ -111,7 +106,9 @@ def build_completed_fixture_store(
     duplicate_first_course_response: bool = False,
 ) -> RawCaptureStore:
     """Build and register one completed capture using real raw/provenance owners."""
-    store = RawCaptureStore.create(tmp_path / f"raw-{uuid.uuid4()}", run_id=uuid.uuid4())
+    store = RawCaptureStore.create(
+        tmp_path / f"raw-{uuid.uuid4()}", run_id=uuid.uuid4(), parser=SISU_PARSER
+    )
     courses_body = fixture_bytes("courses.json") if courses_body is None else courses_body
     modules_body = fixture_bytes("modules.json") if modules_body is None else modules_body
     repository.ensure_run(store.manifest, store.manifest_relative_path)

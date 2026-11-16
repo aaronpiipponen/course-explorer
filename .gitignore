@@ -24,12 +24,11 @@
 /deploy/systemd/*
 !/deploy/systemd/course-explorer-actions-runner.service.in
 
-# Runtime data and models. The fictional example fixture is the tracked data: keep its five exact
+# Runtime data and models. The fictional example fixture is the tracked data: keep its four exact
 # files and ignore every other data, model, and runtime artifact.
 /data/*
 !/data/mock/
 /data/mock/*
-!/data/mock/dataset.json
 !/data/mock/periods.json
 !/data/mock/courses.json
 !/data/mock/modules.json

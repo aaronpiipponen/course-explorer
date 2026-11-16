@@ -7,6 +7,7 @@ export type SolverRequest = {
   operation: "route";
   structure: SolverStructure;
   basis_group_ids: readonly string[];
+  assumed_course_credits: string;
   max_compact_nodes: number | null;
 };
 
@@ -21,6 +22,7 @@ export function runRequest(request: SolverRequest): MinimumRoute {
     return calculateMinimumNewCredits(
       request.structure,
       request.basis_group_ids,
+      request.assumed_course_credits,
       request.max_compact_nodes,
     );
   }

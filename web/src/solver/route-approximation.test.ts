@@ -17,7 +17,7 @@ describe("route approximation", () => {
   it("approximate route lights one coherent equal-cost module occurrence", () => {
     const label = "coherent_route_occurrences.equal";
     const structure = loadStructure(contractFixtures, label);
-    const result = calculateMinimumNewCredits(structure, [], 1);
+    const result = calculateMinimumNewCredits(structure, [], "5", 1);
     expect(result.state).toBe("approximate");
     expect(selectedGroupIds(result)).toEqual(["P", "Q"]);
     expect(creditsOf(result.total_new_credits)).toBe(1000);
@@ -64,8 +64,8 @@ describe("route approximation", () => {
       fixtures,
       "path_below_size_limit_preserves_complete_exact_bytes.small",
     );
-    const ordinary = calculateMinimumNewCredits(structure, []);
-    const capped = calculateMinimumNewCredits(structure, [], 20000);
+    const ordinary = calculateMinimumNewCredits(structure, [], "5");
+    const capped = calculateMinimumNewCredits(structure, [], "5", 20000);
     expect(ordinary).toEqual(capped);
   });
 
@@ -85,6 +85,7 @@ describe("route approximation", () => {
           `scalar_greedy_route_deduplicates_shared_prerequisites_and_opaque_work.tree[${suffix}]`,
         ),
         [],
+        "5",
         1,
       );
       expect(result.state).toBe("approximate");
@@ -141,6 +142,7 @@ describe("route approximation", () => {
           `path_approximation_extends_greedy_prefixes_for_numeric_bounds.tree[${suffix}]`,
         ),
         [],
+        "5",
         1,
       );
       expect(result.state).toBe("approximate");
@@ -161,6 +163,7 @@ describe("route approximation", () => {
           `path_approximation_failure_reports_search_too_large_without_a_route.tree[${limit}]`,
         ),
         [],
+        "5",
         limit,
       );
       expect(result.state).toBe("approximation_failed");
@@ -182,6 +185,7 @@ describe("route approximation", () => {
         "scalar_greedy_expanded_head_stops_at_the_basis.tree",
       ),
       ["head"],
+      "5",
       1,
     );
     expect(result.state).toBe("approximate");
@@ -206,6 +210,7 @@ describe("route approximation", () => {
           `scalar_greedy_route_rejects_unavailable_alternatives.tree[${denial}]`,
         ),
         [],
+        "5",
         1,
       );
       expect(result.state).toBe("approximate");

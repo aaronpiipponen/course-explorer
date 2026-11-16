@@ -14,7 +14,15 @@ import { WebFeaturesContext } from "./webFeaturesContext";
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 const FOOTER =
-  "This is an independent project that is not affiliated with Tampere University.";
+  "This is an independent project that is not affiliated with {university}.";
+const UNIVERSITY = {
+  en: "Example University",
+  fi: "Esimerkkiyliopisto",
+};
+const SOURCE = {
+  en: "English source attribution",
+  fi: "Suomenkielinen lähdemerkintä",
+};
 
 const originalMedia = globalThis.matchMedia;
 const originalObserver = globalThis.ResizeObserver;
@@ -80,26 +88,37 @@ describe("shell language", () => {
               value: {
                 embeddings_enabled: true,
                 inference_enabled: true,
+                prerequisites_enabled: true,
                 dataset_identity: "synthetic-dataset",
+                display_label: "example-uni",
+                university_names: UNIVERSITY,
+                source_attribution: SOURCE,
+                assumed_course_credits: "5",
+                study_plan_script: null,
+                study_plan_formats: [],
               },
             },
             createElement(TopBar, {
+              repositoryUrl: "https://github.com/owner/repo",
               openDocs: () => {},
               openFeedback: () => {},
             }),
-            createElement(AppFooter, {
-              repositoryUrl: "https://github.com/owner/repo",
-            }),
+            createElement(AppFooter),
           ),
         ),
       ),
     );
     const footer = container.querySelector(".app-footer-notice");
+    const source = container.querySelector(".app-footer-source");
+    expect(container.querySelector(".app-footer a")).toBeNull();
     const tab = container.querySelector(".nav-tab");
     const feedback = container.querySelector('a[href="/feedback"]');
     const control =
       container.querySelector<HTMLButtonElement>(".language-switch");
-    expect(footer?.textContent).toBe(uiText("en", FOOTER));
+    expect(footer?.textContent).toBe(
+      uiText("en", FOOTER, { university: UNIVERSITY.en }),
+    );
+    expect(source?.textContent).toBe(SOURCE.en);
     expect(tab?.textContent).toBe(uiText("en", "Search"));
     expect(feedback?.textContent).toBe(uiText("en", "Feedback"));
     expect(control?.getAttribute("aria-label")).toBe(
@@ -111,7 +130,10 @@ describe("shell language", () => {
     );
 
     expect(store.getSnapshot().profiles.default.state.language).toBe("fi");
-    expect(footer?.textContent).toBe(uiText("fi", FOOTER));
+    expect(footer?.textContent).toBe(
+      uiText("fi", FOOTER, { university: UNIVERSITY.fi }),
+    );
+    expect(source?.textContent).toBe(SOURCE.fi);
     expect(tab?.textContent).toBe(uiText("fi", "Search"));
     expect(feedback?.textContent).toBe(uiText("fi", "Feedback"));
     expect(control?.getAttribute("aria-label")).toBe(
@@ -126,7 +148,10 @@ describe("shell language", () => {
       control?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
     expect(store.getSnapshot().profiles.default.state.language).toBe("en");
-    expect(footer?.textContent).toBe(uiText("en", FOOTER));
+    expect(footer?.textContent).toBe(
+      uiText("en", FOOTER, { university: UNIVERSITY.en }),
+    );
+    expect(source?.textContent).toBe(SOURCE.en);
     expect(store.getSnapshot().profiles.default.state).toEqual(seeded);
   });
 });

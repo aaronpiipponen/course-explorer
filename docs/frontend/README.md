@@ -4,11 +4,11 @@ The frontend is the browser app over the tabs a site serves, the state it holds 
 
 ## The app and its tabs
 
-The app is one shell with a header, a tab area and a bottom row. On desktop the header is a top bar that carries a button for each tab the site serves, **Feedback**, **Docs**, the profile control and the language control, and the footer holds the independent-project notice, the source link and the curriculum source line.
+The app is one shell with a header, a tab area and a bottom row. On desktop the header is a top bar that carries a button for each tab the site serves, **Feedback**, **Docs**, the profile control, the language control and the GitHub link, and the footer holds the independent-project notice and the curriculum source line.
 
-On a phone the header is an empty safe-area strip and one bottom bar carries the served tabs plus **More**, whose sheet holds the profile control, the language control, **Feedback** and **Docs**. The app runs in Finnish and English.
+On a phone the header is an empty safe-area strip and one bottom bar carries the served tabs plus **More**, whose sheet holds the profile control, the language control and the row of **GitHub**, **Feedback** and **Docs**. The app runs in Finnish and English.
 
-The site's two feature switches decide which tabs and controls it serves, and the app reads them once before the shell mounts, together with the serving dataset identity that bounds the read cache above the tab panes.
+The site's three feature switches decide which tabs and controls it serves, and the app reads them once before the shell mounts, together with the serving dataset identity that bounds the read cache above the tab panes.
 
 Each tab joins two sources: the reports it reads from the server, which describe the official catalogue, and the state the open profile holds in the browser, which is its language, its course selection and completion, its exclusions, and the choices and places of the structure tab. A list of course cards is a report, while the mark that says a course is completed is browser state. The narrowing boxes filter one cached minimal official catalogue locally, so a keystroke sends no request.
 
@@ -28,7 +28,7 @@ The selection and the completion are shared rather than owned by a tab. A course
 
 The **Structure of studies** tab lays the profile's own choices, places and card order over the official structure reports of its ordered programmes. A canonical module with several eligible versions is chosen explicitly, and a group that needs one shows its own candidate picker. Selecting a course there adds it to the shared selection, and each course shows on one card.
 
-[Structure editor](/docs/frontend/structure-editor.md) states the behaviour a reader can rely on, including the confirmations and the resets. [Course placement and dragging](/docs/frontend/course-placement.md) states the drag, the card order and the moves. [Structure model](/docs/frontend/structure-model.md) describes the projection and the resolution behind it, [Structure edits](/docs/frontend/structure-edits.md) the placement edits and the selection migration, [Structure pane](/docs/frontend/structure-pane.md) the pane and its reads, and [Sisu import](/docs/frontend/sisu-capture.md) the import of a captured plan or a supported plan PDF. [Structure of studies in the catalogue](/docs/backend/catalogue/study-structure.md) describes the official report itself.
+[Structure editor](/docs/frontend/structure-editor.md) states the behaviour a reader can rely on, including the confirmations and the resets. [Course placement and dragging](/docs/frontend/course-placement.md) states the drag, the card order and the moves. [Structure model](/docs/frontend/structure-model.md) describes the projection and the resolution behind it, [Structure edits](/docs/frontend/structure-edits.md) the placement edits and the selection migration, [Structure pane](/docs/frontend/structure-pane.md) the pane and its reads, and [Study-plan import](/docs/frontend/study-plan-import.md) the import of a Sisu or Peppi saved page, a Sisu plan PDF or a script capture. [Structure of studies in the catalogue](/docs/backend/catalogue/study-structure.md) describes the official report itself.
 
 ## The prerequisite graph
 

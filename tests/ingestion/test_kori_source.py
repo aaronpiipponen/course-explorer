@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from course_explorer.config import KoriSettings
-from course_explorer.ingestion.kori import TuniKoriSource
+from course_explorer.ingestion.kori import KoriSource
 from course_explorer.ingestion.source import KoriContractError, KoriRequestError
 from tests.support import settings_factory
 
@@ -24,10 +24,7 @@ def load_fixture(name: str) -> bytes:
 
 def settings(**overrides: Any) -> KoriSettings:
     """Build Kori settings from the composed public files plus explicit test overrides."""
-    defaults: dict[str, Any] = {
-        "KORI_FIRST_ACADEMIC_YEAR": "2026-2027",
-        "CURRENT_ACADEMIC_YEAR": "2026-2027",
-    }
+    defaults: dict[str, Any] = {"CURRENT_ACADEMIC_YEAR": "2026-2027"}
     defaults.update(overrides)
     return settings_factory(KoriSettings, **defaults)
 
@@ -36,38 +33,52 @@ def response(name: str, status_code: int = 200) -> httpx.Response:
     return httpx.Response(status_code, content=load_fixture(name))
 
 
+def no_wait(_seconds: float) -> None:
+    """Skip the source's pacing and retry waits in a unit transport."""
+
+
 def request_parts(request: httpx.Request) -> tuple[str, tuple[tuple[str, str], ...]]:
     return request.url.path.removeprefix("/kori"), tuple(request.url.params.multi_items())
 
 
-def test_curriculum_periods_use_source_ids_with_contiguous_configured_bounds() -> None:
-    """Period IDs come from source objects and request parameters remain exact."""
+def test_curriculum_periods_select_published_source_years() -> None:
+    """Period IDs come from source objects, a published gap is accepted, and order is by year."""
+    periods = [
+        {"id": "uta-lvv-2005", "activePeriod": {"startDate": "2005-08-01"}},
+        {"id": "uta-lvv-2024", "activePeriod": {"startDate": "2024-08-01"}},
+        {"id": "uta-lvv-2026", "activePeriod": {"startDate": "2026-08-01"}},
+        {"id": "uta-lvv-2027", "activePeriod": {"startDate": "2027-08-01"}},
+    ]
+    configured = settings()
 
     def handler(request: httpx.Request) -> httpx.Response:
         path, params = request_parts(request)
         assert path == "/api/curriculum-periods"
-        assert params == (("universityOrgId", "tuni-university-root-id"),)
-        return response("curriculum_periods.json")
+        assert params == (("universityOrgId", configured.university_id),)
+        return httpx.Response(200, json=periods)
 
-    with TuniKoriSource(settings(), transport=httpx.MockTransport(handler)) as source:
+    with KoriSource(configured, transport=httpx.MockTransport(handler), sleep=no_wait) as source:
         result = source.get_curriculum_periods()
 
-    assert result.value[0].id == "uta-lvv-2026"
-    assert result.value[0].academic_year_start == 2026
-    assert result.captured.body == load_fixture("curriculum_periods.json")
+    assert [(period.id, period.academic_year_start) for period in result.value] == [
+        ("uta-lvv-2024", 2024),
+        ("uta-lvv-2026", 2026),
+    ]
+    assert json.loads(result.captured.body) == periods
 
 
 def test_enumeration_rejects_partition_union_below_truncated_broad_total() -> None:
     """A complete partition union below the broad floor remains invalid evidence."""
     broad = deepcopy(json.loads(load_fixture("course_search_broad_truncated.json")))
     broad["total"] = 3
+    configured = settings()
 
     def handler(request: httpx.Request) -> httpx.Response:
         path, params = request_parts(request)
         assert path == "/api/course-unit-search"
         expected_prefix = (
             ("curriculumPeriodId", "uta-lvv-2026"),
-            ("universityOrgId", "tuni-university-root-id"),
+            ("universityOrgId", configured.university_id),
         )
         query = dict(params)
         if "codeQuery" not in query:
@@ -82,7 +93,7 @@ def test_enumeration_rejects_partition_union_below_truncated_broad_total() -> No
             return response(f"course_search_{query['codeQuery'].lower()}.json")
         return response("search_empty.json")
 
-    with TuniKoriSource(settings(), transport=httpx.MockTransport(handler)) as source:
+    with KoriSource(configured, transport=httpx.MockTransport(handler), sleep=no_wait) as source:
         with pytest.raises(KoriContractError):
             tuple(source.iter_course_version_refs(["uta-lvv-2026"]))
 
@@ -93,15 +104,20 @@ def test_truncated_enumeration_visits_every_declared_partition() -> None:
     broad["total"] = 1
     z_item = deepcopy(json.loads(load_fixture("course_search_a.json"))["searchResults"][0])
     z_item.update({"id": "course-z-v1", "groupId": "course-group-z", "code": "Z.001"})
-    expected_roots = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+    nordic_item = deepcopy(json.loads(load_fixture("course_search_a.json"))["searchResults"][0])
+    nordic_item.update(
+        {"id": "course-nordic-v1", "groupId": "course-group-nordic", "code": "ÅA.001"}
+    )
+    expected_roots = set("ABCDEFGHIJKLMNOPQRSTUVWXYZÅÄÖ0123456789")
     requested_roots: set[str] = set()
+    configured = settings()
 
     def handler(request: httpx.Request) -> httpx.Response:
         path, params = request_parts(request)
         assert path == "/api/course-unit-search"
         expected_prefix = (
             ("curriculumPeriodId", "uta-lvv-2026"),
-            ("universityOrgId", "tuni-university-root-id"),
+            ("universityOrgId", configured.university_id),
         )
         query = dict(params)
         if "codeQuery" not in query:
@@ -119,13 +135,13 @@ def test_truncated_enumeration_visits_every_declared_partition() -> None:
             return response("course_search_a.json")
         if prefix == "B":
             return response("course_search_b.json")
-        if prefix == "Z":
+        if prefix in {"Z", "Å"}:
             payload = deepcopy(json.loads(load_fixture("course_search_a.json")))
-            payload["searchResults"] = [z_item]
+            payload["searchResults"] = [z_item if prefix == "Z" else nordic_item]
             return httpx.Response(200, json=payload)
         return response("search_empty.json")
 
-    with TuniKoriSource(settings(), transport=httpx.MockTransport(handler)) as source:
+    with KoriSource(configured, transport=httpx.MockTransport(handler), sleep=no_wait) as source:
         responses = tuple(source.iter_course_version_refs(["uta-lvv-2026"]))
 
     assert requested_roots == expected_roots
@@ -133,18 +149,20 @@ def test_truncated_enumeration_visits_every_declared_partition() -> None:
         "course-a-v1",
         "course-b-v1",
         "course-z-v1",
+        "course-nordic-v1",
     }
 
 
 def test_enumeration_paginates_non_truncated_queries_with_source_progress() -> None:
     """Non-truncated pages advance by returned item count and preserve source order."""
+    configured = settings(KORI_SEARCH_PAGE_SIZE=1)
 
     def handler(request: httpx.Request) -> httpx.Response:
         path, params = request_parts(request)
         assert path == "/api/course-unit-search"
         expected_prefix = (
             ("curriculumPeriodId", "uta-lvv-2026"),
-            ("universityOrgId", "tuni-university-root-id"),
+            ("universityOrgId", configured.university_id),
         )
         start = dict(params)["start"]
         assert params == expected_prefix + (("start", start), ("limit", "1"))
@@ -156,9 +174,7 @@ def test_enumeration_paginates_non_truncated_queries_with_source_progress() -> N
         payload["total"] = 2
         return httpx.Response(200, json=payload)
 
-    with TuniKoriSource(
-        settings(KORI_SEARCH_PAGE_SIZE=1), transport=httpx.MockTransport(handler)
-    ) as source:
+    with KoriSource(configured, transport=httpx.MockTransport(handler), sleep=no_wait) as source:
         responses = tuple(source.iter_course_version_refs(["uta-lvv-2026"]))
 
     assert [ref.id for item in responses for ref in item.value] == ["course-a-v1", "course-b-v1"]
@@ -166,6 +182,7 @@ def test_enumeration_paginates_non_truncated_queries_with_source_progress() -> N
 
 def test_enumeration_rejects_partition_depth_exhaustion() -> None:
     """A truncated leaf at configured maximum depth fails loudly."""
+    configured = settings(KORI_MAX_PARTITION_DEPTH=1)
 
     def handler(request: httpx.Request) -> httpx.Response:
         path, params = request_parts(request)
@@ -173,7 +190,7 @@ def test_enumeration_rejects_partition_depth_exhaustion() -> None:
         query = dict(params)
         expected_prefix = (
             ("curriculumPeriodId", "uta-lvv-2026"),
-            ("universityOrgId", "tuni-university-root-id"),
+            ("universityOrgId", configured.university_id),
         )
         if "codeQuery" in query:
             assert params == expected_prefix + (
@@ -187,9 +204,7 @@ def test_enumeration_rejects_partition_depth_exhaustion() -> None:
             return response("course_search_broad_truncated.json")
         return response("course_search_broad_truncated.json")
 
-    with TuniKoriSource(
-        settings(KORI_MAX_PARTITION_DEPTH=1), transport=httpx.MockTransport(handler)
-    ) as source:
+    with KoriSource(configured, transport=httpx.MockTransport(handler), sleep=no_wait) as source:
         with pytest.raises(KoriContractError):
             tuple(source.iter_course_version_refs(["uta-lvv-2026"]))
 
@@ -198,13 +213,14 @@ def test_module_enumeration_recurses_deduplicates_and_proves_broad_total() -> No
     """Module full-text partitions may overlap while broad union remains complete."""
     broad = deepcopy(json.loads(load_fixture("module_search_broad_truncated.json")))
     broad["total"] = 1
+    configured = settings()
 
     def handler(request: httpx.Request) -> httpx.Response:
         path, params = request_parts(request)
         assert path == "/api/module-search"
         expected_prefix = (
             ("curriculumPeriodId", "uta-lvv-2026"),
-            ("universityOrgId", "tuni-university-root-id"),
+            ("universityOrgId", configured.university_id),
             ("moduleType", "StudyModule"),
         )
         query = dict(params)
@@ -230,15 +246,15 @@ def test_module_enumeration_recurses_deduplicates_and_proves_broad_total() -> No
 
     root_queries: list[str | None] = []
     a_child_queries: list[str] = []
-    with TuniKoriSource(settings(), transport=httpx.MockTransport(handler)) as source:
+    with KoriSource(configured, transport=httpx.MockTransport(handler), sleep=no_wait) as source:
         responses = tuple(source.iter_module_version_refs(["uta-lvv-2026"], "StudyModule"))
 
     ids = [ref.id for item in responses for ref in item.value]
     assert ids.count("module-aa-v1") == 1
     assert ids.count("module-ab-v1") == 2
-    assert set(root_queries) == set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") | {None}
+    assert set(root_queries) == set("ABCDEFGHIJKLMNOPQRSTUVWXYZÅÄÖ0123456789") | {None}
     assert set(a_child_queries) == {
-        f"A{character}" for character in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        f"A{character}" for character in "ABCDEFGHIJKLMNOPQRSTUVWXYZÅÄÖ0123456789"
     }
 
 
@@ -252,6 +268,7 @@ def test_enumeration_rejects_truncation_total_drift_and_malformed_items() -> Non
     malformed = deepcopy(base)
     malformed["notifications"] = [{"type": "ERROR"}]
     cases.append(malformed)
+    configured = settings()
 
     for bad_payload in cases:
 
@@ -263,7 +280,7 @@ def test_enumeration_rejects_truncation_total_drift_and_malformed_items() -> Non
             query = dict(params)
             expected = (
                 ("curriculumPeriodId", "uta-lvv-2026"),
-                ("universityOrgId", "tuni-university-root-id"),
+                ("universityOrgId", configured.university_id),
             )
             if "codeQuery" in query:
                 expected += (("codeQuery", query["codeQuery"]),)
@@ -278,7 +295,9 @@ def test_enumeration_rejects_truncation_total_drift_and_malformed_items() -> Non
             assert len(query["codeQuery"]) == 1
             return response("search_empty.json")
 
-        with TuniKoriSource(settings(), transport=httpx.MockTransport(handler)) as source:
+        with KoriSource(
+            configured, transport=httpx.MockTransport(handler), sleep=no_wait
+        ) as source:
             with pytest.raises(KoriContractError):
                 tuple(source.iter_course_version_refs(["uta-lvv-2026"]))
 
@@ -294,7 +313,7 @@ def test_batch_fetch_uses_repeated_id_and_rejects_missing_objects() -> None:
         assert params == (("id", "course-a-v1"), ("id", "course-b-v1"))
         return response("course_units.json")
 
-    with TuniKoriSource(settings(), transport=httpx.MockTransport(handler)) as source:
+    with KoriSource(settings(), transport=httpx.MockTransport(handler), sleep=no_wait) as source:
         result = tuple(source.iter_course_versions(["course-a-v1", "course-b-v1"]))
     assert calls == [(("id", "course-a-v1"), ("id", "course-b-v1"))]
     assert [item["id"] for item in result[0].value] == ["course-a-v1", "course-b-v1"]
@@ -305,20 +324,23 @@ def test_batch_fetch_uses_repeated_id_and_rejects_missing_objects() -> None:
         assert params == (("id", "course-a-v1"), ("id", "course-b-v1"))
         return httpx.Response(200, json=[json.loads(load_fixture("course_units.json"))[0]])
 
-    with TuniKoriSource(settings(), transport=httpx.MockTransport(missing_handler)) as source:
+    with KoriSource(
+        settings(), transport=httpx.MockTransport(missing_handler), sleep=no_wait
+    ) as source:
         with pytest.raises(KoriContractError):
             tuple(source.iter_course_versions(["course-a-v1", "course-b-v1"]))
 
 
 def test_group_fetch_uses_public_parameters_and_allows_empty_result() -> None:
     """Public group endpoints validate group identity and retain explicit empty results."""
+    configured = settings()
 
     def handler(request: httpx.Request) -> httpx.Response:
         path, params = request_parts(request)
         if path == "/api/course-units":
             assert params == (
                 ("groupId", "course-group-a"),
-                ("rootOrg", "tuni-university-root-id"),
+                ("rootOrg", configured.university_id),
                 ("includeExpired", "true"),
             )
             course = json.loads(load_fixture("course_units.json"))[0]
@@ -326,11 +348,11 @@ def test_group_fetch_uses_public_parameters_and_allows_empty_result() -> None:
         assert path == "/api/modules/by-group-id"
         assert params == (
             ("groupId", "missing-module"),
-            ("universityId", "tuni-university-root-id"),
+            ("universityId", configured.university_id),
         )
         return httpx.Response(200, content=b"[]")
 
-    with TuniKoriSource(settings(), transport=httpx.MockTransport(handler)) as source:
+    with KoriSource(configured, transport=httpx.MockTransport(handler), sleep=no_wait) as source:
         course_result = source.get_course_group_versions("course-group-a")
         module_result = source.get_module_group_versions("missing-module")
     assert len(course_result.value) == 1
@@ -345,6 +367,7 @@ def test_group_iterators_use_configured_concurrency_and_yield_input_order(family
     state_lock = Lock()
     release_first = Event()
     requested: list[str] = []
+    configured = settings(KORI_CONCURRENCY=2)
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal active, maximum_active
@@ -355,14 +378,14 @@ def test_group_iterators_use_configured_concurrency_and_yield_input_order(family
             assert path == "/api/course-units"
             assert params[0][0] == "groupId"
             assert params[1:] == (
-                ("rootOrg", "tuni-university-root-id"),
+                ("rootOrg", configured.university_id),
                 ("includeExpired", "true"),
             )
         else:
             assert path == "/api/modules/by-group-id"
             assert params == (
                 ("groupId", group_id),
-                ("universityId", "tuni-university-root-id"),
+                ("universityId", configured.university_id),
             )
         with state_lock:
             active += 1
@@ -382,14 +405,12 @@ def test_group_iterators_use_configured_concurrency_and_yield_input_order(family
 
     ids = ["group-a", "group-b", "group-c"]
 
-    def open_iterator(source: TuniKoriSource):
+    def open_iterator(source: KoriSource):
         if family == "course":
             return source.iter_course_group_versions(ids)
         return source.iter_module_group_versions(ids)
 
-    with TuniKoriSource(
-        settings(KORI_CONCURRENCY=2), transport=httpx.MockTransport(handler)
-    ) as source:
+    with KoriSource(configured, transport=httpx.MockTransport(handler), sleep=no_wait) as source:
         iterator = open_iterator(source)
         first = next(iterator)
         iterator.close()
@@ -400,9 +421,7 @@ def test_group_iterators_use_configured_concurrency_and_yield_input_order(family
 
     # A separate iterator proves the complete ordered output across every bounded window.
     requested.clear()
-    with TuniKoriSource(
-        settings(KORI_CONCURRENCY=2), transport=httpx.MockTransport(handler)
-    ) as source:
+    with KoriSource(configured, transport=httpx.MockTransport(handler), sleep=no_wait) as source:
         values = tuple(open_iterator(source))
     assert [item.value[0]["groupId"] for item in values] == ids
 
@@ -424,7 +443,7 @@ def test_transient_requests_stop_retrying_after_control_denies() -> None:
     def sleep(seconds: float) -> None:
         admitted["value"] = False
 
-    with TuniKoriSource(
+    with KoriSource(
         settings(),
         transport=httpx.MockTransport(handler),
         sleep=sleep,
@@ -441,7 +460,7 @@ def test_request_errors_do_not_expose_response_body() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, content=b"secret-response-body")
 
-    with TuniKoriSource(settings(), transport=httpx.MockTransport(handler)) as source:
+    with KoriSource(settings(), transport=httpx.MockTransport(handler), sleep=no_wait) as source:
         with pytest.raises(KoriRequestError) as error:
             source.get_curriculum_periods()
     assert "GET /api/curriculum-periods" in str(error.value)

@@ -20,7 +20,7 @@ Two different sources can fill the database, and each has its own workflow and i
 
 | Path | Source of the data | Database it fills | Command script |
 |---|---|---|---|
-| The example dataset | The invented fixture under `data/mock/` | The configured database, named by `POSTGRES_DB` in `config/database.toml` | `uv run python scripts/mock_data.py` |
+| The example dataset | The invented fixture under `data/mock/` | The configured database, named by `POSTGRES_DB` in `config/database.toml` | `uv run python scripts/mock_data.py load` |
 | A prepared dataset | The public curriculum source and the model stages | The Working dataset, named by its pointer under `ADMIN_STATE_ROOT`. The Selected dataset serves the site. | `uv run python scripts/admin.py` |
 
 The example dataset path needs no request to the curriculum source, and no model runs. The prepared dataset path captures the source, normalizes what it captured, embeds the teaching text, and runs the two worker stages to add translations and inferred prerequisites.
@@ -32,7 +32,9 @@ Every command on these pages runs from the checkout root. An administration mach
 
 ## In reading order
 
-1. [Installation](/docs/getting-started/installation.md) runs four steps: clone the checkout, prepare the Python and browser dependencies, run the example workflow, and run the real-database workflow. The example workflow writes the working files, generates both database passwords, creates the administration account, downloads the pinned model after confirmation, builds both backends, and proves the example site. The real-database workflow creates one empty database, enrolls it as Selected, builds it and proves it.
+1. [Installation](/docs/getting-started/installation.md) runs four steps: clone the checkout, prepare the Python and browser dependencies, run the example workflow, and run the real-database workflow.
+
+   The example workflow writes the working files, generates both database passwords, creates the administration account, downloads the pinned model after confirmation, builds both backends, and proves the example site. The real-database workflow creates one empty database, enrolls it as Selected, builds it and proves it.
 2. [Self-hosting](/docs/getting-started/self-hosting.md) runs that copy as a served site: it states the user-unit identities, the two startup modes, the site and administration settings, and the HTTPS reverse proxy.
 3. [The example dataset](/docs/getting-started/example-dataset.md) describes the loader that fills the configured database from the invented fixture, the action that builds the serving artifact set for the site's embedding switch, and the explicit rewrite of the tracked bundled vectors.
 4. [Preparing a dataset from the curriculum source](/docs/getting-started/data-preparation.md) copies the Selected dataset to Working, runs the ingestion and embedding stages, reads the coverage and summary reports, and migrates a dataset role.

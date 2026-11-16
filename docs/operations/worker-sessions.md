@@ -18,7 +18,7 @@ A session start never fetches, installs or downloads. It checks the installed lo
 
 ## Starting a session
 
-A start captures a session when the stage holds none. The administration command dumps the Working dataset, including the embedding table data, into the session directory, records the digest of that dump and a verification of the Working database, and publishes the session record. A reservation that already holds session evidence is refused before any dump.
+A start captures a session when the stage holds none. The administration command dumps the Working dataset, including the embedding table data, into the session directory, records the digest of that dump and a verification of the Working database, and publishes the session record. A session that already holds its evidence is refused before any dump.
 
 Preparation brings the worker up in order:
 
@@ -34,6 +34,12 @@ A worker run requires a received database at the migration head of the worker co
 The launch runs exactly one detached worker helper, which writes its log beside the session. A lost launcher response is reconciled from the worker status within the recovery bound, and the launcher is never run a second time. A fresh preparation is one-shot for the same reason, so a lost acknowledgement fails loudly rather than repeating a restore.
 
 While the session runs, the stage mirrors the worker status into its own durable progress. The mirror is read-only, and it forwards no control to the worker.
+
+## The worker reservation
+
+A translation or inference session holds the machine-wide worker reservation from before the dataset hand-off through the verified return. The file lives in the worker's shared directory and names the instance key, the stage and the session id, so two instances that use one worker never run those stages at the same time. A start takes it, and the finalized stop releases it after the worker returned the dataset. A pause, a worker reconnect and the periodic reboot release no reservation, so an automatic worker restart never makes another instance treat the reserved worker as free. Ingestion and embedding take the server reservation instead and never reserve the worker.
+
+The checkout reservation is held beside it for the same session, and [Lifecycle core](/docs/operations/lifecycle-core.md#locks-intent-and-checkpoints) states the three reservations.
 
 ## Cooperative control and checkpoints
 
@@ -53,7 +59,11 @@ A pause publishes a pause request, waits for the worker to exit, and releases th
 
 A stop is the authoritative end of a session. It publishes a stop request, waits for the worker to exit, and finalizes the session through its owning writer. The worker import writes the retained output into the worker's own copy of the dataset, and the inference stage publishes the accepted proposals and equivalence groups there. A session that already holds an import receipt is never imported a second time.
 
-The return follows the import and verifies before it promotes, and [the dataset return](/docs/operations/datasets.md#the-return-and-the-working-role) and [rotation](/docs/operations/datasets.md#rotation) state the receipt, and [failure outcomes](/docs/operations/datasets.md#failure-outcomes) states the cleanup of the worker copy.
+The worker exports its database as a verified return snapshot, and the return downloads it, restores it into the derived server database, verifies it, and only then publishes it as Working. The worker cleanup drops the worker's own database after the import receipt and the returned dataset receipt exist. [The dataset return](/docs/operations/datasets.md#the-return-and-the-working-role) and [rotation](/docs/operations/datasets.md#rotation) state the receipt, and [failure outcomes](/docs/operations/datasets.md#failure-outcomes) states the cleanup of the worker copy.
+
+The dataset path of one session runs from the Working snapshot through the worker's own copy to the worker database cleanup.
+
+![The Working dataset is snapshotted into a verified input copy that the worker restores into its own database, where the worker stage runs with checkpoints. The exported return snapshot is downloaded, restored and verified as the Working dataset, and the worker database cleanup drops the worker's copy after the receipts exist.](/docs/diagrams/worker-session-return.svg)
 
 > [!CAUTION]
 > A stop that fails before the return completes leaves the selection in place and keeps the worker copy, the retained output, and the session evidence. The next stop verifies the recorded state again and continues from there.
@@ -98,7 +108,7 @@ A [periodic reboot](/docs/reference/glossary.md#administration) restarts the wor
 
 `WORKER_GPU_REBOOT_INTERVAL_MINUTES` in `config/worker.toml` sets the interval, and the example sets 120 minutes.
 
-When a sample reaches the interval, the worker publishes a paused state with the restart due. The administration command releases the resources the session owns, restarts the worker once, proves that the worker came back, brings the session's resources up again, and launches the same session with its pending work. The session identity, the retained output, and the receipt do not change.
+When a sample reaches the interval, the worker publishes a paused state with the restart due. The administration command releases the resources the session owns, restarts the worker once, proves that the worker came back, brings the session's resources up again, and launches the same session with its pending work. The session identity, the retained output, and the receipt do not change, and neither do the session's reservations: the reboot releases no reservation and rewrites no reservation file.
 
 A pause or a stop that arrives before the restart issues no restart. The clock record belongs to one session and one worker boot, and a record from another boot reports not due and is not rewritten until a real checkpoint. [Inference scheduling and disposition](/docs/backend/inference/inference-scheduling.md#the-periodic-reboot) states the timing rule for the inference stage.
 

@@ -4,12 +4,12 @@ Bulk summary resolution uses the shared official identity resolver, preserving o
 without exposing representative provenance. The catalogue command reads the official course summary
 projection and the projected module identities once, or takes both from a supplied lookup projection,
 selects each canonical module's strict academic-year candidates through the shared eligibility rule,
-and returns only canonical identity, code, localized names, credits and the activity flag for courses
-and the module kind for modules. A module candidate additionally carries the exact version identity,
-validity bounds and curriculum-period memberships the version selector needs, because more than one
-eligible version of one canonical module must stay distinguishable. Reports are request-local values
-consumed by CLI and web callers. Neither command carries teaching text, descriptions, prerequisites,
-inferred analysis or course representative source identity.
+and returns only canonical identity, code, displayed summary names, credits and the activity flag
+for courses and the module kind for modules. A module candidate additionally carries the exact
+version identity, validity bounds and curriculum-period memberships the version selector needs,
+because more than one eligible version of one canonical module must stay distinguishable. Reports
+are request-local values consumed by CLI and web callers. Neither command carries teaching text,
+descriptions, prerequisites, inferred analysis or course representative source identity.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from course_explorer.config import (
     DatabaseSettings,
     load_database_settings,
+    load_instance_settings,
     load_normalization_settings,
 )
 from course_explorer.curriculum import (
@@ -34,6 +35,7 @@ from course_explorer.curriculum import (
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.db.session import database_context as _database_context
 from course_explorer.enums import ModuleType
+from course_explorer.instance import UniversityMetadata, official_display_names
 from course_explorer.search.projection import LookupProjection, build_lookup_rows
 from course_explorer.search.resolver import CourseResolver
 
@@ -55,17 +57,18 @@ class NarrowingCourse(BaseModel):
     code: str
     name_fi: str | None = None
     name_en: str | None = None
-    credits_min: Decimal
+    credits_min: Decimal | None
     credits_max: Decimal | None = None
     is_active: bool
 
 
 class NarrowingModuleVersion(BaseModel):
-    """One eligible official module version's exact identity, validity and localized names."""
+    """One eligible official module version's exact identity, validity and displayed summary
+    names."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    sisu_module_id: str
+    source_version_id: str
     module_type: ModuleType
     code: str | None = None
     name_fi: str | None = None
@@ -99,20 +102,25 @@ def run_course_summaries_command(
     database_settings: DatabaseSettings | None = None,
     projection: LookupProjection | None = None,
     session_factory: sessionmaker[Session] | None = None,
+    university: UniversityMetadata | None = None,
 ) -> CourseSummariesReport:
     """Resolve canonical IDs/exact codes through the shared resolver into official summaries.
 
     A supplied projection answers the resolution without a database read. A supplied session factory
-    carries the serving engine and is never disposed here.
+    carries the serving engine and is never disposed here. The supplied university policy, or the
+    configured one, supplies the summary display policy.
     """
     materialized = tuple(identifiers)
     if not materialized:
         return CourseSummariesReport(results=())
+    resolved_university = load_instance_settings().university if university is None else university
     resolved_settings = (
         database_settings if database_settings is not None else load_database_settings()
     )
     with _database_context(resolved_settings, factory=session_factory) as factory:
-        resolver = CourseResolver(CurriculumRepository(factory), projection=projection)
+        resolver = CourseResolver(
+            CurriculumRepository(factory, university=resolved_university), projection=projection
+        )
         resolved = resolver.resolve_courses(materialized)
     return CourseSummariesReport(results=tuple(record.summary for record in resolved))
 
@@ -123,22 +131,25 @@ def run_catalogue_command(
     academic_year_start: int | None = None,
     projection: LookupProjection | None = None,
     session_factory: sessionmaker[Session] | None = None,
+    university: UniversityMetadata | None = None,
 ) -> CatalogueReport:
     """Read the minimal official catalogue at one academic year.
 
     A supplied projection answers both the course rows and the module identities. Otherwise the
     course summaries and the module lookup are read once from the one repository. A supplied
-    academic year is used as given, and otherwise the configured one is read here. A supplied
-    session factory carries the serving engine and is never disposed here.
+    academic year is used as given, and otherwise the configured one is read here. The supplied
+    university policy, or the configured one, resolves each module version's two display names. A
+    supplied session factory carries the serving engine and is never disposed here.
     """
     academic_year_start = (
         academic_year_start or load_normalization_settings().current_academic_year_start
     )
+    resolved_university = load_instance_settings().university if university is None else university
     resolved_settings = (
         database_settings if database_settings is not None else load_database_settings()
     )
     with _database_context(resolved_settings, factory=session_factory) as factory:
-        repository = CurriculumRepository(factory)
+        repository = CurriculumRepository(factory, university=resolved_university)
         if projection is not None:
             rows = projection.courses
             module_lookup = projection.modules
@@ -174,24 +185,25 @@ def run_catalogue_command(
             )
             if not candidates:
                 continue
-            modules.append(
-                NarrowingModule(
-                    group_id=module.group_id,
-                    candidates=tuple(
-                        NarrowingModuleVersion(
-                            sisu_module_id=version.sisu_module_id,
-                            module_type=version.module_type,
-                            code=version.code,
-                            name_fi=version.name_fi,
-                            name_en=version.name_en,
-                            validity_start=version.validity_start,
-                            validity_end=version.validity_end,
-                            curriculum_periods=version.curriculum_periods,
-                        )
-                        for version in candidates
-                    ),
+            projected: list[NarrowingModuleVersion] = []
+            for version in candidates:
+                displayed = official_display_names(
+                    version.names,
+                    display_fallback=resolved_university.display_fallback,
                 )
-            )
+                projected.append(
+                    NarrowingModuleVersion(
+                        source_version_id=version.source_version_id,
+                        module_type=version.module_type,
+                        code=version.code,
+                        name_fi=displayed["fi"],
+                        name_en=displayed["en"],
+                        validity_start=version.validity_start,
+                        validity_end=version.validity_end,
+                        curriculum_periods=version.curriculum_periods,
+                    )
+                )
+            modules.append(NarrowingModule(group_id=module.group_id, candidates=tuple(projected)))
     return CatalogueReport(
         courses=courses,
         modules=tuple(sorted(modules, key=lambda module: module.group_id)),

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from course_explorer.curriculum import CatalogueCurriculumPeriod
@@ -27,6 +29,8 @@ from tests.prerequisite._graph_support import (
     prerequisite_option,
     substitution_option,
 )
+
+ASSUMED = Decimal("5")
 
 COMPULSORY = PrerequisiteRequirementKind.COMPULSORY
 RECOMMENDED = PrerequisiteRequirementKind.RECOMMENDED
@@ -341,6 +345,7 @@ def test_next_course_modes_order_eligible_candidates(mode, expected) -> None:
         first_pass,
         BASIS,
         mode=mode,
+        assumed_course_credits=ASSUMED,
         display_language="en",
         official_compilations=official_pass,
     )
@@ -355,14 +360,18 @@ def test_supplied_next_course_outcomes_preserve_results(mode) -> None:
         first_pass,
         BASIS,
         mode=mode,
+        assumed_course_credits=ASSUMED,
         display_language="en",
         official_compilations=official_pass,
     )
-    outcomes = evaluate_next_course_outcomes(first_pass, BASIS, mode=mode)
+    outcomes = evaluate_next_course_outcomes(
+        first_pass, BASIS, mode=mode, assumed_course_credits=ASSUMED
+    )
     with_outcomes = next_courses_from_compilations(
         first_pass,
         BASIS,
         mode=mode,
+        assumed_course_credits=ASSUMED,
         display_language="en",
         official_compilations=official_pass,
         candidate_outcomes=outcomes,
@@ -390,6 +399,7 @@ def test_next_course_coverage_and_official_wins_attribution(
         first_pass,
         BASIS,
         mode=mode,
+        assumed_course_credits=ASSUMED,
         display_language="en",
         official_compilations=official_pass,
     )
@@ -404,7 +414,11 @@ def test_next_course_source_shape_slots_preserve_coverage(group_id) -> None:
     """Free choice, missing module, and nearest-version handling retain real course slots."""
     _, _, first_pass, _ = _discovery_passes()
     results = next_courses_from_compilations(
-        first_pass, BASIS, mode=NextCourseMode.ALL, display_language="en"
+        first_pass,
+        BASIS,
+        mode=NextCourseMode.ALL,
+        assumed_course_credits=ASSUMED,
+        display_language="en",
     )
     by_id = {result.course.group_id: result for result in results}
     assert by_id[group_id].required_coverage == 1.0
@@ -419,6 +433,7 @@ def test_next_course_basis_and_uncovered_candidates_are_omitted(mode) -> None:
         first_pass,
         BASIS,
         mode=mode,
+        assumed_course_credits=ASSUMED,
         display_language="en",
         official_compilations=official_pass,
     )
@@ -448,7 +463,11 @@ def test_partial_required_option_qualifies_only_at_least_one() -> None:
     """Partial coverage is eligible only in the at-least-one mode."""
     _, _, first_pass, _ = _discovery_passes()
     results = next_courses_from_compilations(
-        first_pass, BASIS, mode=NextCourseMode.AT_LEAST_ONE, display_language="en"
+        first_pass,
+        BASIS,
+        mode=NextCourseMode.AT_LEAST_ONE,
+        assumed_course_credits=ASSUMED,
+        display_language="en",
     )
     by_id = {result.course.group_id: result for result in results}
     assert by_id["partial"].required_coverage == 0.5
@@ -461,6 +480,7 @@ def test_multi_course_substitution_requires_every_member() -> None:
         first_pass,
         BASIS,
         mode=NextCourseMode.AT_LEAST_ONE,
+        assumed_course_credits=ASSUMED,
         display_language="en",
         official_compilations=official_pass,
     )
@@ -469,6 +489,7 @@ def test_multi_course_substitution_requires_every_member() -> None:
         first_pass,
         ("base", "sub2"),
         mode=NextCourseMode.AT_LEAST_ONE,
+        assumed_course_credits=ASSUMED,
         display_language="en",
         official_compilations=official_pass,
     )
@@ -480,7 +501,11 @@ def test_discovery_basis_does_not_require_ancestor_completion() -> None:
     """An explicitly chosen one-course basis satisfies direct knowledge, not its ancestors."""
     _, _, first_pass, _ = _discovery_passes()
     deep = next_courses_from_compilations(
-        first_pass, ("base", "deep"), mode=NextCourseMode.ALL, display_language="en"
+        first_pass,
+        ("base", "deep"),
+        mode=NextCourseMode.ALL,
+        assumed_course_credits=ASSUMED,
+        display_language="en",
     )
     by_id = {result.course.group_id: result for result in deep}
     assert by_id["deepdep"].required_coverage == 1.0
@@ -492,10 +517,18 @@ def test_discovery_activity_scope_controls_inactive_candidates() -> None:
     _, _, active, _ = _discovery_passes()
     _, _, all_courses_first, _ = _discovery_passes(active_only=False)
     active_results = next_courses_from_compilations(
-        active, BASIS, mode=NextCourseMode.ALL, display_language="en"
+        active,
+        BASIS,
+        mode=NextCourseMode.ALL,
+        assumed_course_credits=ASSUMED,
+        display_language="en",
     )
     all_results = next_courses_from_compilations(
-        all_courses_first, BASIS, mode=NextCourseMode.ALL, display_language="en"
+        all_courses_first,
+        BASIS,
+        mode=NextCourseMode.ALL,
+        assumed_course_credits=ASSUMED,
+        display_language="en",
     )
     assert "inactive" not in {result.course.group_id for result in active_results}
     all_by_id = {result.course.group_id: result for result in all_results}
@@ -506,7 +539,11 @@ def test_inactive_basis_is_retained_and_never_proposed() -> None:
     """An inactive selected foundation satisfies its dependents and is not returned."""
     _, _, retained_first, _ = _discovery_passes(retained=("inactive",))
     retained = next_courses_from_compilations(
-        retained_first, ("inactive",), mode=NextCourseMode.ALL, display_language="en"
+        retained_first,
+        ("inactive",),
+        mode=NextCourseMode.ALL,
+        assumed_course_credits=ASSUMED,
+        display_language="en",
     )
     retained_ids = {result.course.group_id for result in retained}
     assert "inactive-dep" in retained_ids

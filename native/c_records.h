@@ -78,7 +78,7 @@ struct CourseSummaryRecord {
 
 struct CourseModuleRecord {
     const char *group_id;
-    const char *sisu_module_id;
+    const char *source_version_id;
     const char *module_type;
     const char *code;
     const char *name_fi;
@@ -211,6 +211,7 @@ struct NativeOutcome {
     double recommended_coverage;
     int has_required;
     int has_recommended;
+    int uses_assumed_credits;
 };
 
 

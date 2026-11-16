@@ -1,4 +1,4 @@
-/** Bootstrap provider of the site's served feature switches for the mounted app shell. */
+/** Bootstrap provider of the site's served feature switches and display label for the shell. */
 import { useEffect, useState, type ReactNode } from "react";
 import { readWebFeatures } from "../api/features";
 import type { WebFeatures as WebFeaturesReport } from "../api/types";
@@ -13,7 +13,7 @@ type Loaded =
   | { status: "failed"; error: Error }
   | { status: "ready"; features: WebFeaturesReport };
 
-/** Load served feature switches and provide them to the application shell. */
+/** Load served feature switches and the display label, set the page title and provide them to the application shell. */
 export function WebFeatures({ children }: { children: ReactNode }) {
   const { language, t } = useWording();
   const [loaded, setLoaded] = useState<Loaded>({ status: "pending" });
@@ -21,8 +21,10 @@ export function WebFeatures({ children }: { children: ReactNode }) {
     const controller = new AbortController();
     readWebFeatures(controller.signal).then(
       (features) => {
-        if (!controller.signal.aborted)
+        if (!controller.signal.aborted) {
+          document.title = `course-explorer/${features.display_label}`;
           setLoaded({ status: "ready", features });
+        }
       },
       (caught: unknown) => {
         if (!controller.signal.aborted)

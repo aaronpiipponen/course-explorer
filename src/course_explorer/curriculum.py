@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date
 from decimal import Decimal
 from typing import Protocol
@@ -12,9 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from course_explorer.enums import (
     ModuleRuleType,
     ModuleType,
+    OfficialTextField,
     PrerequisiteMemberType,
     PrerequisiteRequirementKind,
 )
+from course_explorer.instance import official_display_names
 from course_explorer.validation import SHA256_PATTERN as _HEX_256
 
 
@@ -22,15 +24,6 @@ class _CatalogueModel(BaseModel):
     """Frozen, closed DTO base for the official curriculum read contract."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class CatalogueTeachingText(_CatalogueModel):
-    """Course content and learning outcomes, excluding prerequisite text."""
-
-    content_fi: str | None = None
-    content_en: str | None = None
-    outcomes_fi: str | None = None
-    outcomes_en: str | None = None
 
 
 class CataloguePrerequisiteMember(_CatalogueModel):
@@ -67,23 +60,17 @@ class CatalogueSubstitutionOption(_CatalogueModel):
 class CatalogueCourseVersion(_CatalogueModel):
     """One exact official course version and its normalized official structures."""
 
-    sisu_course_unit_id: str
+    source_version_id: str
     source_hash: str
     code: str
-    name_fi: str | None = None
-    name_en: str | None = None
-    credits_min: Decimal
+    texts: dict[OfficialTextField, dict[str, str]]
+    credits_min: Decimal | None
     credits_max: Decimal | None = None
     official_url: str
-    document_state: str
+    document_state: str | None
     validity_start: date | None = None
     validity_end: date | None = None
     curriculum_period_ids: tuple[str, ...]
-    teaching_text: CatalogueTeachingText
-    prerequisite_text_fi: str | None = None
-    prerequisite_text_en: str | None = None
-    additional_info_fi: str | None = None
-    additional_info_en: str | None = None
     prerequisite_options: tuple[CataloguePrerequisiteOption, ...]
     substitution_options: tuple[CatalogueSubstitutionOption, ...]
 
@@ -122,18 +109,16 @@ class CatalogueCourseActivity(_CatalogueModel):
 
 
 class CatalogueRepresentativeTeachingText(_CatalogueModel):
-    """Official-only detached projection of one selected representative's identity and teaching text.
+    """Official-only detached projection of one selected representative's identity and teaching cells.
 
-    The translation import validator consumes only the selected source identity, both official
-    localized names, and the four official content/outcomes columns. This closed projection carries
-    exactly those fields instead of a full `CatalogueCourseVersion`, so validation never
-    materializes prerequisite, substitution, source-hash, code, period, or activity structures.
+    The translation import validator consumes only the selected source identity and the official
+    name/content/outcomes cells. This closed projection carries exactly those fields instead of a
+    full `CatalogueCourseVersion`, so validation never materializes prerequisite, substitution,
+    source-hash, code, period, or activity structures.
     """
 
-    sisu_course_unit_id: str
-    name_fi: str | None = None
-    name_en: str | None = None
-    teaching_text: CatalogueTeachingText
+    source_version_id: str
+    texts: dict[OfficialTextField, dict[str, str]]
 
 
 class CatalogueTeachingCourseVersion(CatalogueRepresentativeTeachingText):
@@ -141,7 +126,9 @@ class CatalogueTeachingCourseVersion(CatalogueRepresentativeTeachingText):
 
     Teaching-text consumers that also compare the selected source identity need the exact
     representative hash and code. This closed projection adds exactly those two fields and no
-    official prerequisite, substitution, credit, period, or URL structure.
+    official prerequisite, substitution, credit, period, or URL structure. ``texts`` holds the
+    requested official fields: name, content and outcomes for teaching reads, all five for prompt
+    reads.
     """
 
     source_hash: str
@@ -149,7 +136,11 @@ class CatalogueTeachingCourseVersion(CatalogueRepresentativeTeachingText):
 
 
 class CatalogueTeachingCourse(CatalogueCourseActivity):
-    """Canonical activity context with the selected representative's teaching-text projection."""
+    """Canonical activity context with the selected representative's teaching-text projection.
+
+    ``representative.texts`` holds the requested official fields, name, content and outcomes for
+    teaching reads, all five for prompt reads.
+    """
 
     representative: CatalogueTeachingCourseVersion | None
 
@@ -168,16 +159,15 @@ class CatalogueTeachingTextInput(_CatalogueModel):
 class CourseSummary(_CatalogueModel):
     """One shared product-neutral official summary reused by every course-returning service.
 
-    Both localized official names are retained so this contract does not invent a UI locale or
-    present a derived translation as official summary data. `course_summary()` maps it from the
-    official read seam only.
+    Both displayed names are the university map's projection for each interface language.
+    `course_summary()` maps it from the official read seam and the held display policy only.
     """
 
     group_id: str
     name_fi: str | None = None
     name_en: str | None = None
     code: str
-    credits_min: Decimal
+    credits_min: Decimal | None
     credits_max: Decimal | None = None
     is_active: bool
     official_url: str
@@ -193,7 +183,7 @@ class CourseSummary(_CatalogueModel):
     @field_validator("name_fi", "name_en")
     @classmethod
     def reject_blank_optional_name(cls, value: str | None) -> str | None:
-        """Reject a provided-but-blank or missing localized name."""
+        """Reject a blank displayed summary name."""
         if value is not None and not value.strip():
             raise ValueError("summary localized names must be None or nonblank")
         return value
@@ -222,22 +212,23 @@ def course_summary_from_fields(
     *,
     group_id: str,
     is_active: bool,
-    name_fi: str | None,
-    name_en: str | None,
+    names: Mapping[str, str],
+    display_fallback: Mapping[str, Sequence[str]],
     code: str,
-    credits_min: Decimal,
+    credits_min: Decimal | None,
     credits_max: Decimal | None,
     official_url: str,
 ) -> CourseSummary:
-    """Build the one shared summary from its exact official fields.
+    """Build the one shared summary from exact official names and the configured display policy.
 
     The field-to-summary mapping lives here so every read (a full `CatalogueCourse` or a
     column projection) produces the identical DTO from one source of truth.
     """
+    displayed = official_display_names(names, display_fallback=display_fallback)
     return CourseSummary(
         group_id=group_id,
-        name_fi=name_fi,
-        name_en=name_en,
+        name_fi=displayed["fi"],
+        name_en=displayed["en"],
         code=code,
         credits_min=credits_min,
         credits_max=credits_max,
@@ -246,7 +237,9 @@ def course_summary_from_fields(
     )
 
 
-def course_summary(course: CatalogueCourse) -> CourseSummary:
+def course_summary(
+    course: CatalogueCourse, *, display_fallback: Mapping[str, Sequence[str]]
+) -> CourseSummary:
     """Copy only the selected representative's official summary fields into one shared DTO."""
     if course.representative is None:
         raise ValueError(f"course {course.group_id} has no selected representative")
@@ -254,8 +247,8 @@ def course_summary(course: CatalogueCourse) -> CourseSummary:
     return course_summary_from_fields(
         group_id=course.group_id,
         is_active=course.is_active,
-        name_fi=version.name_fi,
-        name_en=version.name_en,
+        names=version.texts.get(OfficialTextField.NAME, {}),
+        display_fallback=display_fallback,
         code=version.code,
         credits_min=version.credits_min,
         credits_max=version.credits_max,
@@ -267,20 +260,20 @@ class RepresentedCourseSummary(_CatalogueModel):
     """One represented course's shared summary plus the exact representative identity.
 
     Search pairs durable semantic scores with the current representative, so it needs only the
-    summary and the representative's `sisu_course_unit_id`/`source_hash`. A column
+    summary and the representative's `source_version_id`/`source_hash`. A column
     projection supplies exactly these fields without materializing a full `CatalogueCourse`.
     """
 
     summary: CourseSummary
-    sisu_course_unit_id: str
+    source_version_id: str
     source_hash: str
 
-    @field_validator("sisu_course_unit_id")
+    @field_validator("source_version_id")
     @classmethod
     def reject_blank_source_id(cls, value: str) -> str:
         """Require a nonblank exact official representative identity."""
         if not value.strip():
-            raise ValueError("represented summary sisu_course_unit_id must not be blank")
+            raise ValueError("represented summary source_version_id must not be blank")
         return value
 
     @field_validator("source_hash")
@@ -334,11 +327,10 @@ class CatalogueModuleVersionIdentity(_CatalogueModel):
     repository projection and a full `CatalogueModuleVersion` expose one shared identity shape.
     """
 
-    sisu_module_id: str
+    source_version_id: str
     module_type: ModuleType
     code: str | None = None
-    name_fi: str | None = None
-    name_en: str | None = None
+    names: dict[str, str]
     validity_start: date | None = None
     validity_end: date | None = None
     curriculum_periods: tuple[CatalogueCurriculumPeriod, ...]
@@ -350,7 +342,7 @@ class CatalogueModuleVersion(CatalogueModuleVersionIdentity):
     source_hash: str
     target_credits_min: Decimal | None = None
     target_credits_max: Decimal | None = None
-    document_state: str
+    document_state: str | None
     rule: CatalogueModuleRule | None = None
 
 
@@ -371,12 +363,13 @@ class CatalogueModuleLookup(_CatalogueModel):
 class ModuleSummary(_CatalogueModel):
     """One canonical module's selected official version summary for a narrowing lookup.
 
-    It carries only the official identity, module type, code and both localized names. Modules have
-    no activity flag, official URL, rule tree or provenance hash, so none is invented here.
+    It carries only the official identity, module type, code and both displayed summary names.
+    Modules have no activity flag, official URL, rule tree or provenance hash, so none is invented
+    here.
     """
 
     group_id: str
-    sisu_module_id: str
+    source_version_id: str
     module_type: ModuleType
     code: str | None = None
     name_fi: str | None = None
@@ -394,7 +387,7 @@ def module_version_candidates[T: CatalogueModuleVersionIdentity](
     ambiguous, so a version tied to another year is never a silent fallback. Only when that strict
     set is empty and `allow_nearest` is true does the single nearest dated version fall back: the
     greatest year before the requested year, otherwise the least year after it, breaking a
-    same-year tie by the greatest `sisu_module_id`. Callers that need disclosure opt in. Strict
+    same-year tie by the greatest `source_version_id`. Callers that need disclosure opt in. Strict
     callers keep the empty result.
     """
     exact_memberships = tuple(
@@ -427,7 +420,7 @@ def _nearest_module_version[T: CatalogueModuleVersionIdentity](
     Each version's comparison year is its best preceding period year, otherwise its nearest following
     period year. A membership-free expired/future version uses its validity end/start year. The
     greatest preceding year wins, otherwise the least following year. A same-year tie picks the greatest
-    `sisu_module_id`, matching the deterministic representative-ID tie.
+    `source_version_id`, matching the deterministic representative-ID tie.
     """
     if not versions:
         return ()
@@ -435,7 +428,7 @@ def _nearest_module_version[T: CatalogueModuleVersionIdentity](
     earlier = tuple(year for year, _ in ranked if year < academic_year_start)
     best_year = max(earlier) if earlier else min(year for year, _ in ranked)
     tied = tuple(version for year, version in ranked if year == best_year)
-    return (max(tied, key=lambda version: version.sisu_module_id),)
+    return (max(tied, key=lambda version: version.source_version_id),)
 
 
 def _fallback_year(version: CatalogueModuleVersionIdentity, requested: int) -> int:
@@ -470,6 +463,8 @@ class CurriculumRead(Protocol):
     def list_teaching_courses(
         self, *, active_only: bool | None = None
     ) -> tuple[CatalogueTeachingCourse, ...]: ...
+
+    def list_prompt_courses(self) -> tuple[CatalogueTeachingCourse, ...]: ...
 
     def list_teaching_text_inputs(self) -> tuple[CatalogueTeachingTextInput, ...]: ...
 

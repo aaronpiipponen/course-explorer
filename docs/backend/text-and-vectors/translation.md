@@ -1,14 +1,14 @@
 # Translation
 
-The translation stage runs on the worker and fills the missing name, content, and learning outcomes of representative versions from the same field in the other language.
+The translation stage runs on the worker and fills missing name, content, and learning outcomes cells from an accepted official source language.
 
 ## What the stage fills
 
 Translation is a [Remote stage](/docs/reference/glossary.md#administration) of the preparation path. It works on the worker's own copy of the Working dataset, and the finished copy comes back at the dataset return.
 
-For every represented course the stage reads six cells: the name, the content, and the learning outcomes, each in Finnish and in English. It fills a cell when the version holds no official text for that field and language and the same field holds official text in the other language. That official text is the source of the translation.
+For every represented course the stage reads one cell per teaching field and mapped target language. It fills a cell when the version holds no official text for that field and target language and the same field holds official text in a source language the target lists. That official text is the source of the translation.
 
-A cell whose field holds official text in neither language is left as it is, because the stage never builds one field from another. The prerequisite text and the additional information of a version are not teaching text, so the stage neither reads nor fills them.
+A cell whose field holds no official text in any listed source language is left as it is, because the stage never builds one field from another and never reads a translation as a source. The prerequisite text and the additional information of a version are not teaching text, so the stage neither reads nor fills them.
 
 Its output holds derived translation entries only, and those entries are kept apart from the official text. The official text, the embeddings, and the inference results of the dataset are written by their own stages, and the entries of this stage reach the store only through the import described in [The output it publishes](#the-output-it-publishes).
 
@@ -22,12 +22,12 @@ The selector decides one of four things for every representative cell.
 |---|---|
 | Holds official text | Nothing. The official text is the effective text. |
 | Holds a translation that is current | Reuses it and translates nothing. |
-| Holds no official text, and the same field holds no official text in the other language | Translates nothing, because there is no source text. |
+| Holds no official text, and the same field holds no official text in a listed source language | Translates nothing, because there is no source text. |
 | Anything else | Queues the cell for translation. |
 
-A stored translation counts as current only when it was made from the exact official source text that is in force and, when a model produced it, by the model identity the configuration names. A translation made from an older official text, or by a translation model other than the configured one, is queued again. The selector changes no stored row and removes none.
+A stored translation counts as current only when its target and source pair is accepted and it was made from the exact official source text that is in force, and, when a model produced it, by the model identity the configuration names. A manual row may use any listed source. A model row must use the first populated listed source. A translation made from an older official text, from an unlisted pair, or by a translation model other than the configured one is queued again or left out of effective text. The selector changes no stored row and removes none.
 
-The selector reads every course, active and inactive alike, so a course outside the activity window is translated as well. It reports, for each of the six cells, how many representatives hold official text, a current translation, queued work, and no source text, together with the counts of active and inactive represented courses.
+The selector reads every course, active and inactive alike, so a course outside the activity window is translated as well. It reports, for each field and mapped target language, how many representatives hold official text, a current translation, queued work, and no source text, together with the counts of active and inactive represented courses.
 
 ## The output it publishes
 
@@ -35,7 +35,7 @@ A session writes one output file. Each entry names the course version, the field
 
 Each success republishes the whole output at once, so the file holds either the whole result or the result before that entry, and never a partly written entry. The retained output is the progress of the session, and the number of entries it holds is the completed count the operator reads.
 
-The import into the [translation store](/docs/backend/text-and-vectors/teaching-text-store.md) is the only write path for a derived row. The import runs while the session is finalized, before the dataset returns, and the stage itself writes neither the store nor official text.
+The import into the [translation store](/docs/backend/text-and-vectors/teaching-text-store.md) is the only write path for a derived row. The import accepts a mapped target and a source listed for that target, requires the exact official source text, runs while the session is finalized, and runs before the dataset returns. The stage itself writes neither the store nor official text.
 
 > [!IMPORTANT]
 > The store validates the whole batch before it writes a single row, so one entry that is invalid, or whose recorded source text differs from the current official text of the selected representative, rejects the whole import. No part of that import reaches the table.
@@ -51,6 +51,8 @@ Transport failures and 429 or 5xx statuses are retried inside the configured att
 An error names the endpoint and either a status or an exception class. The source text, the translated text, the request, the response body, and any credential stay out of it.
 
 Immediately before each request the stage reads the operator control again. A pause or a stop that arrived while the run was busy therefore takes effect before the next request instead of starting one more.
+
+The request shape, the retry loop, and the session state contracts are described in [Translation stage](/docs/backend/text-and-vectors/translation-stage.md).
 
 ## Progress, pauses, and the failure record
 

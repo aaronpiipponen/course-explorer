@@ -5,6 +5,11 @@ import { ErrorNotice } from "../../shared/ErrorNotice";
 import { CourseListRow } from "../../shared/course/CourseListRow";
 import { useCourseSummaries } from "../../shared/course/useCourseSummaries";
 import { courseCredits, courseName } from "../../shared/course/presentation";
+import {
+  coursesUseAssumedCredits,
+  effectiveCourseCredits,
+} from "../../solver/credits";
+import { useWebFeatures } from "../../app/useWebFeatures";
 import { useWording } from "../../shared/useWording";
 
 /** Render the selected or completed course basis and its expandable details. */
@@ -21,6 +26,7 @@ export function DiscoverBasis({
 }) {
   const { courses, loading, error } = useCourseSummaries(courseIds);
   const { language, t } = useWording();
+  const { assumed_course_credits } = useWebFeatures();
   const list = useRef<HTMLDivElement>(null);
   // The scrollbar sits inside the right padding, so the rows keep the same gap on both sides.
   useLayoutEffect(() => {
@@ -42,9 +48,12 @@ export function DiscoverBasis({
     basis === "completed" ? "Completed (basis)" : "Selected (basis)",
   );
   const totalCredits = courses.reduce(
-    (total, course) => total + Number(course.credits_min),
+    (total, course) =>
+      total +
+      Number(effectiveCourseCredits(course, assumed_course_credits)) / 100,
     0,
   );
+  const assumedCreditsUsed = coursesUseAssumedCredits(courses);
 
   if (!courseIds.length)
     return (
@@ -103,6 +112,9 @@ export function DiscoverBasis({
               ? "{total} cr total · {count} course"
               : "{total} cr total · {count} courses",
             { total: totalCredits, count: courseIds.length },
+          )}
+          {assumedCreditsUsed && (
+            <span className="assumed-note"> · {t("Assumed credits used")}</span>
           )}
         </p>
         <div className="discover-basis-list thin-scrollbar" ref={list}>

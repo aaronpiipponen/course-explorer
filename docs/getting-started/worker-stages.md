@@ -8,6 +8,7 @@ Translation and inference run on the worker, a separate machine that runs the mo
 
 - A copy set up by the [Installation](/docs/getting-started/installation.md) steps, with the Selected dataset enrolled and copied to Working. [Enroll the dataset](/docs/getting-started/data-preparation.md#enroll-the-dataset) describes the enrollment and the copy.
 - The Working pointer under `ADMIN_STATE_ROOT`, so each stage resolves Working.
+- A checkout of this repository at the configured worker project root, holding its runtime `config/` files, `docker-compose.yml` and its own ignored `.env`. The setup and update operation acts on that checkout, so the checkout and its runtime configuration are in place before the first setup.
 - The worker connection settings below, and a prepared worker before the first remote stage start.
 
 ## The worker connection settings
@@ -23,8 +24,9 @@ What the operator configures for the worker:
 | `config/worker.toml` | `TRANSLATION_CONTROLLER_SSH_CONNECT_TIMEOUT_SECONDS` | The bound on one connect attempt, 10 seconds in the example. |
 | `config/worker.toml` | `WORKER_SETUP_TIMEOUT_SECONDS` | The bound on each remote install, download, or build step, four hours in the example. |
 | `config/worker.toml` | `WORKER_GPU_REBOOT_INTERVAL_MINUTES` | The loaded-model run time after which the worker restarts, 120 minutes in the example. |
+| `config/database.toml` | `ADMIN_SHARED_ROOT` | The machine-wide shared directory the worker preparation loads. Preparation creates its `models/` and `locks/` directories at mode 0700, so the key holds one value before preparation runs. |
 | `config/translation.toml` | `TRANSLATION_CONTROLLER_HEALTH_INTERVAL_SECONDS`, `TRANSLATION_CONTROLLER_STOP_TIMEOUT_SECONDS` | The retry and poll interval, 2 seconds in the example, and the recovery and stop bound, 660 seconds in the example. |
-| `config/translation.toml`, `config/inference.toml` | The artifact keys | The pinned model files and runtimes the worker must hold, named by `TRANSLATION_ARTIFACT_PATH`, `TRANSLATION_ARTIFACT_SHA256`, `INFERENCE_PRIMARY_ARTIFACT_PATH`, `INFERENCE_PRIMARY_ARTIFACT_SHA256`, and the rerank artifact keys. |
+| `config/translation.toml`, `config/inference.toml` | The artifact keys | The pinned model files and runtimes the worker must hold, named by `TRANSLATION_ARTIFACT_PATH`, `TRANSLATION_ARTIFACT_SHA256`, `INFERENCE_PRIMARY_ARTIFACT_PATH`, `INFERENCE_PRIMARY_ARTIFACT_SHA256`, and the rerank artifact keys. A path is absolute or relative to the worker checkout, and a model file the worker shares with another checkout is stored under `ADMIN_SHARED_ROOT/models/` and named by its absolute path. A model file at that path in the checkout, holding its pinned bytes, satisfies the readiness read. Preparation downloads a missing inference or rerank artifact, and the translation artifact is installed at its path beforehand. |
 | `config/translation.toml`, `config/inference.toml` | `TRANSLATION_CONTROLLER_STATE_ROOT`, `INFERENCE_CONTROLLER_STATE_ROOT` | The repository-relative roots that hold each controller's recorded state. |
 
 What the code requires of the worker, and what each requirement follows from:
@@ -34,7 +36,7 @@ What the code requires of the worker, and what each requirement follows from:
 - The SSH target and the WSL distribution are each 1 to 64 ASCII letters, digits, underscore, dot, or hyphen.
 - The project root is an absolute path without dot components or percent characters.
 - The account runs `sudo` without a password prompt, because the setup bootstrap installs system packages and builds the database service image through `sudo` over a transport that has no terminal.
-- The checkout is on a non-detached Git branch, because the update reads the current branch before it switches to the selected origin branch. The update fetches the selected origin branch, refuses a local branch ahead of or diverged from the origin branch, switches the checkout onto the branch, and pulls the branch fast-forward. Git refuses an operation that would overwrite a local change.
+- The checkout exists at the configured project root with its runtime `config/` files, `docker-compose.yml` and its own ignored `.env`, on a non-detached Git branch, because the update reads the checkout and applies a fast-forward pull. The update fetches the selected origin branch, refuses a local branch ahead of or diverged from the origin branch, switches the checkout onto the branch, and pulls the branch fast-forward. Git refuses an operation that would overwrite a local change.
 - Docker and Docker Compose are available, because the prepared database image and the embedding image run through the Compose bridge. The database image build installs the serving extension from `docker/db/extension/`, and readiness requires its capability label.
 
 [Worker transport and datasets](/docs/operations/worker-transport.md) describes the transport and the connection values.
@@ -47,7 +49,7 @@ What the code requires of the worker, and what each requirement follows from:
    uv run python scripts/admin.py setup worker
    ```
 
-   The command fast-forwards the worker checkout to one origin branch, installs its locked project environment, streams the setup bootstrap, and prepares the pointed resources: the configured system packages, the pinned database service image, the pinned model artifacts, and the pinned runtimes. Its report holds the worker branch, its revision, whether the server checkout branch differs from its origin counterpart, and the resource readiness.
+   The command fast-forwards the worker checkout to one origin branch, installs its locked project environment, streams the setup bootstrap, and prepares the pointed resources: the configured system packages, the pinned database service image, the pinned model artifacts, and the pinned runtimes. Its report holds the worker branch, its revision, whether the server checkout branch differs from its origin counterpart, and the resource readiness. The checkout, its runtime `config/` files and its environment file are in place before the first setup. Preparation creates the worker shared directory's `models/` and `locks/` directories at mode 0700, so the worker stores its additional models in that `models/` directory and its reservation file in `locks/`. The readiness read creates neither directory.
 
    `--branch BRANCH` selects the origin branch, and the default is `main`. `--code-only` updates the code and its locked environment without preparing the pointed resources, and its report carries no resource readiness. The operator menu offers the same operation, as [Setup and preflight](/docs/operations/setup-and-preflight.md) describes.
 

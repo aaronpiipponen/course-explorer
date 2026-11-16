@@ -1,6 +1,6 @@
 """POST adapter for the read-only prerequisite graph command."""
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, HTTPException, Response
 
 from course_explorer.prerequisite import commands
 from course_explorer_web.reports import dataset_report_response
@@ -17,9 +17,14 @@ router = APIRouter()
 
 @router.post("/api/prerequisites")
 def prerequisites(request: PrerequisiteGraphRequest) -> Response:
-    """Forward the structural graph inputs under this site's drawing and inference policy."""
+    """Forward the structural graph inputs under this site's drawing and inference policy.
+
+    The graph read is refused with ``403`` when the site's prerequisites switch is off.
+    """
     bundle = preloaded_serving_settings()
     settings = bundle.web
+    if not settings.prerequisites_enabled:
+        raise HTTPException(status_code=403, detail="Feature disabled")
     serving = bundle.dataset
     cache = serving_caches(serving)
     values = request.model_dump()
@@ -35,6 +40,7 @@ def prerequisites(request: PrerequisiteGraphRequest) -> Response:
         report,
         serving,
         max_compact_nodes=bundle.search.prerequisite_path_max_compact_nodes,
+        assumed_course_credits=str(bundle.search.assumed_course_credits),
     )
     if request.target_code in _root_identifiers(report):
         response.headers[MEASURE_GRAPH_HEADER] = "1"

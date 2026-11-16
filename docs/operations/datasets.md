@@ -56,7 +56,7 @@ uv run python scripts/admin.py migrate working
 uv run python scripts/admin.py migrate database
 ```
 
-`migrate selected` and `migrate working` apply the migration head to the named role's database and return a fresh verification. A Working migration requires all four stages idle with no live recorded process before it applies. A Selected migration does not read the stage state. `migrate database` applies the same head to the configured database of a bootstrap state root and refuses an enrolled deployment.
+`migrate selected` and `migrate working` apply the migration head to the named role's database and return a fresh verification. A Working migration takes the checkout reservation and requires all four stages idle with no live recorded process before it applies. A Selected migration takes no checkout reservation and does not read the stage state. `migrate database` applies the same head to the configured database of a bootstrap state root and refuses an enrolled deployment.
 
 All three commands apply the head on one caller-owned connection in the interpreter that runs the command. They neither rewrite a receipt nor change a pointer.
 
@@ -83,7 +83,7 @@ One confined path holds each dataset's retained dump. A return downloads the wor
 uv run python scripts/admin.py datasets copy-to-working SOURCE_DATASET_ID
 ```
 
-Copy to Working creates a new dataset from an enrolled source, verifies the restored copy, writes a copied receipt, and publishes the Working pointer last. The source may be Selected, Working or any retained dataset whose database is present. Every stage must be idle before any copy mutation.
+Copy to Working creates a new dataset from an enrolled source, verifies the restored copy, writes a copied receipt, and publishes the Working pointer last. The source may be Selected, Working or any retained dataset whose database is present. Every stage must be idle before any copy mutation, and the command holds the checkout reservation before it takes the dataset action lock, so a preparation stage or another Working operation refuses before any copy work.
 
 The copy has its own dataset id and derived server database name. It reads the source's current schema head before one dump, restores that dump into a fresh derived database, and reads the restored database's verification for the receipt. The dump's producer digest is stored in the receipt, and the same-operation restore records a fresh verification of the restored database without comparing it with the source. The source rows, its pointer and its artifact namespace do not change. Artifact files are not read or copied. A copy neither rotates nor deletes a dataset, and it starts or restarts no service.
 
@@ -101,7 +101,7 @@ Promotion copies one enrolled source, builds and verifies the copy, publishes it
 
 The confirmation is required before any copy. Without `--confirm-restart` the command refuses and mutates nothing. A bootstrap state root refuses with the enrollment guidance.
 
-The command reads the previous Selected dataset, the checkout's own web unit and that unit's current dataset identity before the copy. It then dumps and restores the copy, builds the copy's serving artifacts for the site's configured embedding mode, and only after that build publishes the Selected pointer. The web unit is the only unit restarted, and its loopback bind is verified. The proof requires a nonempty dataset identity that differs from the previous one, and the served catalogue body to equal the new artifact with that identity appended.
+The command reads the previous Selected dataset, the checkout's own web unit and that unit's current dataset identity before the copy. When the web unit is stopped, the command records no previous identity and proceeds, because a stopped unit serves nothing to compare. It then dumps and restores the copy, builds the copy's serving artifacts for the site's configured embedding mode, and only after that build publishes the Selected pointer. The web unit is the only unit restarted, and its loopback bind is verified. The proof requires a nonempty dataset identity that differs from the previous one, and the served catalogue body to equal the new artifact with that identity appended. With no recorded previous identity, the proof requires the served catalogue body alone.
 
 A failed build switches nothing and restarts nothing. A failed restart or proof restores the previous Selected pointer, restarts the web unit and proves the previous catalogue and feature readiness. The promotion failure is then raised again. When that rollback also fails, the command raises both errors together.
 
@@ -162,7 +162,7 @@ uv run python scripts/admin.py backups list
 uv run python scripts/admin.py backups delete NAME
 ```
 
-`datasets delete DATASET_ID` drops the named dataset's server database, removes its retained dump and removes its derived artifact namespace across academic years. Every receipt-bearing dataset except Selected is eligible, the initial dataset included. Working additionally requires `--confirm-working` and every stage idle, and a successful Working deletion clears only the Working pointer. A later stage refuses until a new copy to Working.
+`datasets delete DATASET_ID` drops the named dataset's server database, removes its retained dump and removes its derived artifact namespace across academic years. Every receipt-bearing dataset except Selected is eligible, the initial dataset included. Working additionally requires `--confirm-working` and every stage idle, and it holds the checkout reservation around the idle guard and the resource drop. A successful Working deletion clears only the Working pointer, and a later stage refuses until a new copy to Working. Every other deletion takes no checkout reservation, and neither do Copy to Selected, the reads and the listing.
 
 | Refused target | The rule that refuses it |
 |---|---|

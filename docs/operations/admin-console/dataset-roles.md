@@ -17,7 +17,7 @@ The panel names both dataset roles with the facts their receipts record.
 
 The Selected dataset is the one the site serves. The Working dataset is the one the pipeline stages read. Each role is one prominent card with its **SELECTED** or **WORKING** tag, its dataset identity as the headline and the facts below it, and its role action in the card. The two role cards and the retained cards sit two per row, and they become one per row before a fact value would wrap, so a value is never clipped.
 
-![The Datasets panel with the Selected dataset card, the empty Working card and the retained dataset list](/docs/screenshots/admin-console-datasets.png)
+![The Datasets panel in the bootstrap state, with the notice that no dataset is enrolled and the site serves the configured database directly, the Enroll or select dataset and Migrate configured database controls, and the retained list reading No dataset is retained.](/docs/screenshots/admin-console-datasets.png)
 
 When a successful inventory read reports no Working pointer, the Working card is an empty state with the title **No Working dataset** and the hint **Copy a dataset to Working before starting a stage.** The Data preparation and Inference tabs also carry one such notice above their panels. Before the first successful read, and while the read reports the dataset state unavailable, every role fact reads **unknown**.
 

@@ -4,7 +4,7 @@ The comparison service turns two courses' stored chunk vectors into five percent
 
 ## Chunk carriers and centring
 
-`TeachingEmbeddingChunk` in `src/course_explorer/embeddings/read.py` is the request-local carrier: `chunk_id`, `group_id`, `sisu_course_unit_id`, `representative_source_hash`, `field`, `language`, `chunk_index`, `text_origin`, `character_count`, and `embedding`. `TeachingEmbeddingRepository.get_chunks(represented, *, embedding_configuration_hash, descriptive_only=False, shared_store=None)` returns the completed, vector-backed rows whose `(group_id, sisu_course_unit_id, representative_source_hash)` triple matches a requested record and whose configuration hash equals the digest. With `descriptive_only` the read uses the shared serving store and returns the content and outcomes rows. The comparison command reads every field from the database projection and passes no shared store. An empty request returns before opening a session, and a requested identity with no compatible row contributes no chunk.
+`TeachingEmbeddingChunk` in `src/course_explorer/embeddings/read.py` is the request-local carrier: `chunk_id`, `group_id`, `source_version_id`, `representative_source_hash`, `field`, `language`, `chunk_index`, `text_origin`, `character_count`, and `embedding`. `TeachingEmbeddingRepository.get_chunks(represented, *, embedding_configuration_hash, descriptive_only=False, shared_store=None)` returns the completed, vector-backed rows whose `(group_id, source_version_id, representative_source_hash)` triple matches a requested record and whose configuration hash equals the digest. With `descriptive_only` the read uses the shared serving store and returns the content and outcomes rows. The comparison command reads every field from the database projection and passes no shared store. An empty request returns before opening a session, and a requested identity with no compatible row contributes no chunk.
 
 `centre_chunks(chunks, hub, *, outcomes_hub=None)` in the same module replaces each chunk's vector with `subtract_hub(vector, hub)`, and with `subtract_hub_for_field` when an outcomes hub is supplied, so an outcomes chunk is centred on the outcomes hub and every other chunk on the embedding hub.
 
@@ -26,9 +26,9 @@ Two helpers sit under every meter. `_cosine(left, right)` returns the dot produc
 
 `_field_chunks(chunks, field, language)` selects one exact field and language, so the content and outcome text are never mixed in a similarity meter.
 
-`_field_similarity(a, b, field)` walks `TeachingTextLanguage` and, for each language with chunks on both sides, takes `_cosine(_centroid(a_chunks), _centroid(b_chunks))`. The result is `_percent` of the equal-weight mean of those per-language cosines, or `None` when no language qualifies. Content similarity and Learning-outcome similarity are the same computation over `TeachingTextField.CONTENT` and `TeachingTextField.OUTCOMES`.
+`_field_similarity(a, b, field, official_languages)` iterates the language codes present in both supplied chunk sets, ordered by the configured university's official-language list and then lexically, and, for each language with chunks of the field on both sides, takes `_cosine(_centroid(a_chunks), _centroid(b_chunks))`. The result is `_percent` of the equal-weight mean of those per-language cosines, or `None` when no language qualifies. Content similarity and Learning-outcome similarity are the same computation over `TeachingTextField.CONTENT` and `TeachingTextField.OUTCOMES`.
 
-`_overall_similarity(a, b, settings)` combines the three fields per language:
+`_overall_similarity(a, b, settings, official_languages)` iterates the shared language codes in the same order and combines the three fields per language:
 
 ```text
 weight  = {NAME: comparison_name_weight, CONTENT: comparison_content_weight,
@@ -42,7 +42,7 @@ result = _percent(equal-weight mean of cosines)   # None when no language qualif
 
 The weight of a field that one side lacks is left out of both sums and out of the divisor, so the other weights are renormalized over the fields the pair shares. The meter compares the two weighted centroids as a whole, so it reflects the whole text of each course rather than the best matching passage.
 
-`compare_teaching_chunks(a, b, *, settings, hub, outcomes_hub)` centres both sides once with `centre_chunks`, builds the three meters from the centred chunks, and adds the overlap result from the same centred chunks, so the overlap reuses the centring instead of repeating it, and returns one `ComparisonMeters`.
+`compare_teaching_chunks(a, b, *, settings, hub, outcomes_hub, official_languages)` centres both sides once with `centre_chunks`, builds the three meters from the centred chunks, and adds the overlap result from the same centred chunks, so the overlap reuses the centring instead of repeating it, and returns one `ComparisonMeters`.
 
 ## Directional overlap and the verdict
 
@@ -82,7 +82,7 @@ and it raises `ValueError` when `ceiling <= floor`.
 2. It loads `SearchSettings` and `EmbeddingRuntimeSettings` and receives the opened serving artifact build's hub pair.
 3. It resolves both inputs through the [course resolver](/docs/reference/glossary.md#search-and-comparison), so each input is an exact canonical identity first and an exact official code second, an unknown or ambiguous input raises, and the two inputs may resolve to the same course.
 4. It reads `TeachingEmbeddingRepository.get_chunks(resolved, embedding_configuration_hash=embedding_configuration_sha256(embedding_settings))` inside one database context, then groups the rows by `group_id` and takes one tuple per side.
-5. It calls `compare_teaching_chunks` with the build's catalogue and outcomes hubs and the floor and ceiling from the search settings, then `comparison_verdict`.
+5. It calls `compare_teaching_chunks` with the build's catalogue and outcomes hubs, the floor and ceiling from the search settings and the configured university's official-language order, then `comparison_verdict`.
 6. It sets `uses_derived_text` by testing every chunk of both sides for `text_origin is TeachingTextOrigin.DERIVED`.
 7. It returns a `CourseComparisonReport` carrying both `CourseSummary` values, the meters, the verdict, and the flag.
 
@@ -98,7 +98,7 @@ and it raises `ValueError` when `ceiling <= floor`.
 
 | File | Covers |
 |---|---|
-| `tests/comparison/test_comparison_service.py` | Hub subtraction that removes a shared component, identical content text at 100 on Content similarity, Overall relatedness, and both overlaps, directional containment where one course sits inside a larger one, a partial match that stays partial, orthogonal text at 0, a name-only pair with the descriptive meters `None`, disjoint languages with every meter `None`, common languages averaged equally, and the configured verdict thresholds. |
+| `tests/comparison/test_comparison_service.py` | Hub subtraction that removes a shared component, identical content text at 100 on Content similarity, Overall relatedness, and both overlaps, directional containment where one course sits inside a larger one, a partial match that stays partial, orthogonal text at 0, a name-only pair with the descriptive meters `None`, disjoint languages with every meter `None`, common languages including Swedish averaged equally, and the configured verdict thresholds. |
 | `tests/comparison/test_comparison_command.py` | Blank inputs refused before any settings load, and both CLI and report round-tripping. |
 | `tests/search/test_semantic_search_repository.py` | The command over a real database: a self-comparison of a derived-content course reads 100 on content, overall relatedness, and both overlaps, with `uses_derived_text` true. |
 

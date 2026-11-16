@@ -15,7 +15,10 @@ from collections.abc import Callable, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from course_explorer.curriculum import CatalogueCourse, CatalogueTeachingCourse
+from course_explorer.curriculum import (
+    CatalogueCourse,
+    CatalogueTeachingCourse,
+)
 from course_explorer.enums import TeachingTextField
 from course_explorer.http_retry import RequestNotStarted
 from course_explorer.inference.context import (
@@ -55,7 +58,7 @@ def render_rerank_course_text(
     """
     lines = [f"code: {course.course_code}"]
     for cell in course.texts:
-        lines.append(f"{cell.field.value}/{cell.language.value}: {cell.text}")
+        lines.append(f"{cell.field.value}/{cell.language}: {cell.text}")
     return "\n".join(lines)[:max_characters]
 
 
@@ -100,7 +103,7 @@ def represented_identities(
     return tuple(
         InferenceCourseEmbeddingIdentity(
             group_id=course.group_id,
-            sisu_course_unit_id=course.representative.sisu_course_unit_id,
+            source_version_id=course.representative.source_version_id,
             representative_source_sha256=course.representative.source_hash,
         )
         for course in courses

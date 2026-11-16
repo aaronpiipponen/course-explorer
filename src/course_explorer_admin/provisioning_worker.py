@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict
 from course_explorer.config import (
     load_inference_rerank_settings,
     load_inference_settings,
+    load_shared_storage_settings,
     load_translation_settings,
     load_worker_setup_settings,
 )
@@ -58,8 +59,9 @@ _TRANSLATION_GUIDANCE = (
     "no automated converter is provided"
 )
 # The database image carries the serving extension only when the final image stage declares this
-# capability. The stock pgvector image can share the tag, so presence by tag alone is not readiness.
-_DB_EXTENSION_LABEL = "org.tuni-course-explorer.db-extension"
+# capability. Readiness reads the label of the image the effective Compose project names, so a
+# matching tag alone is not readiness.
+_DB_EXTENSION_LABEL = "org.course-explorer.db-extension"
 _DB_EXTENSION_VERSION = "1.0"
 
 
@@ -78,7 +80,14 @@ def check_worker_resources(*, runner: mechanics.ProcessRunner) -> WorkerResource
 
 
 def prepare_worker_resources(*, runner: mechanics.ProcessRunner) -> WorkerResourcesReport:
-    """Verify or acquire the configured packages, db image, artifacts, and runtimes."""
+    """Verify or acquire the configured packages, db image, artifacts, and runtimes.
+
+    The machine shared model and reservation directories are created before the inspection, so a
+    worker that stores its additional models in the shared directory has the layout prepared.
+    """
+    shared = load_shared_storage_settings()
+    shared.models_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    shared.locks_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     return _inspect_worker_resources(runner, prepare=True)
 
 
@@ -203,11 +212,10 @@ def _db_image_name(runner: mechanics.ProcessRunner, worker_root: Path) -> str:
 
 
 def _db_image_present(runner: mechanics.ProcessRunner, worker_root: Path, image: str) -> bool:
-    """Report whether the image carries the prepared serving-extension capability.
+    """Report whether the effective project's database image carries the serving extension.
 
-    The stock base image can share the configured tag, so the tag alone is not readiness. The
-    read-only inspection reads the final image's extension label and compares it with the internal
-    capability version. A missing image or label is not ready.
+    The read-only inspection reads the final image's extension label and compares it with the
+    internal capability version. A missing image or label is not ready.
     """
     try:
         output = runner.run(

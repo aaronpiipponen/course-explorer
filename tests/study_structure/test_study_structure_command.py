@@ -42,7 +42,9 @@ def test_structure_command_validates_input_and_forwards_version_selection(monkey
             return StudyStructureBatch(roots=(), unavailable_root_group_ids=())
 
     monkeypatch.setattr(command_module, "StudyStructureService", _Service)
-    monkeypatch.setattr(command_module, "CurriculumRepository", lambda _factory: object())
+    monkeypatch.setattr(
+        command_module, "CurriculumRepository", lambda _factory, **_kwargs: object()
+    )
     monkeypatch.setattr(
         command_module, "_database_context", lambda _settings, **_kwargs: nullcontext(object())
     )

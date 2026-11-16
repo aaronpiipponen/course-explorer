@@ -15,7 +15,6 @@ from sqlalchemy.orm import sessionmaker
 
 from course_explorer.db.models import (
     Course,
-    CourseText,
     CourseVersion,
     InferenceCourseProcessing,
     InferenceModelAttempt,
@@ -24,8 +23,10 @@ from course_explorer.db.models import (
     InferenceProposal,
     InferenceTargetFailure,
     InferenceTargetWork,
+    OfficialCourseText,
 )
 from course_explorer.db.session import session_scope
+from course_explorer.enums import OfficialTextField
 from course_explorer.inference.prompts import load_prompt_pack
 from course_explorer.inference.scheduling import ProcessingTargetRecord
 from course_explorer.inference.scheduling_repository import InferenceSchedulingRepository
@@ -213,16 +214,44 @@ def test_text_and_activity_reset_but_calendar_and_generator_do_not(
     assert records["inactive-x"].processed is False
     assert records["inactive-x"].accepted_proposal_id is None
 
+    # The reactivation witness carries a genuine retained accepted pointer built while the target
+    # was active.
+    with session_scope(factory) as session:
+        course = session.scalar(select(Course).where(Course.group_id == "inactive-x"))
+        assert course is not None
+        course.is_active = True
+    fixture_inactive = complete_target(
+        factory,
+        build_target_input(build_pool(factory, "inactive-x", candidates)),
+        pack,
+    )
+    with session_scope(factory) as session:
+        course = session.scalar(select(Course).where(Course.group_id == "inactive-x"))
+        assert course is not None
+        course.is_active = False
+        inactive_marker = session.scalar(
+            select(InferenceCourseProcessing)
+            .join(Course, Course.id == InferenceCourseProcessing.course_id)
+            .where(Course.group_id == "inactive-x")
+        )
+        assert inactive_marker is not None
+        inactive_marker.accepted_proposal_id = fixture_inactive.proposal.proposal_id
+        inactive_marker.processed = True
+
     # A changed effective teaching text resets false while the pointer is retained.
     with session_scope(factory) as session:
         text = session.scalar(
-            select(CourseText)
-            .join(CourseVersion, CourseVersion.id == CourseText.course_version_id)
+            select(OfficialCourseText)
+            .join(CourseVersion, CourseVersion.id == OfficialCourseText.course_version_id)
             .join(Course, Course.id == CourseVersion.course_id)
-            .where(Course.group_id == "target-ok")
+            .where(
+                Course.group_id == "target-ok",
+                OfficialCourseText.field == OfficialTextField.CONTENT,
+                OfficialCourseText.language == "fi",
+            )
         )
         assert text is not None
-        text.content_fi = "Muuttunut sisalto"
+        text.text = "Muuttunut sisalto"
     after_text = {record.group_id: record for record in reconcile(factory, seeds)}
     assert after_text["target-ok"].processed is False
     assert after_text["target-ok"].accepted_proposal_id == fixture_ok.proposal.proposal_id
@@ -236,16 +265,17 @@ def test_text_and_activity_reset_but_calendar_and_generator_do_not(
     calendar = {record.group_id: record for record in reconcile(factory, seeds)}
     assert calendar["inactive-x"].processed is True
 
-    # An inactive course that becomes active without a completed result resets false once.
+    # An inactive course that becomes active resets false once and keeps its accepted pointer.
     with session_scope(factory) as session:
         course = session.scalar(select(Course).where(Course.group_id == "inactive-x"))
         assert course is not None
         course.is_active = True
     activated = {record.group_id: record for record in reconcile(factory, seeds)}
     assert activated["inactive-x"].processed is False
-    assert activated["inactive-x"].accepted_proposal_id is None
+    assert activated["inactive-x"].accepted_proposal_id == fixture_inactive.proposal.proposal_id
     repeated = {record.group_id: record for record in reconcile(factory, seeds)}
     assert repeated["inactive-x"].processed is False
+    assert repeated["inactive-x"].accepted_proposal_id == fixture_inactive.proposal.proposal_id
 
 
 def test_checkpoint_rejects_cross_stage_mutation_without_partial_write(
@@ -790,14 +820,41 @@ def test_operator_disposition_survives_text_change_and_cycle_restart(
     # A real teaching-text change and ordinary pruning never change the explicit decision.
     with session_scope(factory) as session:
         text = session.scalar(
-            select(CourseText)
-            .join(CourseVersion, CourseVersion.id == CourseText.course_version_id)
+            select(OfficialCourseText)
+            .join(CourseVersion, CourseVersion.id == OfficialCourseText.course_version_id)
             .join(Course, Course.id == CourseVersion.course_id)
-            .where(Course.group_id == "cyc-target")
+            .where(
+                Course.group_id == "cyc-target",
+                OfficialCourseText.field == OfficialTextField.CONTENT,
+                OfficialCourseText.language == "fi",
+            )
         )
         assert text is not None
-        text.content_fi = "Muuttunut opetussisalto"
+        text.text = "Muuttunut opetussisalto"
     reconcile(factory)
+
+    # An inactive-to-active course passes through both the reconciliation and the owner reset.
+    # A non-null decision keeps its processed state. A clear returns the target to automatic
+    # eligibility.
+    with session_scope(factory) as session:
+        course = session.scalar(select(Course).where(Course.group_id == "cyc-target"))
+        assert course is not None
+        course.is_active = False
+    reconcile(factory)
+    with session_scope(factory) as session:
+        course = session.scalar(select(Course).where(Course.group_id == "cyc-target"))
+        assert course is not None
+        course.is_active = True
+        marker = session.scalar(
+            select(InferenceCourseProcessing)
+            .join(Course, Course.id == InferenceCourseProcessing.course_id)
+            .where(Course.group_id == "cyc-target")
+        )
+        assert marker is not None
+        marker.processed = True
+    reconcile(factory)
+    assert _marker_facts(factory, "cyc-target")[2] == next_choice
+    assert _marker_facts(factory, "cyc-target")[0] is (next_choice is not None)
     repository.prune_retained_state()
     assert _marker_facts(factory, "cyc-target")[2] == next_choice
     assert (

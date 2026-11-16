@@ -312,10 +312,10 @@ export function useStructureEditor({
    * key the module itself renders at and the pulled courses with the nodes they leave, so the write
    * compares the authorized moves against the latest state once. A module the ordered programme
    * list holds is taken out of that list as it is placed, so its entry resolves at the destination
-   * node and not at the programme level. The node key the tree the choice extension has not reached
-   * renders the module at decides whether the placement moves the module's whole current subtree or
-   * takes its scope's official defaults. `pull` is whether that adoption moves the listed courses
-   * into the module or leaves them where they are.
+   * node and not at the programme level. The node key that the tree renders the module at before
+   * the choice extension reaches it decides whether the placement moves the module's whole current
+   * subtree or takes its scope's official defaults. `pull` is whether that adoption moves the
+   * listed courses into the module or leaves them where they are.
    */
   const modulePlacement = (
     current: StructureState,
@@ -491,7 +491,7 @@ export function useStructureEditor({
     );
     if (!state) return;
     const stored = state.moduleVersions[module.group_id];
-    if (stored !== undefined && stored !== module.sisu_module_id)
+    if (stored !== undefined && stored !== module.source_version_id)
       throw new Error(VERSION_CONFLICT);
     if (item === null) {
       const target = projectionFor(state, ctx).byKey.get(targetKey);
@@ -663,13 +663,16 @@ export function useStructureEditor({
           );
           if (!state) return;
           const stored = state.moduleVersions[source.module.group_id];
-          if (stored !== undefined && stored !== source.module.sisu_module_id)
+          if (
+            stored !== undefined &&
+            stored !== source.module.source_version_id
+          )
             throw new Error(VERSION_CONFLICT);
           module = source.module;
           ctx = content;
           moduleVersions = {
             ...state.moduleVersions,
-            [source.module.group_id]: source.module.sisu_module_id,
+            [source.module.group_id]: source.module.source_version_id,
           };
         }
         await finishModulePlacement(
@@ -728,11 +731,11 @@ export function useStructureEditor({
           const snapshot = store.refreshFromStorage();
           const state = snapshot.profiles[snapshot.currentProfileId].state;
           const stored = state.structure.moduleVersions[module.group_id];
-          if (stored !== undefined && stored !== module.sisu_module_id)
+          if (stored !== undefined && stored !== module.source_version_id)
             throw new Error(VERSION_CONFLICT);
           const moduleVersions = {
             ...state.structure.moduleVersions,
-            [module.group_id]: module.sisu_module_id,
+            [module.group_id]: module.source_version_id,
           };
           const prospective = await readProspectiveStructure({
             cache,

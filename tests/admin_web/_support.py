@@ -28,7 +28,7 @@ from course_explorer_admin_web.security import SESSION_COOKIE_NAME
 
 ORIGIN = "https://localhost:8039"
 APP_URL = "http://localhost:8037/"
-REPOSITORY_URL = "https://github.com/aaronpiipponen/tuni-course-explorer"
+REPOSITORY_URL = "https://github.com/aaronpiipponen/course-explorer"
 OPERATOR_NAME = "synthetic-operator"
 OPERATOR_PASSWORD = "synthetic-password"
 REPLACEMENT_PASSWORD = "synthetic-replacement-password"
@@ -139,6 +139,7 @@ def admin_web_settings(**overrides: object) -> AdminWebSettings:
         "ADMIN_WEB_POLL_SECONDS": 10,
         "WEB_APP_URL": APP_URL,
         "ADMIN_WEB_REPOSITORY_URL": REPOSITORY_URL,
+        "INSTANCE_KEY": "example",
     }
     values.update(overrides)
     return AdminWebSettings(**values)

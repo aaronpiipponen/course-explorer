@@ -17,7 +17,7 @@ export function initialProfileState(): ProfileState {
     prerequisites: initialPrerequisitesState(),
     discover: initialDiscoverState(),
     structure: initialStructureState(),
-    pendingSisuImport: null,
+    pendingPlanImport: null,
   };
 }
 

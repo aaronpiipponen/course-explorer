@@ -4,7 +4,7 @@ import { useWording } from "../../shared/useWording";
 
 type VersionFacts = Pick<
   CatalogueModule,
-  "sisu_module_id" | "validity_start" | "validity_end" | "curriculum_periods"
+  "source_version_id" | "validity_start" | "validity_end" | "curriculum_periods"
 >;
 
 /** Render one exact version's official facts: stated validity bounds, periods and exact id. */
@@ -28,7 +28,7 @@ export function ModuleVersionLabel({ version }: { version: VersionFacts }) {
     <span className="module-version-label">
       <span>{validity}</span>
       <span>{t("Periods: {periods}", { periods })}</span>
-      <span>{t("Version {id}", { id: version.sisu_module_id })}</span>
+      <span>{t("Version {id}", { id: version.source_version_id })}</span>
     </span>
   );
 }

@@ -18,7 +18,13 @@ from typing import get_args
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session, sessionmaker
 
-from course_explorer.config import DatabaseSettings, load_database_settings
+from course_explorer.config import (
+    DatabaseSettings,
+    SearchSettings,
+    load_database_settings,
+    load_instance_settings,
+    load_search_settings,
+)
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.db.session import database_context as _database_context
 from course_explorer.next_courses.report_cache import (
@@ -46,7 +52,9 @@ class NextCoursesReport(BaseModel):
     """One transient next-course result and its effective request policy.
 
     The two canonical input sets and the chosen basis are request context carried by the CLI, the
-    web backend and the recommendation command. They are not stored state.
+    web backend and the recommendation command. They are not stored state. ``uses_assumed_credits``
+    is true when a credit-bound requirement of a compiled structure retained a course with no
+    official minimum credit, which counts at the configured assumed value.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -59,6 +67,7 @@ class NextCoursesReport(BaseModel):
     include_inferred: bool
     active_only: bool
     results: tuple[NextCourseResult, ...]
+    uses_assumed_credits: bool
 
 
 def run_next_courses_command(
@@ -72,6 +81,7 @@ def run_next_courses_command(
     active_only: bool = True,
     database_settings: DatabaseSettings | None = None,
     report_cache: NextCourseReportCache | None = None,
+    search_settings: SearchSettings | None = None,
     projection: LookupProjection | None = None,
     session_factory: sessionmaker[Session] | None = None,
 ) -> NextCoursesReport:
@@ -98,10 +108,12 @@ def run_next_courses_command(
     resolved_settings = (
         database_settings if database_settings is not None else load_database_settings()
     )
+    resolved_search = search_settings if search_settings is not None else load_search_settings()
     return read_next_courses(
         inputs,
         resolved_settings,
         report_cache=report_cache,
+        search_settings=resolved_search,
         projection=projection,
         session_factory=session_factory,
     )
@@ -156,10 +168,13 @@ def read_next_courses(
     database_settings: DatabaseSettings,
     *,
     report_cache: NextCourseReportCache | None = None,
+    search_settings: SearchSettings | None = None,
     projection: LookupProjection | None = None,
     session_factory: sessionmaker[Session] | None = None,
 ) -> NextCoursesReport:
     """Read one discovery report over the supplied database settings under the validated inputs."""
+    resolved_search = search_settings if search_settings is not None else load_search_settings()
+    assumed_course_credits = resolved_search.assumed_course_credits
     selected_inputs = inputs.selected_inputs
     completed_inputs = inputs.completed_inputs
     normalized_basis = inputs.normalized_basis
@@ -175,13 +190,14 @@ def read_next_courses(
         display_language=display_language,
         include_inferred=include_inferred,
         active_only=active_only,
+        assumed_course_credits=str(assumed_course_credits),
     )
     if report_cache is not None:
         retained = report_cache.get_raw(raw_key)
         if retained is not None:
             return retained
     with _database_context(database_settings, factory=session_factory) as factory:
-        curriculum = CurriculumRepository(factory)
+        curriculum = CurriculumRepository(factory, university=load_instance_settings().university)
         resolver = CourseResolver(curriculum, projection=projection)
         resolved = resolver.resolve_courses((*selected_inputs, *completed_inputs))
         selected_slice = resolved[: len(selected_inputs)]
@@ -211,6 +227,7 @@ def read_next_courses(
                 display_language=display_language,
                 include_inferred=include_inferred,
                 active_only=active_only,
+                assumed_course_credits=str(assumed_course_credits),
             )
         )
         if report_cache is not None:
@@ -218,6 +235,7 @@ def read_next_courses(
             if cached is not None:
                 return cached
         results: tuple[NextCourseResult, ...] = ()
+        uses_assumed_credits = False
         if chosen:
             inferred_sets = InferredPrerequisiteRepository(factory)
             equivalence_groups = InferredEquivalenceRepository(factory)
@@ -238,7 +256,9 @@ def read_next_courses(
                 curriculum.get_prerequisite_candidate_group_ids(source_ids, active_only=active_only)
             )
             if include_inferred:
-                candidate_ids |= set(inferred_sets.find_candidate_group_ids(source_ids))
+                candidate_ids |= set(
+                    inferred_sets.find_candidate_group_ids(source_ids, active_only=active_only)
+                )
             candidate_ids -= set(chosen)
             first_pass = compiler.compile_direct_many(
                 candidate_ids,
@@ -248,13 +268,17 @@ def read_next_courses(
             )
             try:
                 first_pass_outcomes = evaluate_next_course_outcomes(
-                    first_pass, chosen, mode=normalized_mode
+                    first_pass,
+                    chosen,
+                    mode=normalized_mode,
+                    assumed_course_credits=assumed_course_credits,
                 )
                 if include_inferred:
                     eligible_ids = eligible_next_course_group_ids(
                         first_pass,
                         chosen,
                         mode=normalized_mode,
+                        assumed_course_credits=assumed_course_credits,
                         candidate_outcomes=first_pass_outcomes,
                     )
                     official_pass = compiler.compile_direct_many(
@@ -264,13 +288,25 @@ def read_next_courses(
                         retained_group_ids=chosen,
                     )
                     try:
+                        official_outcomes = evaluate_next_course_outcomes(
+                            official_pass,
+                            chosen,
+                            mode=normalized_mode,
+                            assumed_course_credits=assumed_course_credits,
+                        )
                         results = next_courses_from_compilations(
                             first_pass,
                             chosen,
                             mode=normalized_mode,
                             display_language=display_language,
+                            assumed_course_credits=assumed_course_credits,
                             official_compilations=official_pass,
+                            official_outcomes=official_outcomes,
                             candidate_outcomes=first_pass_outcomes,
+                        )
+                        uses_assumed_credits = (
+                            first_pass_outcomes.uses_assumed_credits
+                            or official_outcomes.uses_assumed_credits
                         )
                     finally:
                         native_compiler.close_compilations(official_pass)
@@ -280,8 +316,10 @@ def read_next_courses(
                         chosen,
                         mode=normalized_mode,
                         display_language=display_language,
+                        assumed_course_credits=assumed_course_credits,
                         candidate_outcomes=first_pass_outcomes,
                     )
+                    uses_assumed_credits = first_pass_outcomes.uses_assumed_credits
             finally:
                 native_compiler.close_compilations(first_pass)
     report = NextCoursesReport(
@@ -293,6 +331,7 @@ def read_next_courses(
         include_inferred=include_inferred,
         active_only=active_only,
         results=results,
+        uses_assumed_credits=uses_assumed_credits,
     )
     if report_cache is not None:
         report_cache.put_raw(raw_key, report_key, report)

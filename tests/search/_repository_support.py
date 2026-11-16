@@ -18,11 +18,11 @@ from course_explorer.constants import COURSE_EMBEDDING_DIMENSION
 from course_explorer.db.models import (
     Course,
     CourseEmbeddingChunk,
-    CourseText,
     CourseVersion,
     CourseVersionCurriculumPeriod,
     CurriculumPeriod,
     IngestionRun,
+    OfficialCourseText,
     SourceSnapshot,
 )
 from course_explorer.db.session import session_scope
@@ -31,9 +31,9 @@ from course_explorer.embeddings.generation import embedding_configuration_sha256
 from course_explorer.enums import (
     CourseEmbeddingStatus,
     IngestionRunStatus,
+    OfficialTextField,
     SourceObjectType,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
     TranslationMethod,
 )
@@ -127,10 +127,8 @@ def _add_version(
         CourseVersion(
             id=version_id,
             course_id=course_id,
-            sisu_course_unit_id=source_id,
+            source_version_id=source_id,
             code=code,
-            name_fi=name_fi,
-            name_en=name_en,
             credits_min=5,
             credits_max=5,
             official_url=f"https://example.test/{source_id}",
@@ -139,8 +137,25 @@ def _add_version(
         )
     )
     session.flush()
+    session.add_all(
+        OfficialCourseText(
+            course_version_id=version_id,
+            field=OfficialTextField.NAME,
+            language=language,
+            text=text,
+        )
+        for language, text in (("fi", name_fi), ("en", name_en))
+        if text is not None
+    )
     if content_fi is not None:
-        session.add(CourseText(course_version_id=version_id, content_fi=content_fi))
+        session.add(
+            OfficialCourseText(
+                course_version_id=version_id,
+                field=OfficialTextField.CONTENT,
+                language="fi",
+                text=content_fi,
+            )
+        )
     session.add(
         CourseVersionCurriculumPeriod(
             course_version_id=version_id, curriculum_period_id=f"period-{membership_year}"
@@ -155,7 +170,7 @@ def _add_chunk(
     version_id: UUID,
     source_hash: str,
     field: TeachingTextField,
-    language: TeachingTextLanguage,
+    language: str,
     chunk_index: int,
     text: str,
     cosine: float,
@@ -232,7 +247,7 @@ def _seed_semantic_courses(database: tuple[Engine, object]) -> dict[str, UUID]:
             version_id=version_a,
             source_hash="1" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.FI,
+            language="fi",
             chunk_index=0,
             text="chunk a0",
             cosine=0.6,
@@ -242,7 +257,7 @@ def _seed_semantic_courses(database: tuple[Engine, object]) -> dict[str, UUID]:
             version_id=version_a,
             source_hash="1" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=1,
             text="chunk a1",
             cosine=0.8,
@@ -265,7 +280,7 @@ def _seed_semantic_courses(database: tuple[Engine, object]) -> dict[str, UUID]:
             version_id=version_b,
             source_hash="2" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             text="chunk b0",
             cosine=0.9,
@@ -288,7 +303,7 @@ def _seed_semantic_courses(database: tuple[Engine, object]) -> dict[str, UUID]:
             version_id=version_c,
             source_hash="3" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             text="chunk c0",
             cosine=0.95,
@@ -312,7 +327,7 @@ def _seed_semantic_courses(database: tuple[Engine, object]) -> dict[str, UUID]:
             version_id=version_d,
             source_hash="4" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             text="chunk d0",
             cosine=0.99,
@@ -336,7 +351,7 @@ def _seed_semantic_courses(database: tuple[Engine, object]) -> dict[str, UUID]:
             version_id=version_e,
             source_hash="5" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             text="chunk e0",
             cosine=0.4,
@@ -378,7 +393,7 @@ def _seed_derived_and_obsolete(database: tuple[Engine, object]) -> dict[str, UUI
             version_id=current,
             source_hash="1" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             text="Derived english chunk",
             cosine=0.6,
@@ -391,7 +406,7 @@ def _seed_derived_and_obsolete(database: tuple[Engine, object]) -> dict[str, UUI
             version_id=current,
             source_hash="3" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=1,
             text="Stale source hash chunk",
             cosine=0.99,
@@ -412,7 +427,7 @@ def _seed_derived_and_obsolete(database: tuple[Engine, object]) -> dict[str, UUI
             version_id=obsolete,
             source_hash="2" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             text="Obsolete high score",
             cosine=0.95,

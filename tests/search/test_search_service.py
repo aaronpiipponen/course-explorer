@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from course_explorer.curriculum import RepresentedCourseSummary, course_summary
+from course_explorer.curriculum import RepresentedCourseSummary
 from course_explorer.search.service import SemanticCourseScore
 from tests.search._service_support import (
     DIMENSION,
@@ -66,26 +66,26 @@ def test_search_uses_config_threshold_current_vectors_and_active_first_order() -
         # Stale identity for a current group is ignored rather than paired with current summary.
         SemanticCourseScore(
             group_id="group-obsolete",
-            sisu_course_unit_id="source-old",
+            source_version_id="source-old",
             representative_source_hash=HASH_B,
             score=0.99,
         ),
         SemanticCourseScore(
             group_id="group-active",
-            sisu_course_unit_id="source-active",
+            source_version_id="source-active",
             representative_source_hash=HASH_A,
             score=0.55,
         ),
         SemanticCourseScore(
             group_id="group-inactive",
-            sisu_course_unit_id="source-inactive",
+            source_version_id="source-inactive",
             representative_source_hash=HASH_B,
             score=0.95,
         ),
         # Score for a group with no current representative is ignored.
         SemanticCourseScore(
             group_id="group-missing",
-            sisu_course_unit_id="source-missing",
+            source_version_id="source-missing",
             representative_source_hash=HASH_A,
             score=0.9,
         ),
@@ -117,7 +117,7 @@ def test_search_override_and_active_only_are_forwarded_without_result_cap() -> N
     scores = tuple(
         SemanticCourseScore(
             group_id=f"group-{index}",
-            sisu_course_unit_id=f"source-{index}",
+            source_version_id=f"source-{index}",
             representative_source_hash=HASH_A,
             score=0.9 - index * 0.05,
         )
@@ -142,21 +142,21 @@ def test_search_pairs_supplied_represented_summaries_by_exact_identity() -> None
     active = course("group-active", version("source-active", code="A.1"))
     supplied = (
         RepresentedCourseSummary(
-            summary=course_summary(active),
-            sisu_course_unit_id="source-active",
+            summary=summary(active),
+            source_version_id="source-active",
             source_hash=HASH_A,
         ),
     )
     scores = (
         SemanticCourseScore(
             group_id="group-active",
-            sisu_course_unit_id="source-active",
+            source_version_id="source-active",
             representative_source_hash=HASH_A,
             score=0.7,
         ),
         SemanticCourseScore(
             group_id="group-active",
-            sisu_course_unit_id="source-stale",
+            source_version_id="source-stale",
             representative_source_hash=HASH_B,
             score=0.99,
         ),

@@ -7,6 +7,10 @@ projections.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from decimal import Decimal
+from uuid import uuid4
+
 import pytest
 from sqlalchemy import Engine, func, select, update
 
@@ -25,6 +29,17 @@ from course_explorer.enums import InferredProducerKind
 from course_explorer.inference.prompts import load_prompt_pack
 from course_explorer.inference.publication import publish_current_cohort
 from course_explorer.inference.scheduling_repository import InferenceSchedulingRepository
+from course_explorer.instance import UNIVERSITIES
+from course_explorer.prerequisite.domain import (
+    EquivalenceGroupMember,
+    EquivalenceGroupPublication,
+    InferenceEvidenceKind,
+    InferenceEvidenceReference,
+    InferenceNodeMetadata,
+    InferredReadState,
+)
+from course_explorer.prerequisite.equivalence_repository import InferredEquivalenceRepository
+from course_explorer.prerequisite.repository import InferredPrerequisiteRepository
 from tests.inference._scheduling_support import (
     build_pool,
     build_target_input,
@@ -40,6 +55,7 @@ pytestmark = [
 
 _CANDIDATES = tuple(f"cov-c{index:02d}" for index in range(50))
 _CYCLE_CANDIDATES = tuple(f"cyc-c{index:02d}" for index in range(50))
+_GENERATED_AT = datetime(2026, 9, 30, 12, 0, tzinfo=UTC)
 
 
 def _completed_proposal(factory, target_group_id: str, candidate_group_ids: tuple[str, ...]):
@@ -111,6 +127,63 @@ def test_inference_coverage_and_cohort_preserve_genuine_bootstrap_then_pointer_a
     assert coverage.published_targets == 0
     assert coverage.historical_proposal_rows == 1
 
+    # A retained inactive supporter sits outside active coverage while its result and group stay
+    # readable.
+    equivalence = InferredEquivalenceRepository(factory)
+    group_id = uuid4()
+    equivalence.publish(
+        EquivalenceGroupPublication(
+            group_id=group_id,
+            members=(
+                EquivalenceGroupMember(
+                    course_group_id="cov-source",
+                    activity_as_of_academic_year_start=2026,
+                    activity_window_years=3,
+                ),
+                EquivalenceGroupMember(
+                    course_group_id="cov-target",
+                    activity_as_of_academic_year_start=2026,
+                    activity_window_years=3,
+                ),
+            ),
+            producer_kind=InferredProducerKind.INFERENCE,
+            producer_name="test-fixture",
+            producer_version="1",
+            input_hash="a" * 64,
+            inference=InferenceNodeMetadata(
+                confidence=Decimal("0.5"),
+                requirement_ids=(),
+                evidence=(
+                    InferenceEvidenceReference(
+                        kind=InferenceEvidenceKind.EXPRESSION_PROPOSAL,
+                        reference_id="proposal-1",
+                    ),
+                ),
+            ),
+            generated_at=_GENERATED_AT,
+        )
+    )
+    with session_scope(factory) as session:
+        course = session.scalar(select(Course).where(Course.group_id == "cov-target"))
+        assert course is not None
+        course.is_active = False
+    cohort = repository.read_publication_cohort()
+    assert "cov-target" not in cohort.eligible_target_group_ids
+    assert cohort.accepted_proposal_ids == {}
+    assert cohort.retained_inactive_proposal_ids == {"cov-target": proposal.proposal_id}
+    coverage = repository.read_coverage()
+    assert coverage.eligible_targets == 2 + len(_CANDIDATES)
+    assert coverage.retained_complete_targets == 0
+    assert coverage.uncovered_targets == 2 + len(_CANDIDATES)
+    assert coverage.current_equivalence_groups == 1
+    retained = InferredPrerequisiteRepository(factory).read("cov-target")
+    assert retained.state is InferredReadState.CURRENT
+    assert len(equivalence.read_for_member("cov-source")) == 1
+    with session_scope(factory) as session:
+        course = session.scalar(select(Course).where(Course.group_id == "cov-target"))
+        assert course is not None
+        course.is_active = True
+
     if authority == "done":
         # An explicit done target suppresses selected publication while its marker pointer
         # is retained, counts as complete coverage with no generation identity, and is not
@@ -131,6 +204,7 @@ def test_inference_coverage_and_cohort_preserve_genuine_bootstrap_then_pointer_a
             repository.read_publication_cohort(),
             load_inference_settings(),
             load_inference_selection_settings(),
+            university=UNIVERSITIES["example"],
         )
         coverage = repository.read_coverage()
         assert coverage.published_targets == 1

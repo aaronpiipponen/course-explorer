@@ -12,9 +12,13 @@ A successful target course receives one complete result, written as a whole. The
 
 ## The target course and its teaching text
 
-One run judges a target course from that course's own teaching text together with a bounded list of candidate courses. The request carries a packet that holds the target course and its ordered candidates, and each course arrives with its identity, its course code, its activity state, and its effective text. [Inference pipeline](/docs/backend/inference/inference-pipeline.md) lists the exact fields of the packet.
+One run judges a target course from that course's own teaching text together with a bounded list of candidate courses. The request carries a packet that holds the target course and its ordered candidates, and each course arrives with its identity, its course code, its activity state, its effective teaching text, and the selected prompt cells the field selection retains. [Inference pipeline](/docs/backend/inference/inference-pipeline.md) lists the exact fields of the packet.
 
-Only effective text enters the packet. The packet carries the identity, the code, the activity context, the effective text, and the provenance of each course. The packet and the prompt hold only those fields, so an official prerequisite option or an official substitution option never reaches the model through them.
+The packet holds two cell sets. Its teaching cells are the effective teaching cells of the configured inference language and origin pairs, and they drive candidate retrieval and the rerank. The full effective catalogue drives embedding readiness. The packet also holds the selected prompt cells, which the prompt carries: teaching cells of a selected field, which may be derived, plus selected official non-teaching cells in the languages the inference language list allows as official. The university map's inference language list selects the effective cells that enter the packet, the rerank text and the processing descriptor. A nondefault list belongs to the inference policy identity. The target and pool prompt fields select the name, content, outcomes, prerequisite text and additional-information cells that the prompt carries. No official prerequisite option or official substitution option reaches the model.
+
+The diagram shows each cell set inside the label-safe boundary with the text that supplies it and the consumer that reads it. The dashed arrow marks the policy that selects the cells, and the official prerequisite structure reaches only the proposal.
+
+![Effective text supplies embedding readiness, the packet's teaching cells, and the prompt cells, which also take selected official non-teaching cells from the official text. The inference policy, by the dashed arrow, selects the cells inside the label-safe boundary. The teaching cells feed retrieval and the rerank, the prompt cells feed the prompt, and the official prerequisite structure reaches only the proposal.](/docs/diagrams/inference-text-policies.svg)
 
 The whole packet is sent or the target course fails. A request whose packet fits no configured local key is reported as one capacity failure for that target course, with the reason `context_exceeded`, and the run continues with the other target courses. [Inference scheduling and disposition](/docs/backend/inference/inference-scheduling.md) states the fit rule.
 
@@ -24,7 +28,7 @@ The diagram follows one target course from its effective text through candidate 
 
 ## Label safety
 
-[Label safety](/docs/reference/glossary.md#inference) separates the evidence used to propose a prerequisite from the official answer. Candidate selection ranks courses from their embedded teaching text, the packet holds effective text and identities, and the prompt and the model input are assembled from that evidence.
+[Label safety](/docs/reference/glossary.md#inference) separates the evidence used to propose a prerequisite from the official answer. Candidate selection ranks courses from their embedded teaching text, the packet holds effective teaching cells, the selected prompt cells (effective teaching cells, which may be derived, plus selected official non-teaching cells) and identities, and the prompt and the model input are assembled from that evidence.
 
 > [!IMPORTANT]
 > Official prerequisite structure is excluded from candidate selection and every model input. The composer reads the official prerequisite and substitution options only after a result exists, so the model that proposes a prerequisite never sees the official answer.
@@ -39,10 +43,14 @@ Candidate courses come from the [embedded teaching text](/docs/backend/text-and-
 | `INFERENCE_SELECTION_FINAL_K` | The number of candidates the rerank retains for the language model | 50 |
 | `INFERENCE_MULTIVIEW_EVALUATION_FIELDS` | The teaching-text fields the pool compares in their own view | name, content, outcomes |
 | `INFERENCE_MULTIVIEW_FUSION_RANK_OFFSET` | The offset that fuses the field views into one pool order | 60 |
+| `INFERENCE_TARGET_FIELDS` | The official fields the prompt carries for the analysed target course, as an optional override of the university map default | name, content, outcomes, prerequisite_text |
+| `INFERENCE_POOL_FIELDS` | The official fields the prompt carries for every candidate course, as an optional override of the university map default | name, content, outcomes |
 | `INFERENCE_RERANK_QUERY_MAX_CHARACTERS` | The character bound of the target text one rerank request sends | 1536 |
 | `INFERENCE_RERANK_DOCUMENT_MAX_CHARACTERS` | The character bound of one candidate text a rerank request sends | 1536 |
 
 Every key is in `config/inference.toml`. The candidate pool holds both active and inactive courses, because an inactive course is a valid prerequisite source.
+
+The two prompt field keys are optional. When absent, the configured university map entry supplies its target and pool defaults: the target carries name, content, outcomes and prerequisite text, and the pool carries name, content and outcomes. The valid values are `name`, `content`, `outcomes`, `prerequisite_text` and `additional_info`, in that order. The inference policy identity adds the selection only when it differs from the name, content and outcomes baseline, so a default selection adds nothing to the identity.
 
 Each rerank request carries one target text and one candidate text, rendered from the course code and the effective teaching cells only. The scored order selects the candidates of the packet, so the packet holds the strongest candidates in one deterministic order.
 
@@ -93,8 +101,8 @@ The language model is served from one quantized artifact, and every key in this 
 | `INFERENCE_PRIMARY_ARTIFACT_REPOSITORY` | The repository that holds the quantized artifact, in `owner/repository` form | `vmarcelo/Qwen3.8-27B-MIX_GGUF` |
 | `INFERENCE_PRIMARY_ARTIFACT_REVISION` | The artifact's pinned commit | a 40-character commit |
 | `INFERENCE_PRIMARY_ARTIFACT_FILE` | The artifact's GGUF file name, with no directory | `Qwen3.8-27B-IQ3-MIX.gguf` |
-| `INFERENCE_PRIMARY_ARTIFACT_PATH` | The repository-relative path of the artifact, whose basename must equal the file name | `models/qwen3.8-27b-iq3-mix-f922f9d9/Qwen3.8-27B-IQ3-MIX.gguf` |
-| `INFERENCE_PRIMARY_ARTIFACT_QUANT` | The artifact's quantization, one literal | `IQ3_MIX` |
+| `INFERENCE_PRIMARY_ARTIFACT_PATH` | The artifact path, either absolute or relative to the worker checkout, whose basename must equal the file name | `models/qwen3.8-27b-iq3-mix-f922f9d9/Qwen3.8-27B-IQ3-MIX.gguf` |
+| `INFERENCE_PRIMARY_ARTIFACT_QUANT` | The quantization token recorded in the model identity, as alphanumeric groups joined by `_` or `-` | `IQ3_MIX` |
 | `INFERENCE_PRIMARY_ARTIFACT_SHA256` | The SHA-256 digest the downloaded bytes must match | a 64-character digest |
 | `INFERENCE_PARALLEL` | The parallel sequence slots the runtime serves, as a positive integer | 1 |
 | `INFERENCE_GPU_LAYERS` | The model layers offloaded to the GPU, either `all` or a nonnegative integer | `all` |
@@ -128,7 +136,7 @@ The cross-encoder is a separate pinned artifact served by the same runtime revis
 | `INFERENCE_RERANK_ARTIFACT_REPOSITORY` | The repository that holds the quantized cross-encoder | `gpustack/bge-reranker-v2-m3-GGUF` |
 | `INFERENCE_RERANK_ARTIFACT_REVISION` | The artifact's pinned commit | a 40-character commit |
 | `INFERENCE_RERANK_ARTIFACT_FILE` | The artifact's GGUF file name, with no directory | `bge-reranker-v2-m3-Q8_0.gguf` |
-| `INFERENCE_RERANK_ARTIFACT_PATH` | The repository-relative path of the artifact, whose basename must equal the file name | `models/bge-reranker-v2-m3-3093af03/bge-reranker-v2-m3-Q8_0.gguf` |
+| `INFERENCE_RERANK_ARTIFACT_PATH` | The artifact path, either absolute or relative to the worker checkout, whose basename must equal the file name | `models/bge-reranker-v2-m3-3093af03/bge-reranker-v2-m3-Q8_0.gguf` |
 | `INFERENCE_RERANK_ARTIFACT_QUANT` | The artifact's quantization, one literal | `Q8_0` |
 | `INFERENCE_RERANK_ARTIFACT_SHA256` | The SHA-256 digest the downloaded bytes must match | a 64-character digest |
 | `INFERENCE_RERANK_CONTEXT_SIZE` | The serving context in tokens, from 1 to 8192 | 8192 |

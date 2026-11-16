@@ -195,12 +195,12 @@ def test_equivalence_publish_read_replace_and_identical_retry_are_atomic_and_ide
     )
 
 
-def test_equivalence_read_fails_loudly_on_stale_or_malformed_stored_group(
+def test_equivalence_read_fails_loudly_on_singleton_or_malformed_stored_group(
     database: tuple[Engine, object],
     prerequisite_catalogue: PrerequisiteCatalogueSeed,
     set_prerequisite_course_activity,
 ) -> None:
-    """Read never returns a partial or fabricated group from stale or malformed durable state."""
+    """Read never returns a partial or fabricated group from singleton or malformed durable state."""
     _, factory = database
     repository = InferredEquivalenceRepository(factory)
     seed = prerequisite_catalogue
@@ -231,17 +231,19 @@ def test_equivalence_read_fails_loudly_on_stale_or_malformed_stored_group(
     # Restore both members by publishing again with a different input hash.
     repository.publish(original_publication.model_copy(update={"input_hash": "b" * 64}))
 
-    # Make one member canonical course inactive: the strict test read refuses the stale group.
+    # A member that turns inactive keeps the full stored group readable.
     set_prerequisite_course_activity(
         active_source,
         False,
         seed.activity_as_of_academic_year_start,
         seed.activity_window_years,
     )
-    with pytest.raises(ValueError):
-        repository.read_for_member(active_target)
-    with pytest.raises(ValueError):
-        repository.read_for_members((active_target,))
+    retained_group = repository.read_for_member(active_target)
+    assert len(retained_group) == 1
+    assert [member.course_group_id for member in retained_group[0].members] == sorted(
+        (active_target, active_source)
+    )
+    assert len(repository.read_for_members((active_target,))[active_target]) == 1
     set_prerequisite_course_activity(
         active_source,
         True,
@@ -262,12 +264,12 @@ def test_equivalence_read_fails_loudly_on_stale_or_malformed_stored_group(
         repository.read_for_members((active_target,))
 
 
-def test_equivalence_reconcile_republishes_survivors_prunes_small_groups_and_is_idempotent(
+def test_equivalence_reconcile_retains_inactive_members_and_prunes_stale_test_context(
     database: tuple[Engine, object],
     prerequisite_catalogue: PrerequisiteCatalogueSeed,
     set_prerequisite_course_activity,
 ) -> None:
-    """Survivors retain group identity. Smaller groups are pruned and a rerun is a no-op."""
+    """Inactive members stay. A stale test context republishes survivors and prunes small groups."""
     _, factory = database
     repository = InferredEquivalenceRepository(factory)
     seed = prerequisite_catalogue
@@ -334,6 +336,22 @@ def test_equivalence_reconcile_republishes_survivors_prunes_small_groups_and_is_
         seed.activity_window_years,
     )
 
+    # Inactivity alone removes no member or group.
+    assert repository.reconcile_activity() == EquivalenceActivityReconciliation(
+        updated_group_ids=(), removed_group_ids=()
+    )
+    assert [
+        member.course_group_id for member in repository.read_for_member(active_target)[0].members
+    ] == sorted((active_target, inactive_target, active_source))
+
+    # A changed test-owned generation context is stale: the three-member group keeps two survivors
+    # and the two-member group loses one, so only the survivor group remains.
+    set_prerequisite_course_activity(
+        active_source,
+        True,
+        2027,
+        3,
+    )
     reconciliation = repository.reconcile_activity()
     assert reconciliation == EquivalenceActivityReconciliation(
         updated_group_ids=(surviving_group_id,),
@@ -359,9 +377,10 @@ def test_equivalence_reconcile_republishes_survivors_prunes_small_groups_and_is_
         stored_set = session.scalar(select(InferredPrerequisiteSet))
         assert stored_set is not None
         assert stored_set.id == inferred.current_set.set_id
-        inactive = session.scalar(select(Course).where(Course.group_id == active_source))
-        assert inactive is not None
-        assert inactive.is_active is False
+        rolled = session.scalar(select(Course).where(Course.group_id == active_source))
+        assert rolled is not None
+        assert rolled.is_active is True
+        assert rolled.activity_as_of_academic_year_start == 2027
 
     assert repository.reconcile_activity() == EquivalenceActivityReconciliation(
         updated_group_ids=(), removed_group_ids=()
@@ -421,12 +440,12 @@ def test_withdraw_absent_inference_groups_preserves_test_and_is_idempotent(
     assert _member_count(factory) == 2
 
 
-def test_inference_member_generation_context_retained_with_strict_publication_and_test_reads(
+def test_inference_member_generation_context_retained_with_strict_publication_and_reads(
     database: tuple[Engine, object],
     prerequisite_catalogue: PrerequisiteCatalogueSeed,
     set_prerequisite_course_activity,
 ) -> None:
-    """Active inference members keep their stored context. Test reads and subsequent writes stay strict."""
+    """Inference members keep their stored context through inactivity. Test reads stay strict."""
     _, factory = database
     repository = InferredEquivalenceRepository(factory)
     seed = prerequisite_catalogue
@@ -479,8 +498,14 @@ def test_inference_member_generation_context_retained_with_strict_publication_an
             )
         )
 
-    # Inactive trimming removes the retained inference group once it drops below two members.
+    # An inactive member keeps the retained inference group readable.
     set_prerequisite_course_activity(active_source, False, 2027, 3)
-    removed = repository.reconcile_activity()
-    assert inference_group_id in removed.removed_group_ids
-    assert repository.read_for_member(active_target) == ()
+    retained_inactive = repository.reconcile_activity()
+    assert retained_inactive == EquivalenceActivityReconciliation(
+        updated_group_ids=(), removed_group_ids=()
+    )
+    inactive_groups = repository.read_for_member(active_target)
+    assert [group.group_id for group in inactive_groups] == [inference_group_id]
+    assert [member.course_group_id for member in inactive_groups[0].members] == sorted(
+        (active_target, active_source)
+    )

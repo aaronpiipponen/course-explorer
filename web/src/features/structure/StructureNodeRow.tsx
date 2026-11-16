@@ -18,12 +18,14 @@ import {
   sumCredits,
   nodeKindLabel,
 } from "./presentation";
+import { coursesUseAssumedCredits } from "../../solver/credits";
 import { StructureCard } from "./StructureCard";
 import { ProgrammeMenu } from "./ProgrammeMenu";
 import { DOCUMENT } from "../../shared/icons";
 import type { DisplayContents } from "./display";
 import type { CourseDrag } from "./useCourseDrag";
 import { useWording } from "../../shared/useWording";
+import { useWebFeatures } from "../../app/useWebFeatures";
 import { uiText } from "../../shared/wording";
 
 /** Render one collapsible Structure node row. */
@@ -114,6 +116,7 @@ export function StructureNodeRow({
   const clipping = entering || !present;
   const language = useProfileSelector((state) => state.language).value;
   const { t } = useWording();
+  const { assumed_course_credits } = useWebFeatures();
   const handoff = drag.completedDrop;
   const handoffFrom = handoff?.from ?? null;
   const handoffCourseId = handoff?.courseId ?? null;
@@ -238,8 +241,8 @@ export function StructureNodeRow({
     resolved.node.kind === "unplaced"
       ? [...bucketCourses.values()]
       : resolved.subtree;
-  const selectedCredits = sumCredits(totals),
-    completedCredits = sumCredits(totals, (course) =>
+  const selectedCredits = sumCredits(totals, assumed_course_credits),
+    completedCredits = sumCredits(totals, assumed_course_credits, (course) =>
       completed.has(course.group_id),
     );
   const title =
@@ -253,6 +256,9 @@ export function StructureNodeRow({
       {uiText(language, "{value} cr", {
         value: formatCredits(completedCredits),
       })}
+      {coursesUseAssumedCredits(totals) && (
+        <span className="assumed-note"> · {t("Assumed credits used")}</span>
+      )}
     </>
   );
   const ghost = (

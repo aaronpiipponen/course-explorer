@@ -26,4 +26,4 @@ ADMIN_SITE_WEB_SERVICE_UNIT = "replace-with-web.service"
 ADMIN_SITE_ADMIN_SERVICE_UNIT = "replace-with-admin.service"
 ADMIN_SITE_WEB_SERVICE_SCOPE = "user"
 # GitHub repository address the console's GitHub link opens.
-ADMIN_WEB_REPOSITORY_URL = "https://github.com/aaronpiipponen/tuni-course-explorer"
+ADMIN_WEB_REPOSITORY_URL = "https://github.com/aaronpiipponen/course-explorer"

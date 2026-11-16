@@ -1,6 +1,6 @@
 /**
  * The validation boundary for the stored browser envelope, the typed profile and whole-state
- * files, and the pending Sisu capture a profile holds.
+ * files, and the pending study plan a profile holds.
  *
  * A supplied field is checked before it is used, and an unknown field is dropped.
  * An absent profile field reads from its default. A supplied structure requires its ordered
@@ -23,7 +23,7 @@ import {
   type CourseHolder,
   type StructureChoices,
 } from "../features/structure/state";
-import { validateSisuPlan } from "../features/structure/sisu";
+import { validateImportedPlan } from "../features/imports/plan";
 
 const STATE_MESSAGE = "Saved browser profile state is invalid";
 const PROFILE_MESSAGE = "Saved browser profile is invalid";
@@ -370,10 +370,10 @@ function validateProfileState(value: unknown): ProfileState {
       saved.structure === undefined
         ? initialStructureState()
         : projectStructure(saved.structure),
-    pendingSisuImport:
-      saved.pendingSisuImport === undefined || saved.pendingSisuImport === null
+    pendingPlanImport:
+      saved.pendingPlanImport === undefined || saved.pendingPlanImport === null
         ? null
-        : validateSisuPlan(saved.pendingSisuImport),
+        : validateImportedPlan(saved.pendingPlanImport),
   };
 }
 

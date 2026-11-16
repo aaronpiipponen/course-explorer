@@ -19,6 +19,7 @@ from course_explorer.config import (
     load_administrative_dataset_settings,
     load_inference_selection_settings,
     load_inference_settings,
+    load_instance_settings,
     load_raw_database_settings,
 )
 from course_explorer.curriculum import CourseSummary
@@ -83,7 +84,9 @@ def _disposition_context(*, mutating: bool) -> Iterator[tuple[str, sessionmaker[
 
 def _resolve_target_summary(factory: sessionmaker[Session], target_group_id: str) -> CourseSummary:
     """Resolve exactly one supplied canonical target to its single active official summary."""
-    summaries = CurriculumRepository(factory).get_course_summaries((target_group_id,))
+    summaries = CurriculumRepository(
+        factory, university=load_instance_settings().university
+    ).get_course_summaries((target_group_id,))
     if len(summaries) != 1 or not summaries[0].is_active:
         raise ValueError(f"target {target_group_id} is not a current active canonical course")
     return summaries[0]
@@ -129,6 +132,7 @@ def set_inference_target_disposition(
             repository.read_publication_cohort(),
             load_inference_settings(),
             load_inference_selection_settings(),
+            university=load_instance_settings().university,
         )
         return _report(dataset_id, summary, marker.disposition)
 

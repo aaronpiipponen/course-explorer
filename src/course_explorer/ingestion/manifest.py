@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import tempfile
-from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,9 +21,9 @@ from course_explorer.enums import (
     IngestionRunStatus,
     SourceObjectType,
 )
-from course_explorer.hashing import json_sha256
 from course_explorer.ingestion.source import (
     CapturedResponse,
+    CurriculumParser,
     CurriculumPeriodRef,
     SourceObject,
 )
@@ -243,10 +242,6 @@ def _request_hash(request_path: str, request_params: tuple[tuple[str, str], ...]
     ).hexdigest()
 
 
-def _object_hash(value: SourceObject) -> str:
-    return json_sha256(value, ensure_ascii=False)
-
-
 def _relative_posix(path: Path) -> str:
     return Path(os.path.relpath(path, Path.cwd())).as_posix()
 
@@ -343,12 +338,14 @@ class RawCaptureStore:
         manifest: CaptureManifest,
         *,
         manifest_sha256: str,
+        parser: CurriculumParser,
     ):
         self._raw_root = raw_root
         self._run_root = run_root
         self._manifest_path = manifest_path
         self._manifest = manifest
         self._manifest_sha256 = manifest_sha256
+        self._parser = parser
         self._verified_manifest: CaptureManifest | None = None
         self._verified_response_count: int = 0
 
@@ -357,9 +354,11 @@ class RawCaptureStore:
         cls,
         raw_data_root: Path,
         *,
+        parser: CurriculumParser,
         run_id: UUID | None = None,
         started_at: datetime | None = None,
     ) -> Self:
+        """Create one run directory with an empty running manifest and return its store."""
         raw_root = _resolve_raw_root(raw_data_root)
         raw_root.mkdir(parents=True, exist_ok=True)
         run_id = run_id or uuid4()
@@ -391,10 +390,22 @@ class RawCaptureStore:
             manifest_path,
             manifest,
             manifest_sha256=manifest_sha256,
+            parser=parser,
         )
 
     @classmethod
-    def open(cls, raw_data_root: Path, manifest_path: Path) -> Self:
+    def open(
+        cls,
+        raw_data_root: Path,
+        manifest_path: Path,
+        *,
+        parser: CurriculumParser,
+    ) -> Self:
+        """Open an existing run's manifest and return its store.
+
+        A manifest name other than ``manifest.json``, an unreadable file and a manifest recorded
+        under another raw data root each raise ``ValueError``.
+        """
         raw_root = _resolve_raw_root(raw_data_root)
         resolved_manifest = _resolve_manifest_path(raw_root, manifest_path)
         if resolved_manifest.name != "manifest.json":
@@ -412,12 +423,19 @@ class RawCaptureStore:
             resolved_manifest,
             manifest,
             manifest_sha256=hashlib.sha256(payload).hexdigest(),
+            parser=parser,
         )
         return store
 
     @property
     def manifest(self) -> CaptureManifest:
+        """Return the published manifest record of this run."""
         return self._manifest
+
+    @property
+    def parser(self) -> CurriculumParser:
+        """Return the family parser bound to this capture's evidence."""
+        return self._parser
 
     @property
     def manifest_sha256(self) -> str:
@@ -426,14 +444,17 @@ class RawCaptureStore:
 
     @property
     def manifest_path(self) -> Path:
+        """Return the path of this run's manifest file."""
         return self._manifest_path
 
     @property
     def manifest_relative_path(self) -> str:
+        """Return the manifest path relative to the working directory, with forward slashes."""
         return _relative_posix(self._manifest_path)
 
     @property
     def run_root(self) -> Path:
+        """Return this run's directory under the raw data root."""
         return self._run_root
 
     @staticmethod
@@ -471,7 +492,7 @@ class RawCaptureStore:
         self._manifest = candidate
         if self._verified_manifest is None:
             return
-        if candidate.responses == previous.responses and candidate.status is previous.status:
+        if candidate.responses == previous.responses:
             self._verified_manifest = candidate
         else:
             self._verified_manifest = None
@@ -494,62 +515,26 @@ class RawCaptureStore:
             objects=objects,
         )
 
-    @staticmethod
     def _object_records(
-        body: bytes, object_type: SourceObjectType | None, objects: Sequence[SourceObject]
+        self,
+        response: CapturedResponse,
+        object_type: SourceObjectType | None,
     ) -> tuple[CapturedObjectRecord, ...]:
+        """Decode one typed response's objects into manifest records through the family parser."""
         if object_type is None:
-            if objects:
-                raise ValueError("objects require an object type")
             return ()
-        try:
-            raw_objects = json.loads(body)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("object response body must be valid JSON") from exc
-        if not isinstance(raw_objects, list):
-            raise ValueError("object response body must be a JSON list")
-        records = RawCaptureStore._records_from_raw(raw_objects, object_type)
-        expected: Counter[tuple[str, str]] = Counter()
-        for value in objects:
-            if not isinstance(value, dict):
-                raise ValueError("source objects must be JSON objects")
-            identifier = value.get("id")
-            group_id = value.get("groupId")
-            if not isinstance(identifier, str) or not identifier.strip():
-                raise ValueError("source object ID must be non-blank")
-            if not isinstance(group_id, str) or not group_id.strip():
-                raise ValueError("source object groupId must be non-blank")
-            expected[(identifier, group_id)] += 1
-        actual = Counter((record.source_object_id, record.source_group_id) for record in records)
-        if actual != expected:
-            raise ValueError("raw object identity set does not match source response value")
-        return records
-
-    @staticmethod
-    def _records_from_raw(
-        raw_objects: list[object], object_type: SourceObjectType
-    ) -> tuple[CapturedObjectRecord, ...]:
-        """Build manifest records from complete raw items in their stored order."""
-        records: list[CapturedObjectRecord] = []
-        for index, value in enumerate(raw_objects):
-            if not isinstance(value, dict):
-                raise ValueError("raw object response item must be an object")
-            identifier = value.get("id")
-            group_id = value.get("groupId")
-            if not isinstance(identifier, str) or not identifier.strip():
-                raise ValueError("raw object ID must be non-blank")
-            if not isinstance(group_id, str) or not group_id.strip():
-                raise ValueError("raw object groupId must be non-blank")
-            records.append(
-                CapturedObjectRecord(
-                    object_type=object_type,
-                    source_object_id=identifier,
-                    source_group_id=group_id,
-                    response_item_index=index,
-                    source_hash=_object_hash(value),
-                )
+        return tuple(
+            CapturedObjectRecord(
+                object_type=object_type,
+                source_object_id=decoded.source_object_id,
+                source_group_id=decoded.source_group_id,
+                response_item_index=index,
+                source_hash=decoded.source_hash,
             )
-        return tuple(records)
+            for index, decoded in enumerate(
+                self._parser.decode_objects(response, object_type, store=self)
+            )
+        )
 
     @staticmethod
     def _compressed_envelope(body: bytes) -> bytes:
@@ -565,7 +550,6 @@ class RawCaptureStore:
         self,
         captured: CapturedResponse,
         object_type: SourceObjectType | None,
-        objects: Sequence[SourceObject],
     ) -> tuple[CapturedResponseRecord, str, bytes]:
         """Build one validated checkpoint record, its request hash, and deterministic envelope."""
         body_hash = hashlib.sha256(captured.body).hexdigest()
@@ -575,7 +559,7 @@ class RawCaptureStore:
             f"responses/{request_hash}-{body_hash}.json.gz",
             body_hash,
             object_type,
-            self._object_records(captured.body, object_type, objects),
+            self._object_records(captured, object_type),
         )
         return record, request_hash, self._compressed_envelope(captured.body)
 
@@ -600,9 +584,7 @@ class RawCaptureStore:
 
     def checkpoint_responses(
         self,
-        responses: Sequence[
-            tuple[CapturedResponse, SourceObjectType | None, Sequence[SourceObject]]
-        ],
+        responses: Sequence[tuple[CapturedResponse, SourceObjectType | None]],
         *,
         unresolved_course_group_ids: Collection[str] | None = None,
         unresolved_module_group_ids: Collection[str] | None = None,
@@ -611,9 +593,7 @@ class RawCaptureStore:
         if self._manifest.status is IngestionRunStatus.COMPLETED:
             raise ValueError("completed capture cannot accept responses")
         inputs = tuple(responses)
-        request_keys = [
-            (captured.request_path, captured.request_params) for captured, _, _ in inputs
-        ]
+        request_keys = [(captured.request_path, captured.request_params) for captured, _ in inputs]
         if len(request_keys) != len(set(request_keys)):
             raise ValueError("checkpoint contains duplicate request keys")
         existing_by_request = {
@@ -623,9 +603,9 @@ class RawCaptureStore:
         records: list[CapturedResponseRecord] = []
         new_records: list[CapturedResponseRecord] = []
         published_directory = False
-        for captured, object_type, objects in inputs:
+        for captured, object_type in inputs:
             record, request_hash, expected_envelope = self._prepare_checkpoint_record(
-                captured, object_type, objects
+                captured, object_type
             )
             existing = existing_by_request.get((record.request_path, record.request_params))
             envelope_path = self._run_root / record.response_path
@@ -727,14 +707,15 @@ class RawCaptureStore:
         ):
             raise ValueError("referenced response envelope hash or size does not match manifest")
         if response.object_type is not None:
-            try:
-                raw_objects = json.loads(body)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise ValueError("typed object response body is not valid JSON") from exc
-            if not isinstance(raw_objects, list):
-                raise ValueError("typed object response body must be a JSON list")
-            records = self._records_from_raw(raw_objects, response.object_type)
-            if records != response.objects:
+            decoded = self._object_records(
+                CapturedResponse(
+                    request_path=response.request_path,
+                    request_params=response.request_params,
+                    body=body,
+                ),
+                response.object_type,
+            )
+            if decoded != response.objects:
                 raise ValueError("referenced response object positions or hashes do not match")
         return body
 
@@ -811,21 +792,39 @@ class RawCaptureStore:
         for replayed_response in self.iter_responses():
             response = replayed_response.record
             body = replayed_response.body
-            if not response.objects:
+            if not response.objects or response.object_type is None:
                 continue
-            raw_objects = json.loads(body)
-            by_position = {index: value for index, value in enumerate(raw_objects)}
+            decoded = self._parser.decode_objects(
+                CapturedResponse(
+                    request_path=response.request_path,
+                    request_params=response.request_params,
+                    body=body,
+                ),
+                response.object_type,
+                store=self,
+            )
+            if len(decoded) != len(response.objects):
+                raise ValueError("decoded response object count does not match the manifest")
             for record in response.objects:
                 if object_type is None or record.object_type is object_type:
                     yield ReplayedSourceObject(
                         record=record,
                         response_path=response.response_path,
-                        value=by_position[record.response_item_index],
+                        value=decoded[record.response_item_index].value,
                     )
 
     def _read_envelope(self, response: CapturedResponseRecord) -> bytes:
         """Decompress one already-verified envelope without repeating trust checks."""
         return gzip.decompress((self._run_root / response.response_path).read_bytes())
+
+    def read_response_body(self, response: CapturedResponseRecord) -> bytes:
+        """Return one recorded response's exact bytes for a decode that spans responses.
+
+        A family whose decode reads discovery evidence from an earlier response uses this read
+        instead of replaying the response sequence. ``verify`` owns every trust check, so a
+        caller passes a record from a verified manifest.
+        """
+        return self._read_envelope(response)
 
     def iter_responses(self, *, request_path: str | None = None) -> Iterator[ReplayedResponse]:
         """Verify the current manifest once, then replay complete response envelopes in order."""
@@ -837,7 +836,9 @@ class RawCaptureStore:
             yield ReplayedResponse(record=response, body=self._read_envelope(response))
 
 
-def discover_capture_manifests(raw_data_root: Path) -> tuple[Path, ...]:
+def discover_capture_manifests(
+    raw_data_root: Path, *, parser: CurriculumParser
+) -> tuple[Path, ...]:
     """Locate direct run manifests under the configured raw root without choosing one.
 
     Only ``<raw root>/<run>/manifest.json`` regular non-symlink files are candidates. Every
@@ -860,7 +861,7 @@ def discover_capture_manifests(raw_data_root: Path) -> tuple[Path, ...]:
         if not manifest_path.is_file():
             continue
         relative = Path(_relative_posix(manifest_path))
-        RawCaptureStore.open(raw_data_root, relative)
+        RawCaptureStore.open(raw_data_root, relative, parser=parser)
         manifests.append(relative)
     return tuple(sorted(manifests, key=str))
 

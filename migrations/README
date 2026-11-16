@@ -1,7 +1,7 @@
 Alembic owns all application schema changes.
 
 One migration chain under `migrations/versions` serves the configured database, the Selected dataset
-and the Working dataset. The single head is `20261103_0023`.
+and the Working dataset. The single head is `20261109_0026`.
 
 `uv run alembic upgrade head` applies the head to the database that the settings and the
 environment file name. `migrations/env.py` composes the tracked TOML and the environment file

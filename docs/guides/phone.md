@@ -12,11 +12,11 @@ While the open tab scrolls down, the bar leaves the window and the content takes
 
 ## More, profiles and language
 
-**More** opens a sheet above the bar. Its head row shows **More** at the left and **Close** at the right, then the profile control, then a row with the language control at the left and the **Feedback** and **Docs** buttons as one right-aligned pair, and it ends with the notice that the project is independent and the link to its source code. **Feedback** and **Docs** share their filled style and height. **Feedback** opens the page described in [Sending feedback](/docs/guides/feedback.md). The sheet scrolls inside itself when its content is taller than the space above the bar.
+**More** opens a sheet above the bar. Its head row shows **More** at the left and **Close** at the right, then the profile control, then a row with the language control at the left and the **GitHub**, **Feedback** and **Docs** buttons as one right-aligned group, and it ends with the notice that the project is independent and the source line of the course data. **GitHub**, **Feedback** and **Docs** share their filled style and height. **Feedback** opens the page described in [Sending feedback](/docs/guides/feedback.md). The sheet scrolls inside itself when its content is taller than the space above the bar.
 
-Selecting the profile name opens **Profiles** in the same sheet. The language, **Feedback** and **Docs** row and the notice hide, and the panel grows upward with the profile list, the **New profile** form, the import area, **Copy Sisu import script** and **Export**. [Profiles and language](/docs/guides/profiles-and-language.md) covers these controls. **Close** or a tap outside the sheet returns to the app and puts the focus back on **More**.
+Selecting the profile name opens **Profiles** in the same sheet. The language, **GitHub**, **Feedback** and **Docs** row and the notice hide, and the panel grows upward with the profile list, the **New profile** form, the import area, **Copy import script** when the site configures a script and **Export**. [Profiles and language](/docs/guides/profiles-and-language.md) covers these controls. **Close** or a tap outside the sheet returns to the app and puts the focus back on **More**.
 
-![The More sheet on a phone, with More at the left of its head row and Close at the right, above the My plan profile row, a row holding FI, EN, Feedback and Docs, and the independent-project notice above the source code link](/docs/screenshots/phone-more.png)
+![The More sheet on a phone, with More at the left of its head row and Close at the right, above the My plan profile row, a row holding FI, EN, GitHub, Feedback and Docs, and the independent-project notice above the source line that reads Fictional example data.](/docs/screenshots/phone-more.png)
 
 **Docs** opens the documentation wiki inside the app. On a phone the wiki header keeps the brand, **Docs** and **Return to app**. A search field and a menu button sit above the breadcrumbs. The menu slides in from the right with the page list, another search field and **GitHub**, and **Return to app** returns to the tab you left.
 
@@ -92,4 +92,6 @@ The **More** sheet and the option sheets have **Close** at the head. Escape and 
 - [Editing a structure of studies](/docs/guides/editing-structure-of-studies.md) for the drawer, dragging, moving, removing and resetting.
 - [Profiles and language](/docs/guides/profiles-and-language.md) for named profiles and the interface language.
 - [Sending feedback](/docs/guides/feedback.md) for the feedback page, its images and its publication choice.
-- [Importing a Sisu plan](/docs/guides/sisu-import.md) for capturing a plan in Sisu or importing a supported plan PDF as a profile.
+- [Importing a study plan](/docs/guides/importing-a-study-plan.md) for the import dialog and its outcomes.
+- [Importing a Sisu plan](/docs/guides/sisu-import.md) for the Sisu saved page, plan PDF, capture and script.
+- [Importing a Peppi plan](/docs/guides/peppi-import.md) for the Peppi HOPS saved page, capture and script.

@@ -18,7 +18,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from course_explorer.config import InferenceSettings
+from course_explorer.config import InferenceSettings, load_instance_settings
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.inference.evidence_repository import InferenceEvidenceRepository
 from course_explorer.inference.proposal_repository import InferenceProposalRepository
@@ -57,7 +57,7 @@ def compose_proposal_from_work(
         raise ValueError(f"target work {work_id} has no uncomposed validated result")
     referenced_group_ids = named_candidate_group_ids(result, descriptors)
 
-    curriculum = CurriculumRepository(factory)
+    curriculum = CurriculumRepository(factory, university=load_instance_settings().university)
     target_rows = curriculum.get_courses((descriptors.target.group_id,))
     if len(target_rows) != 1:
         raise ValueError(f"unknown current canonical target {descriptors.target.group_id}")

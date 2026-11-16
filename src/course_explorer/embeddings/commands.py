@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 
-from course_explorer.config import load_database_settings, load_embedding_runtime_settings
+from course_explorer.config import (
+    load_database_settings,
+    load_embedding_runtime_settings,
+    load_instance_settings,
+)
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.db.session import database_context as _database_context
 from course_explorer.embeddings.generation import (
@@ -33,9 +37,12 @@ def run_course_embedding_command(
     are passed to the provider.
     """
     with _database_context(load_database_settings(role="working")) as factory:
-        repository = CourseEmbeddingRepository(factory)
+        university = load_instance_settings().university
+        repository = CourseEmbeddingRepository(factory, university=university)
         teaching_text = TeachingTextService(
-            CurriculumRepository(factory), DerivedTranslationRepository(factory)
+            CurriculumRepository(factory, university=university),
+            DerivedTranslationRepository(factory, university=university),
+            university=university,
         )
         settings = load_embedding_runtime_settings()
         with EmbeddingProvider(

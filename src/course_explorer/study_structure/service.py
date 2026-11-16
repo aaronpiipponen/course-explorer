@@ -20,6 +20,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from course_explorer.config import load_instance_settings
 from course_explorer.curriculum import (
     CatalogueModule,
     CatalogueModuleRule,
@@ -30,6 +31,7 @@ from course_explorer.curriculum import (
     module_version_candidates,
 )
 from course_explorer.enums import ModuleRuleType
+from course_explorer.instance import UniversityMetadata, official_display_names
 
 StudyStructureUnresolved = Literal[
     "course_not_represented",
@@ -107,9 +109,16 @@ class FragmentBatchReader(Protocol):
 class StudyStructureService:
     """Project official programme/module structures for the configured academic year."""
 
-    def __init__(self, curriculum: CurriculumStructureRead, *, academic_year_start: int) -> None:
+    def __init__(
+        self,
+        curriculum: CurriculumStructureRead,
+        *,
+        academic_year_start: int,
+        university: UniversityMetadata | None = None,
+    ) -> None:
         self._curriculum = curriculum
         self._academic_year_start = academic_year_start
+        self._university = load_instance_settings().university if university is None else university
 
     def read_many(
         self,
@@ -257,7 +266,7 @@ class StudyStructureService:
             )
         if version.rule is None:
             raise StudyStructureRootUnavailable(
-                f"module {root_group_id!r} version {version.sisu_module_id!r} has no stored rule"
+                f"module {root_group_id!r} version {version.source_version_id!r} has no stored rule"
             )
         return self._project_module(
             module,
@@ -278,7 +287,7 @@ class StudyStructureService:
         selected = module_versions.get(module.group_id)
         if selected is not None:
             for candidate in candidates:
-                if candidate.sisu_module_id == selected:
+                if candidate.source_version_id == selected:
                     return candidate, None
             raise ValueError(
                 f"module {module.group_id!r} version {selected!r} is not eligible for academic year "
@@ -301,14 +310,17 @@ class StudyStructureService:
         module_versions: Mapping[str, str],
     ) -> StudyStructureModule:
         """Project one selected module's rule tree over the prefetched course cards."""
+        displayed = official_display_names(
+            version.names, display_fallback=self._university.display_fallback
+        )
         return StudyStructureModule(
             module=ModuleSummary(
                 group_id=module.group_id,
-                sisu_module_id=version.sisu_module_id,
+                source_version_id=version.source_version_id,
                 module_type=version.module_type,
                 code=version.code,
-                name_fi=version.name_fi,
-                name_en=version.name_en,
+                name_fi=displayed["fi"],
+                name_en=displayed["en"],
             ),
             target_credits_min=version.target_credits_min,
             target_credits_max=version.target_credits_max,

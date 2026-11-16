@@ -10,13 +10,13 @@ The lifecycle core owns the one detached five-action lifecycle that the ingestio
 |---|---|
 | `LifecycleSession` | The immutable receipt of one session: `session_id`, `stage`, `revision`, `identity_sha256`, `options`, `created_at`. |
 | `LifecycleState` | The one mutable current state: `session_id`, `lifecycle`, `requested_action`, `process`, `progress`, `work_complete`, `owned_services`, `worker`, `active_seconds`, `running_since`, `error_type`, `failure`, `stop_failure`. |
-| `LifecycleStatus` | The operator projection. It adds `interrupted` to the lifecycle values and carries `items_per_second` and `eta_seconds`. |
-| `Stage` | The protocol each adapter implements: `name`, `services`, `temporary_services`, `retains_after_stop`, `server_worker_module`, `select_options`, `identity_sha256`, `initial_progress`, `require_prepared`, `require_database`, `run`, `release`, `finalize`. |
+| `LifecycleStatus` | The operator projection. It adds `interrupted` to the lifecycle values and carries `superseded_session_id`, `items_per_second` and `eta_seconds`. A start that supersedes an idle session names the superseded identity. |
+| `Stage` | The protocol each adapter implements: `name`, `services`, `temporary_services`, `retains_after_stop`, `server_worker_module`, `select_options`, `identity_sha256`, `initial_progress`, `require_prepared`, `require_database`, `reserve`, `unreserve`, `run`, `release`, `finalize`. |
 | `LifecycleContext` | The handle a detached worker uses: `read_state`, `admit`, `checkpoint`, `record_worker`, and `failure_step`. |
 | `StageOptions` and `StageProgress` | Discriminated unions on `kind`, one variant per stage. |
 | `LifecycleFailure` and `FailureStep` | The content-free failure breadcrumb and its closed step vocabulary. |
 
-`StageProgress` carries `IngestionProgress` with its capture and verification counts, `EmbeddingProgress` with its reconciled, pending, completed, failed, and generated counts and its last measured pace, `TranslationProgress` and `InferenceProgress` with the last mirrored worker status, and `InferenceProgress.preparation` with the server-side preparation step.
+`StageProgress` carries `IngestionProgress` with its capture and verification counts and the count of period memberships a completed normalization dropped, `EmbeddingProgress` with its reconciled, pending, completed, failed, and generated counts and its last measured pace, `TranslationProgress` and `InferenceProgress` with the last mirrored worker status, and `InferenceProgress.preparation` with the server-side preparation step.
 
 ## One immutable receipt and one current state
 
@@ -24,19 +24,35 @@ The lifecycle core owns the one detached five-action lifecycle that the ingestio
 
 - `state.json` is the single mutable record. Every write goes through `write_lifecycle_state`, which publishes one canonical JSON line atomically at mode 0600 through the file writer in `course_explorer.administration`.
 - `<root>/<session_id>/session.json` is the immutable receipt of one session, written once under the same critical section that reserves the stage. `session_directory` derives and validates the session path, accepting only a 32-character lowercase hexadecimal identity, and the caller that reserves the session creates the directory at mode 0700.
+- A superseded idle session moves to `<stage controller dir>/superseded-<session_id>/`, holding `state.json` and a `session/` directory with its receipt.
 - `read_lifecycle_state` returns `None` for an absent state file. That means a fresh root, and never completeness.
 
 ## Identity and compatibility
 
-`local_stages.stage_identity_sha256` hashes the stage name, a stage configuration hash, the Working `postgres_db`, and the options. `ingestion_configuration_sha256` covers the Kori source, request-shape, and academic-year fields and the normalization settings, `embedding_configuration_sha256` covers the embedding runtime settings, and the translation and inference adapters supply their own configuration hashes.
+`local_stages.stage_identity_sha256` hashes the stage name, a stage configuration hash, the Working `postgres_db`, and the options. `ingestion_configuration_sha256` covers the effective source facts, the request shape and academic-year values, and the normalization policy. The operational request tuning, including the request interval, is outside it, so a university change changes the identity and pacing does not. `embedding_configuration_sha256` covers the embedding runtime settings, and the translation and inference adapters supply their own configuration hashes.
 
-`_require_compatible` runs when a start continues a retained session and when resume re-arms one. It compares the retained receipt's `identity_sha256` with `stage.identity_sha256(session.options)`, and for a retained ingestion session it also calls `require_retained_ingestion_manifest`, which re-reads the retained manifest, requires a regular non-symlink file, and compares its SHA-256 with the recorded one. That comparison is the one manifest check before a continued or resumed ingestion action.
+`_require_compatible` runs when a start continues a retained session and when resume re-arms one. It compares the retained receipt's `identity_sha256` with `stage.identity_sha256(session.options)`, and for a retained ingestion session it also calls `require_retained_ingestion_manifest`, which re-reads the retained manifest, requires a regular non-symlink file, and compares its SHA-256 with the recorded one. That comparison is the one manifest check before a continued or resumed ingestion action. A resume refused for a changed identity names `start` in its message, and only an idle incomplete start supersedes the retained session.
 
-`_start_action` decides in one order: an absent state creates a fresh session, a live owned process or a completed state returns the current status, an idle state whose work is complete or whose stage does not retain work creates a fresh session, and anything else passes the compatibility check and continues the retained session.
+`_start_action` decides in one order: an absent state creates a fresh session, a live owned process or a completed state returns the current status, an idle state whose work is complete or whose stage does not retain work creates a fresh session, an idle state with pending work whose identity does not match this device selects the fresh session's options and takes its reservations, moves the current session aside, and creates a fresh session, and anything else passes the compatibility check and continues the retained session.
 
 ## Locks, intent, and checkpoints
 
 `mechanics.exclusive_action_lock(root, controller_name=..., blocking=...)` creates the mode-0700 root and its mode-0600 `controller.lock` when absent and takes an exclusive `flock`. `create=False` leaves an uninitialized root untouched for a read-only caller. Every state writer takes the lock, so the detached worker and the foreground commands serialize on one file.
+
+Three persistent reservations coordinate the work that spans checkouts or machines, and `course_explorer_admin.machine_locks` owns them. The checkout reservation belongs to one instance and covers all four preparation stages, Copy to Working, Working migration and deletion, and the app rebuild. The server reservation covers ingestion and embedding across the instances of one server. The worker reservation covers translation and inference across the instances that use one worker. The three files are `ADMIN_SHARED_ROOT/locks/checkout-<instance_key>.lock`, `server.lock` and `worker.lock`, and each holds the owning instance key, operation and session id. The reservation is the file itself: no timestamp, lease, process identity or history is stored.
+
+A refused attempt names its holder. An acquire or a release that finds another owner refuses with `<name> reservation is held by <operation> in <instance_key>`. A one-shot acquire that finds its own owner refuses with `<name> reservation is already held by <operation> in <instance_key>`. A file without a complete owner record refuses with `<name> reservation file is incomplete or unreadable; remove it after confirming its operation is gone`.
+
+When the owner is gone, read the held record and release that exact record, or delete the one file once its operation has stopped. `read` takes the lock name and the instance key, with the operation argument the command grammar requires, prints the held record and prints nothing when no file exists. The release names the record's instance key, operation and session id, and it omits the session id when the record holds none. The command reads the shared root of the host that runs it, so run it on the host that holds the file.
+
+```bash
+uv run python -m course_explorer_admin.machine_locks read worker <instance_key> <operation>
+uv run python -m course_explorer_admin.machine_locks release worker <instance_key> <operation> <session_id>
+```
+
+`acquire` and `release` print nothing, and a release of a file that names a different owner raises.
+
+A start and a resume take a session's reservations, and the stop releases them after finalization and, for a remote stage, after the verified return. A pause, a worker reconnect and an automatic reboot release none of them. A failed start that published no state, or a state naming another session, releases its own reservation before the failure is raised. A failed start whose published state names its session holds the reservation, and the stop path releases it. A one-shot reservation refuses a file another call left behind, and only its own completed operation or the operator releases it.
 
 `_publish_starting` reads the current state once and requires exact equality with `expected_state`. A different snapshot refuses without retry or merge, and the fresh session directory and receipt are created inside the same critical section. `_set_intent(stage, root, action, preserve_stop=True)` is what pause uses, so a pause and a checkpoint leave a pending stop in place.
 
@@ -82,6 +98,7 @@ The loaded-model clock and the restart handshake live in `src/course_explorer_ad
 |---|---|---|
 | The five-action algorithm, the state and receipt schemas, the projection, and the idle raw pruning calls | `lifecycle.py`, `local_stages.py` | `tests/admin/test_lifecycle.py` |
 | The lock, the process runner, liveness, the timeout budget, and the Compose prefix | `mechanics.py` | `tests/admin/test_mechanics.py` |
+| The checkout, server and worker reservations and their files | `machine_locks.py` | `tests/admin/test_mechanics.py::test_machine_reservations_are_persistent_and_owner_guarded`, `tests/admin/test_remote_lifecycle.py::test_remote_reservation_round_trip_refuses_a_foreign_owner_and_releases_its_checkout`, `tests/admin/test_rebuild.py::test_rebuild_is_refused_while_a_preparation_holds_the_checkout` and `tests/admin/test_dataset_database.py::test_copy_to_working_preserves_the_served_source` |
 | The remote bring-up, launch, mirror, release, and finalize order | `remote_stages.py` | `tests/admin/test_remote_lifecycle.py` |
 | The menu, the dispatcher, the reports, and the safe failure presentation | `commands.py`, `cli.py` | `tests/admin/test_operator_menu.py`, `tests/admin/test_operator_commands.py` |
 | The loaded-model clock and the restart handshake | `reboot.py` | `tests/admin/test_checkpoint_reboot.py` |

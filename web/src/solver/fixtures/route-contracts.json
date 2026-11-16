@@ -1235,7 +1235,7 @@
           "module_type": "StudyModule",
           "name_en": "Module M1-v1",
           "name_fi": null,
-          "sisu_module_id": "M1-v1"
+          "source_version_id": "M1-v1"
         },
         {
           "code": null,
@@ -1243,7 +1243,7 @@
           "module_type": "StudyModule",
           "name_en": "Module M2-v1",
           "name_fi": null,
-          "sisu_module_id": "M2-v1"
+          "source_version_id": "M2-v1"
         }
       ],
       "pieces": [
@@ -2233,7 +2233,7 @@
           "module_type": "StudyModule",
           "name_en": "Module M1-v1",
           "name_fi": null,
-          "sisu_module_id": "M1-v1"
+          "source_version_id": "M1-v1"
         },
         {
           "code": null,
@@ -2241,7 +2241,7 @@
           "module_type": "StudyModule",
           "name_en": "Module M2-v1",
           "name_fi": null,
-          "sisu_module_id": "M2-v1"
+          "source_version_id": "M2-v1"
         }
       ],
       "pieces": [
@@ -8796,7 +8796,7 @@
           "module_type": "StudyModule",
           "name_en": "Module M1-v1",
           "name_fi": null,
-          "sisu_module_id": "M1-v1"
+          "source_version_id": "M1-v1"
         },
         {
           "code": null,
@@ -8804,7 +8804,7 @@
           "module_type": "StudyModule",
           "name_en": "Module M2-v1",
           "name_fi": null,
-          "sisu_module_id": "M2-v1"
+          "source_version_id": "M2-v1"
         }
       ],
       "pieces": [

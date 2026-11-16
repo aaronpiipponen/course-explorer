@@ -943,49 +943,6 @@
     ui-monospace,
     monospace;
 }
-/* One Sisu import's transient omissions, above the tree it placed. */
-.sisu-import-notice {
-  overflow: hidden;
-}
-.sisu-import-notice-body {
-  display: grid;
-  gap: 10px;
-  margin-bottom: 16px;
-  padding: 14px 16px;
-  border: 1px solid rgb(255 255 255 / 18%);
-  border-radius: 12px;
-  background: #0a0a0f;
-}
-.sisu-import-notice h2 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-.sisu-import-notice ul {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.sisu-import-notice li {
-  display: grid;
-  gap: 2px;
-}
-.sisu-import-item {
-  color: #b07be8;
-  font:
-    12px "JetBrains Mono",
-    ui-monospace,
-    monospace;
-}
-.sisu-import-reason {
-  color: rgb(255 255 255 / 55%);
-  font-size: 12.5px;
-}
-.sisu-import-notice-body .pill-btn {
-  justify-self: start;
-}
 .structure-skeleton {
   display: grid;
   gap: 18px;
@@ -1247,6 +1204,9 @@ body.structure-drawer-open .structure-root-anchor {
   }
   .structure-root-overlay .module-lookup-controls input {
     font-size: 16px;
+  }
+  .structure-empty-import .profile-transfer-heading {
+    font-size: 12px;
   }
 }
 /* Phone widths release the shared title clamp and the fixed card height, so tree, picker and

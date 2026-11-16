@@ -5,7 +5,7 @@
 # The example values are placeholders, and a deployment states its own values in config/worker.toml.
 TRANSLATION_CONTROLLER_SSH_TARGET = "replace-with-ssh-target"
 TRANSLATION_CONTROLLER_WSL_DISTRIBUTION = "replace-with-wsl-distribution"
-TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT = "/home/replace-with-user/tuni-course-explorer"
+TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT = "/home/replace-with-user/course-explorer"
 TRANSLATION_CONTROLLER_SSH_CONNECT_TIMEOUT_SECONDS = 10
 # WORKER_SETUP_PROJECT_URL is the expected Git origin that setup and preflight checks compare
 # against. The example value is a placeholder.

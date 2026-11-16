@@ -25,7 +25,6 @@ from course_explorer.embeddings.vector_math import unit_row
 from course_explorer.enums import (
     DESCRIPTIVE_TEACHING_TEXT_FIELDS,
     TeachingTextField,
-    TeachingTextLanguage,
 )
 
 ComparisonVerdict = Literal[
@@ -94,10 +93,26 @@ def _mean(values: Sequence[float]) -> float:
 def _field_chunks(
     chunks: Sequence[TeachingEmbeddingChunk],
     field: TeachingTextField,
-    language: TeachingTextLanguage,
+    language: str,
 ) -> tuple[TeachingEmbeddingChunk, ...]:
     """Return the chunks of one exact field and language."""
     return tuple(chunk for chunk in chunks if chunk.field == field and chunk.language == language)
+
+
+def _ordered_common_languages(
+    a: Sequence[TeachingEmbeddingChunk],
+    b: Sequence[TeachingEmbeddingChunk],
+    official_languages: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return shared language codes ordered by the configured official list, then lexically."""
+    common = {chunk.language for chunk in a} & {chunk.language for chunk in b}
+    priority = {language: index for index, language in enumerate(official_languages)}
+    return tuple(
+        sorted(
+            common,
+            key=lambda language: (priority.get(language, len(priority)), language),
+        )
+    )
 
 
 def _centroid(chunks: Sequence[TeachingEmbeddingChunk]) -> numpy.ndarray:
@@ -114,10 +129,11 @@ def _field_similarity(
     a: Sequence[TeachingEmbeddingChunk],
     b: Sequence[TeachingEmbeddingChunk],
     field: TeachingTextField,
+    official_languages: tuple[str, ...],
 ) -> float | None:
     """Average one field's per-language centroid cosine, or `None` when no language is common."""
     cosines: list[float] = []
-    for language in TeachingTextLanguage:
+    for language in _ordered_common_languages(a, b, official_languages):
         a_chunks = _field_chunks(a, field, language)
         b_chunks = _field_chunks(b, field, language)
         if not a_chunks or not b_chunks:
@@ -132,6 +148,7 @@ def _overall_similarity(
     a: Sequence[TeachingEmbeddingChunk],
     b: Sequence[TeachingEmbeddingChunk],
     settings: SearchSettings,
+    official_languages: tuple[str, ...],
 ) -> float | None:
     """Average the per-language weighted whole-text centroid cosine, or `None` when none is common."""
     weights = {
@@ -140,7 +157,7 @@ def _overall_similarity(
         TeachingTextField.OUTCOMES: settings.comparison_outcomes_weight,
     }
     cosines: list[float] = []
-    for language in TeachingTextLanguage:
+    for language in _ordered_common_languages(a, b, official_languages):
         a_centroids: list[numpy.ndarray] = []
         b_centroids: list[numpy.ndarray] = []
         included: list[float] = []
@@ -174,9 +191,9 @@ def _weighted_sum(
 
 def _prepare_descriptive_chunks(
     chunks: Sequence[TeachingEmbeddingChunk],
-) -> Mapping[TeachingTextLanguage, tuple[numpy.ndarray, numpy.ndarray]]:
+) -> Mapping[str, tuple[numpy.ndarray, numpy.ndarray]]:
     """Normalize descriptive chunks once into one unit matrix and weight row per language."""
-    grouped: dict[TeachingTextLanguage, tuple[list[numpy.ndarray], list[int]]] = {}
+    grouped: dict[str, tuple[list[numpy.ndarray], list[int]]] = {}
     for chunk in chunks:
         if chunk.field in DESCRIPTIVE_TEACHING_TEXT_FIELDS:
             units, weights = grouped.setdefault(chunk.language, ([], []))
@@ -197,7 +214,7 @@ def _prepare_descriptive_chunks(
 class PreparedTeachingOverlap:
     """One request-local descriptive-vector projection reused across overlap comparisons."""
 
-    _by_language: Mapping[TeachingTextLanguage, tuple[numpy.ndarray, numpy.ndarray]]
+    _by_language: Mapping[str, tuple[numpy.ndarray, numpy.ndarray]]
 
     def __init__(self, chunks: Sequence[TeachingEmbeddingChunk]) -> None:
         object.__setattr__(self, "_by_language", _prepare_descriptive_chunks(chunks))
@@ -238,15 +255,18 @@ def compare_teaching_chunks(
     settings: SearchSettings,
     hub: Sequence[float],
     outcomes_hub: Sequence[float],
+    official_languages: tuple[str, ...],
 ) -> ComparisonMeters:
     """Return the whole-text, content, outcome and directional-overlap meters for two courses."""
     centred_a = centre_chunks(a, hub, outcomes_hub=outcomes_hub)
     centred_b = centre_chunks(b, hub, outcomes_hub=outcomes_hub)
     return ComparisonMeters(
-        overall_relatedness=_overall_similarity(centred_a, centred_b, settings),
-        content_similarity=_field_similarity(centred_a, centred_b, TeachingTextField.CONTENT),
+        overall_relatedness=_overall_similarity(centred_a, centred_b, settings, official_languages),
+        content_similarity=_field_similarity(
+            centred_a, centred_b, TeachingTextField.CONTENT, official_languages
+        ),
         learning_outcome_similarity=_field_similarity(
-            centred_a, centred_b, TeachingTextField.OUTCOMES
+            centred_a, centred_b, TeachingTextField.OUTCOMES, official_languages
         ),
         overlap=PreparedTeachingOverlap(centred_b).compare(
             centred_a,

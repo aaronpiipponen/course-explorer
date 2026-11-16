@@ -1,138 +1,152 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 716" role="img"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 708" role="img"
      aria-labelledby="t d" font-family="system-ui, sans-serif">
   <title id="t">Official catalogue data model</title>
   <desc id="d">Course and module identities with their exact versions, the curriculum periods a
-  version belongs to, and the rows a version holds: one official teaching-text row, many derived
+  version belongs to, and the rows a version holds: many official text cells, many derived
   translation rows, embedding chunks, official prerequisite options, and official substitution
-  options for a course version, and the rule nodes of a module version. Each entity lists its
-  identity and key columns. Every line is orthogonal and carries a 1 or N label at the end it
-  describes.</desc>
+  options for a course version, and the rule nodes and official name cells of a module version.
+  Each entity lists its identity and key columns. Every line is orthogonal and carries a 1 or N
+  label at the end it describes.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
             markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" fill="#a3a4b8"/>
     </marker>
   </defs>
-  <rect width="960" height="716" rx="12" fill="#232434"/>
+  <rect width="960" height="708" rx="12" fill="#232434"/>
 
-  <rect x="48" y="100" width="130" height="84" rx="8" fill="#2e3045" stroke="#4a4c6b"
+  <rect x="40" y="118" width="130" height="84" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5"/>
-  <text x="113" y="124" text-anchor="middle" font-size="16" fill="#ececf2">Course</text>
-  <text x="113" y="151" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
-  <text x="113" y="175" text-anchor="middle" font-size="15" fill="#a3a4b8">group_id</text>
+  <text x="105" y="142" text-anchor="middle" font-size="16" fill="#ececf2">Course</text>
+  <text x="105" y="169" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
+  <text x="105" y="193" text-anchor="middle" font-size="15" fill="#a3a4b8">group_id</text>
 
-  <rect x="48" y="300" width="130" height="88" rx="8" fill="#2e3045" stroke="#4a4c6b"
+  <rect x="40" y="330" width="130" height="88" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5"/>
-  <text x="113" y="324" text-anchor="middle" font-size="16" fill="#ececf2">Curriculum</text>
-  <text x="113" y="348" text-anchor="middle" font-size="16" fill="#ececf2">Period</text>
-  <text x="113" y="375" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
+  <text x="105" y="354" text-anchor="middle" font-size="16" fill="#ececf2">Curriculum</text>
+  <text x="105" y="378" text-anchor="middle" font-size="16" fill="#ececf2">Period</text>
+  <text x="105" y="405" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
 
-  <rect x="48" y="540" width="130" height="84" rx="8" fill="#2e3045" stroke="#4a4c6b"
+  <rect x="40" y="560" width="130" height="84" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5"/>
-  <text x="113" y="564" text-anchor="middle" font-size="16" fill="#ececf2">Module</text>
-  <text x="113" y="591" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
-  <text x="113" y="615" text-anchor="middle" font-size="15" fill="#a3a4b8">group_id</text>
+  <text x="105" y="584" text-anchor="middle" font-size="16" fill="#ececf2">Module</text>
+  <text x="105" y="611" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
+  <text x="105" y="635" text-anchor="middle" font-size="15" fill="#a3a4b8">group_id</text>
 
-  <rect x="256" y="64" width="248" height="160" rx="8" fill="#2e3045" stroke="#4a4c6b"
+  <rect x="248" y="80" width="248" height="160" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5"/>
-  <text x="380" y="88" text-anchor="middle" font-size="16" fill="#ececf2">CourseVersion</text>
-  <text x="380" y="115" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
-  <text x="380" y="139" text-anchor="middle" font-size="15" fill="#a3a4b8">course_id</text>
-  <text x="380" y="163" text-anchor="middle" font-size="15" fill="#a3a4b8">sisu_course_unit_id</text>
-  <text x="380" y="187" text-anchor="middle" font-size="15" fill="#a3a4b8">source_snapshot_id</text>
+  <text x="372" y="104" text-anchor="middle" font-size="16" fill="#ececf2">CourseVersion</text>
+  <text x="372" y="131" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
+  <text x="372" y="155" text-anchor="middle" font-size="15" fill="#a3a4b8">course_id</text>
+  <text x="372" y="179" text-anchor="middle" font-size="15" fill="#a3a4b8">source_version_id</text>
+  <text x="372" y="203" text-anchor="middle" font-size="15" fill="#a3a4b8">source_snapshot_id</text>
 
-  <rect x="256" y="540" width="248" height="132" rx="8" fill="#2e3045" stroke="#4a4c6b"
+  <rect x="248" y="536" width="248" height="132" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5"/>
-  <text x="380" y="564" text-anchor="middle" font-size="16" fill="#ececf2">ModuleVersion</text>
-  <text x="380" y="591" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
-  <text x="380" y="615" text-anchor="middle" font-size="15" fill="#a3a4b8">module_id</text>
-  <text x="380" y="639" text-anchor="middle" font-size="15" fill="#a3a4b8">sisu_module_id</text>
-  <text x="380" y="663" text-anchor="middle" font-size="15" fill="#a3a4b8">source_snapshot_id</text>
+  <text x="372" y="560" text-anchor="middle" font-size="16" fill="#ececf2">ModuleVersion</text>
+  <text x="372" y="587" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
+  <text x="372" y="611" text-anchor="middle" font-size="15" fill="#a3a4b8">module_id</text>
+  <text x="372" y="635" text-anchor="middle" font-size="15" fill="#a3a4b8">source_version_id</text>
+  <text x="372" y="659" text-anchor="middle" font-size="15" fill="#a3a4b8">source_snapshot_id</text>
 
-  <rect x="628" y="40" width="284" height="60" rx="8" fill="#2e3045" stroke="#4a4c6b"
+  <rect x="620" y="24" width="300" height="76" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5"/>
-  <text x="770" y="64" text-anchor="middle" font-size="16" fill="#ececf2">CourseText</text>
-  <text x="770" y="91" text-anchor="middle" font-size="15" fill="#a3a4b8">course_version_id</text>
+  <text x="770" y="48" text-anchor="middle" font-size="16" fill="#ececf2">OfficialCourseText</text>
+  <text x="770" y="71" text-anchor="middle" font-size="15" fill="#a3a4b8">course_version_id</text>
+  <text x="770" y="93" text-anchor="middle" font-size="15" fill="#a3a4b8">field, language</text>
 
-  <rect x="628" y="124" width="284" height="84" rx="8" fill="#2e3045" stroke="#4a4c6b"
+  <rect x="620" y="112" width="300" height="76" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5"/>
-  <text x="770" y="148" text-anchor="middle" font-size="16" fill="#ececf2">DerivedCourseText</text>
-  <text x="770" y="175" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
-  <text x="770" y="199" text-anchor="middle" font-size="15" fill="#a3a4b8">course_version_id</text>
+  <text x="770" y="136" text-anchor="middle" font-size="16" fill="#ececf2">DerivedCourseText</text>
+  <text x="770" y="159" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
+  <text x="770" y="181" text-anchor="middle" font-size="15" fill="#a3a4b8">course_version_id</text>
 
-  <rect x="628" y="232" width="284" height="132" rx="8" fill="#2e3045" stroke="#4a4c6b"
+  <rect x="620" y="200" width="300" height="124" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5"/>
-  <text x="770" y="256" text-anchor="middle" font-size="16" fill="#ececf2">CourseEmbeddingChunk</text>
-  <text x="770" y="283" text-anchor="middle" font-size="15" fill="#a3a4b8">course_version_id</text>
-  <text x="770" y="307" text-anchor="middle" font-size="15" fill="#a3a4b8">field</text>
-  <text x="770" y="331" text-anchor="middle" font-size="15" fill="#a3a4b8">language</text>
-  <text x="770" y="355" text-anchor="middle" font-size="15" fill="#a3a4b8">chunk_index</text>
+  <text x="770" y="224" text-anchor="middle" font-size="16" fill="#ececf2">CourseEmbeddingChunk</text>
+  <text x="770" y="247" text-anchor="middle" font-size="15" fill="#a3a4b8">course_version_id</text>
+  <text x="770" y="271" text-anchor="middle" font-size="15" fill="#a3a4b8">field</text>
+  <text x="770" y="295" text-anchor="middle" font-size="15" fill="#a3a4b8">language</text>
+  <text x="770" y="319" text-anchor="middle" font-size="15" fill="#a3a4b8">chunk_index</text>
 
-  <rect x="628" y="388" width="284" height="84" rx="8" fill="#2e3045" stroke="#4a4c6b"
+  <rect x="620" y="336" width="300" height="76" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5"/>
-  <text x="770" y="412" text-anchor="middle" font-size="16" fill="#ececf2">OfficialPrerequisiteOption</text>
-  <text x="770" y="439" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
-  <text x="770" y="463" text-anchor="middle" font-size="15" fill="#a3a4b8">target_course_version_id</text>
+  <text x="770" y="360" text-anchor="middle" font-size="16"
+        fill="#ececf2">OfficialPrerequisiteOption</text>
+  <text x="770" y="383" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
+  <text x="770" y="405" text-anchor="middle" font-size="15" fill="#a3a4b8">target_course_version_id</text>
 
-  <rect x="628" y="496" width="284" height="84" rx="8" fill="#2e3045" stroke="#4a4c6b"
+  <rect x="620" y="424" width="300" height="76" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5"/>
-  <text x="770" y="520" text-anchor="middle" font-size="16" fill="#ececf2">OfficialSubstitutionOption</text>
-  <text x="770" y="547" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
-  <text x="770" y="571" text-anchor="middle" font-size="15" fill="#a3a4b8">source_course_version_id</text>
+  <text x="770" y="448" text-anchor="middle" font-size="16"
+        fill="#ececf2">OfficialSubstitutionOption</text>
+  <text x="770" y="471" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
+  <text x="770" y="493" text-anchor="middle" font-size="15" fill="#a3a4b8">source_course_version_id</text>
 
-  <rect x="628" y="600" width="284" height="84" rx="8" fill="#2e3045" stroke="#4a4c6b"
+  <rect x="620" y="512" width="300" height="76" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5"/>
-  <text x="770" y="624" text-anchor="middle" font-size="16" fill="#ececf2">ModuleRuleNode</text>
-  <text x="770" y="651" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
-  <text x="770" y="675" text-anchor="middle" font-size="15" fill="#a3a4b8">module_version_id</text>
+  <text x="770" y="536" text-anchor="middle" font-size="16" fill="#ececf2">ModuleRuleNode</text>
+  <text x="770" y="559" text-anchor="middle" font-size="15" fill="#a3a4b8">id</text>
+  <text x="770" y="581" text-anchor="middle" font-size="15" fill="#a3a4b8">module_version_id</text>
 
-  <polyline points="178,142 206,142 206,128 256,128" fill="none" stroke="#a3a4b8"
-            stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="184" y="136" font-size="14" fill="#a3a4b8">1</text>
-  <text x="248" y="122" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
+  <rect x="620" y="600" width="300" height="76" rx="8" fill="#2e3045" stroke="#4a4c6b"
+        stroke-width="1.5"/>
+  <text x="770" y="624" text-anchor="middle" font-size="16" fill="#ececf2">OfficialModuleText</text>
+  <text x="770" y="647" text-anchor="middle" font-size="15" fill="#a3a4b8">module_version_id</text>
+  <text x="770" y="669" text-anchor="middle" font-size="15" fill="#a3a4b8">field, language</text>
 
-  <polyline points="178,314 226,314 226,160 256,160" fill="none" stroke="#a3a4b8"
-            stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="184" y="308" font-size="14" fill="#a3a4b8">N</text>
-  <text x="248" y="154" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
-
-  <polyline points="178,346 246,346 246,556 256,556" fill="none" stroke="#a3a4b8"
-            stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="184" y="340" font-size="14" fill="#a3a4b8">N</text>
-  <text x="248" y="550" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
-
-  <line x1="178" y1="588" x2="256" y2="588" fill="none" stroke="#a3a4b8"
+  <line x1="170" y1="160" x2="248" y2="160" fill="none" stroke="#a3a4b8"
         stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="184" y="582" font-size="14" fill="#a3a4b8">1</text>
-  <text x="248" y="582" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
+  <text x="176" y="154" font-size="14" fill="#a3a4b8">1</text>
+  <text x="240" y="154" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
 
-  <polyline points="504,84 612,84 612,70 628,70" fill="none" stroke="#a3a4b8"
+  <polyline points="170,358 200,358 200,200 248,200" fill="none" stroke="#a3a4b8"
             stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="510" y="78" font-size="14" fill="#a3a4b8">1</text>
-  <text x="620" y="64" text-anchor="end" font-size="14" fill="#a3a4b8">1</text>
+  <text x="176" y="352" font-size="14" fill="#a3a4b8">N</text>
+  <text x="240" y="194" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
 
-  <polyline points="504,116 592,116 592,166 628,166" fill="none" stroke="#a3a4b8"
+  <polyline points="170,390 224,390 224,570 248,570" fill="none" stroke="#a3a4b8"
             stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="510" y="110" font-size="14" fill="#a3a4b8">1</text>
-  <text x="620" y="160" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
+  <text x="176" y="384" font-size="14" fill="#a3a4b8">N</text>
+  <text x="240" y="564" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
 
-  <polyline points="504,148 572,148 572,298 628,298" fill="none" stroke="#a3a4b8"
-            stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="510" y="142" font-size="14" fill="#a3a4b8">1</text>
-  <text x="620" y="292" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
+  <line x1="170" y1="602" x2="248" y2="602" fill="none" stroke="#a3a4b8"
+        stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="176" y="596" font-size="14" fill="#a3a4b8">1</text>
+  <text x="240" y="596" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
 
-  <polyline points="504,180 552,180 552,430 628,430" fill="none" stroke="#a3a4b8"
+  <polyline points="496,96 516,96 516,62 620,62" fill="none" stroke="#a3a4b8"
             stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="510" y="174" font-size="14" fill="#a3a4b8">1</text>
-  <text x="620" y="424" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
+  <text x="500" y="90" font-size="14" fill="#a3a4b8">1</text>
+  <text x="612" y="56" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
 
-  <polyline points="504,212 532,212 532,538 628,538" fill="none" stroke="#a3a4b8"
+  <polyline points="496,128 596,128 596,150 620,150" fill="none" stroke="#a3a4b8"
             stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="510" y="206" font-size="14" fill="#a3a4b8">1</text>
-  <text x="620" y="532" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
+  <text x="500" y="122" font-size="14" fill="#a3a4b8">1</text>
+  <text x="612" y="144" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
 
-  <polyline points="504,606 512,606 512,642 628,642" fill="none" stroke="#a3a4b8"
+  <polyline points="496,160 576,160 576,262 620,262" fill="none" stroke="#a3a4b8"
             stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="510" y="600" font-size="14" fill="#a3a4b8">1</text>
-  <text x="620" y="636" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
+  <text x="500" y="154" font-size="14" fill="#a3a4b8">1</text>
+  <text x="612" y="256" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
+
+  <polyline points="496,192 556,192 556,374 620,374" fill="none" stroke="#a3a4b8"
+            stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="500" y="186" font-size="14" fill="#a3a4b8">1</text>
+  <text x="612" y="368" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
+
+  <polyline points="496,224 536,224 536,462 620,462" fill="none" stroke="#a3a4b8"
+            stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="500" y="218" font-size="14" fill="#a3a4b8">1</text>
+  <text x="612" y="456" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
+
+  <line x1="496" y1="550" x2="620" y2="550" fill="none" stroke="#a3a4b8"
+        stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="502" y="544" font-size="14" fill="#a3a4b8">1</text>
+  <text x="612" y="544" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
+
+  <line x1="496" y1="638" x2="620" y2="638" fill="none" stroke="#a3a4b8"
+        stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="502" y="632" font-size="14" fill="#a3a4b8">1</text>
+  <text x="612" y="632" text-anchor="end" font-size="14" fill="#a3a4b8">N</text>
 </svg>

@@ -6,7 +6,7 @@ import { openBrowserSession, seedApp, touchDrag } from "./browser-fixture.mjs";
 /** Read the two saved comparison slots from the stored envelope. */
 function readSlots(page) {
   return page.evaluate(() => {
-    const envelope = JSON.parse(localStorage.getItem("tuni-course-explorer"));
+    const envelope = JSON.parse(localStorage.getItem("course-explorer"));
     return envelope.profiles[envelope.currentProfileId].state.compare.slots;
   });
 }
@@ -92,9 +92,7 @@ test(
         () => document.querySelector(".compare-picker-overlay.open") === null,
       );
       await page.waitForFunction((key) => {
-        const envelope = JSON.parse(
-          localStorage.getItem("tuni-course-explorer"),
-        );
+        const envelope = JSON.parse(localStorage.getItem("course-explorer"));
         const slots =
           envelope.profiles[envelope.currentProfileId].state.compare.slots;
         return slots[0] === key && slots[1] === null;

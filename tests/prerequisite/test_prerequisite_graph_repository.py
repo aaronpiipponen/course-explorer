@@ -14,6 +14,7 @@ from course_explorer.enums import (
 from course_explorer.ingestion.normalization import normalize_curriculum
 from course_explorer.ingestion.normalization_repository import NormalizationRepository
 from course_explorer.ingestion.repository import CaptureRepository
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.prerequisite.commands import (
     run_minimum_route_command,
     run_prerequisite_command,
@@ -29,7 +30,6 @@ from course_explorer.prerequisite.domain import (
 )
 from course_explorer.prerequisite.repository import InferredPrerequisiteRepository
 from tests.ingestion._normalization_repository_support import (
-    GUIDE_URL,
     build_completed_fixture_store,
 )
 from tests.prerequisite._command_support import search_settings
@@ -61,10 +61,9 @@ def test_inferred_recommended_toggle_matrix_flows_through_postgresql_and_command
     store = build_completed_fixture_store(tmp_path, capture_repository)
     normalize_curriculum(
         store,
-        NormalizationRepository(factory),
+        NormalizationRepository(factory, university=UNIVERSITIES["example"]),
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
 
     repository = InferredPrerequisiteRepository(factory)
@@ -134,6 +133,44 @@ def test_inferred_recommended_toggle_matrix_flows_through_postgresql_and_command
         "course-group-inactive",
         "course-group-tie",
     ]
+
+    # A retained set published for an inactive canonical target reaches the native command.
+    repository.publish(
+        InferredSetPublication(
+            target_group_id="course-group-inactive",
+            activity_as_of_academic_year_start=2026,
+            activity_window_years=3,
+            producer_kind=InferredProducerKind.TEST,
+            producer_name="test-fixture",
+            producer_version="1",
+            input_hash="b" * 64,
+            coverage_state=InferredCoverageState.COMPLETE,
+            coverage=InferredSetCoverage(
+                eligible_source_count=1,
+                processed_source_count=1,
+                accepted_source_count=1,
+            ),
+            expression=CourseRequirement(
+                type="course",
+                origin=PrerequisiteOrigin.INFERRED,
+                inferred_category=InferredPrerequisiteCategory.REQUIRED,
+                course_group_id="course-group-tie",
+                inference=_inferred_metadata(),
+            ),
+            generated_at=GENERATED_AT,
+        )
+    )
+    reset_worker_handle()
+    inactive_report = run_prerequisite_command(
+        "CS.I1", include_inferred=True, include_recommended=True
+    )
+    assert root_summary(inactive_report.solver).group_id == "course-group-inactive"
+    assert {
+        fact.inferred_category.value
+        for fact in inactive_report.solver.facts
+        if fact.origin is PrerequisiteOrigin.INFERRED
+    } == {"required"}
+    assert "course-group-tie" in {summary.group_id for summary in inactive_report.solver.courses}
 
     # A corrupt stored expression fails both real preparations loudly rather than degrading to an
     # official-only report.

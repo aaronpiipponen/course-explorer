@@ -37,9 +37,9 @@ pytestmark = pytest.mark.integration
 def test_module_expansion_preserves_course_guards_and_detects_course_and_module_cycles(
     native_graph,
 ) -> None:
-    """Module expansion keeps inactive leaves and terminates on course and module cycles."""
+    """Module expansion exposes inactive retained requirements and terminates on cycles."""
     year_period = (CatalogueCurriculumPeriod(id="period-2026", academic_year_start=2026),)
-    # An inactive course emitted by a module is a leaf: no children, substitutions, or reads.
+    # An inactive course emitted by a module exposes its retained official and substitution options.
     inactive_rule = module_rule(
         ModuleRuleType.COURSE_UNIT_RULE, referenced_group_id="module-inactive"
     )
@@ -100,10 +100,10 @@ def test_module_expansion_preserves_course_guards_and_detects_course_and_module_
     assert inlined.kind == "module_block"
     assert inlined.module_group_id == "module-holder"
     inlined_leaf = piece_of(compilation.solver, child_uses(compilation.solver, inlined_root)[0])
-    assert inlined_leaf.kind == "course"
-    assert inlined_leaf.course_group_id == "module-inactive"
-    assert "hidden-child" not in {summary.group_id for summary in compilation.solver.courses}
-    assert "hidden-substitute" not in {summary.group_id for summary in compilation.solver.courses}
+    assert inlined_leaf.kind == "course_alternatives"
+    assert "module-inactive" in {summary.group_id for summary in compilation.solver.courses}
+    assert "hidden-child" in {summary.group_id for summary in compilation.solver.courses}
+    assert "hidden-substitute" in {summary.group_id for summary in compilation.solver.courses}
 
     # A direct ModuleRule self-reference terminates with a deterministic cycle diagnostic.
     direct_cycle_root = catalogue_course(

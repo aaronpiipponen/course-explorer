@@ -221,7 +221,7 @@ describe("browser profiles", () => {
     const parsed = parseBrowserImport(
       JSON.stringify(store.exportProfile(exportedId)),
     );
-    if (parsed.type !== "tuni-course-explorer/profile/3")
+    if (parsed.type !== "course-explorer/profile/3")
       throw new Error("Expected a profile file");
     store.resetSavedData();
     store.importProfile(parsed.profile);
@@ -285,7 +285,7 @@ describe("browser profiles", () => {
     }));
     const before = structuredClone(store.getSnapshot());
     const parsed = parseBrowserImport(JSON.stringify(store.exportState()));
-    if (parsed.type !== "tuni-course-explorer/state/3")
+    if (parsed.type !== "course-explorer/state/3")
       throw new Error("Expected a state file");
     store.resetSavedData();
     expect(store.getSnapshot().currentProfileId).toBe("default");
@@ -390,7 +390,7 @@ describe("browser profiles", () => {
           },
         );
         const parsed = parseBrowserImport(JSON.stringify(cloned));
-        if (parsed.type !== "tuni-course-explorer/profile/3")
+        if (parsed.type !== "course-explorer/profile/3")
           throw new Error("Expected a profile file");
         createBrowserStore(localStorage).importProfile(parsed.profile);
       } else {
@@ -409,7 +409,7 @@ describe("browser profiles", () => {
         const parsed = parseBrowserImport(
           JSON.stringify({ ...exportedState, data: JSON.stringify(envelope) }),
         );
-        if (parsed.type !== "tuni-course-explorer/state/3")
+        if (parsed.type !== "course-explorer/state/3")
           throw new Error("Expected a state file");
         createBrowserStore(localStorage).restoreState(parsed.state);
       }

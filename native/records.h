@@ -230,7 +230,7 @@ struct CourseSummaryRec {
     bool has_name_en = false;
     std::string code;
     std::string official_url;
-    int64_t credits_min = 0;
+    int64_t credits_min = -1;
     int64_t credits_max = 0;
     std::string credits_min_text;
     std::string credits_max_text;
@@ -240,7 +240,7 @@ struct CourseSummaryRec {
 
 struct ModuleSummaryRec {
     std::string group;
-    std::string sisu;
+    std::string source_version_id;
     std::string module_type;
     std::string code;
     std::string name_fi;
@@ -344,6 +344,46 @@ inline std::string join_path(const std::vector<std::string> &values)
 inline std::string optional_number(int64_t value)
 {
     return value < 0 ? std::string("None") : std::to_string(value);
+}
+
+/* Parse a leading decimal credit value into hundredths and ignore trailing text. Returns -1 for
+ * empty text or text with no leading digits. */
+inline int64_t parse_credit_cents(std::string_view text)
+{
+    if (text.empty()) return -1;
+    bool negative = false;
+    size_t position = 0;
+    if (text[position] == '-') {
+        negative = true;
+        ++position;
+    }
+    int64_t value = 0;
+    int digits = 0;
+    int fraction = 0;
+    while (position < text.size() && text[position] >= '0' && text[position] <= '9') {
+        value = value * 10 + (text[position] - '0');
+        ++position;
+        ++digits;
+    }
+    if (position < text.size() && text[position] == '.') {
+        ++position;
+        while (position < text.size() && text[position] >= '0' && text[position] <= '9'
+               && fraction < 2) {
+            value = value * 10 + (text[position] - '0');
+            ++position;
+            ++fraction;
+        }
+        while (position < text.size() && text[position] >= '0' && text[position] <= '9')
+            ++position;
+        while (fraction < 2) {
+            value *= 10;
+            ++fraction;
+        }
+    } else {
+        value *= 100;
+    }
+    if (digits == 0) return -1;
+    return negative ? -value : value;
 }
 
 /* A source node names a bundle-owned course or module identity. The view stays valid for the

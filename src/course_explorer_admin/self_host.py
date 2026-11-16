@@ -17,9 +17,11 @@ import os
 import pwd
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -36,15 +38,21 @@ from course_explorer import administration
 from course_explorer import configuration as file_configuration
 from course_explorer.administration import atomic_write_private_text
 from course_explorer.config import (
+    AdminWebSettings,
     DatabaseSettings,
+    EmbeddingRuntimeSettings,
+    InstanceSettings,
     WebAppSettings,
+    WebSettings,
     embedding_configuration_for_site,
     load_admin_web_settings,
     load_administrative_dataset_settings,
     load_embedding_runtime_settings,
     load_feedback_settings,
+    load_instance_settings,
     load_local_lifecycle_settings,
     load_raw_database_settings,
+    load_shared_storage_settings,
     load_web_settings,
 )
 from course_explorer.datasets import (
@@ -55,26 +63,27 @@ from course_explorer.datasets import (
     has_dataset_enrollment_records,
 )
 from course_explorer.db.session import create_database_engine
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.serving_build import build_serving_artifacts, dataset_settings
 from course_explorer_admin import artifacts, configuration, credentials, mechanics, rebuild, server
 from course_explorer_admin import datasets as dataset_owner
 
 type StartupMode = Literal["user", "foreground"]
 
-# The four user-unit templates the installation copies. The timer's paired service name is rendered
-# from the checkout's own derived identity.
+# The four user-unit templates the installation copies. Unit names come from the instance key and
+# the optional checkout suffix.
 _UNIT_TEMPLATES = (
-    "tuni-course-explorer-web.service.in",
-    "tuni-course-explorer-admin-web.service.in",
-    "tuni-course-explorer-feedback-sender.service.in",
-    "tuni-course-explorer-feedback-sender.timer.in",
+    "course-explorer-web.service.in",
+    "course-explorer-admin-web.service.in",
+    "course-explorer-feedback-sender.service.in",
+    "course-explorer-feedback-sender.timer.in",
 )
 
 # The three loopback hosts a loopback URL may name.
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
-# A checkout basename that also renders one valid systemd unit name.
-_UNIT_SAFE_CHECKOUT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]*")
+# A checkout suffix is empty or one or more lowercase hyphen-prefixed segments, such as ``-site``.
+_CHECKOUT_SUFFIX_PATTERN = re.compile(r"(?:-[a-z0-9]+)*")
 
 
 class _SelfHostModel(BaseModel):
@@ -86,14 +95,25 @@ class _SelfHostModel(BaseModel):
 class ExampleSetupInput(_SelfHostModel):
     """Everything one example workflow needs, supplied in memory without a prompt.
 
-    ``app_url`` is the feature site's external root address. A null value keeps the example's
-    configured address. Both credentials are hidden from the model's representation and its
-    serialized form, and validation errors never echo their inputs.
+    ``instance_key`` selects one entry of the finite university map. The four ports are
+    independent listeners, so the workflow requires them to differ. ``app_url`` is the feature
+    site's external root address, and ``admin_origin`` is the administration backend's exact
+    external HTTPS origin. Either null value derives its default from the matching port.
+    ``shared_root`` overrides the configured shared directory. Both credentials are hidden from
+    the model's representation and its serialized form, and validation errors never echo their
+    inputs.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     app_url: str | None = None
+    admin_origin: str | None = None
+    instance_key: str
+    web_port: int
+    admin_web_port: int
+    postgres_port: int
+    embedding_port: int
+    shared_root: Path | None = None
     username: str
     password: SecretStr = Field(exclude=True, repr=False)
     mode: StartupMode
@@ -101,10 +121,19 @@ class ExampleSetupInput(_SelfHostModel):
     publication_token: SecretStr | None = Field(default=None, exclude=True, repr=False)
 
     @model_validator(mode="after")
-    def validate_app_url(self) -> ExampleSetupInput:
-        """Validate a supplied address through the shared web app settings owner."""
+    def validate_choices(self) -> ExampleSetupInput:
+        """Validate every supplied choice through its owning settings family."""
+        InstanceSettings.validate_instance_key(self.instance_key)
+        WebSettings.validate_web_port(self.web_port)
+        AdminWebSettings.validate_admin_web_port(self.admin_web_port)
+        DatabaseSettings.validate_port(self.postgres_port)
+        EmbeddingRuntimeSettings.validate_embedding_port(self.embedding_port)
+        if len({self.web_port, self.admin_web_port, self.postgres_port, self.embedding_port}) != 4:
+            raise ValueError("the four setup ports must be distinct")
         if self.app_url is not None:
             WebAppSettings.validate_web_app_url(self.app_url)
+        if self.admin_origin is not None:
+            AdminWebSettings.validate_admin_web_origin(self.admin_origin)
         return self
 
 
@@ -166,6 +195,95 @@ def _template_pairs(root: Path) -> tuple[tuple[str, str], ...]:
     )
     pairs.extend((f"examples/deploy/systemd/{name}", f"deploy/{name}") for name in _UNIT_TEMPLATES)
     return tuple(pairs)
+
+
+def _checkout_is_configured(root: Path) -> bool:
+    """Return whether the checkout carries a prepared working deployment marker.
+
+    A configured marker is the ignored environment file, the working Caddyfile, a rendered working
+    unit template or the default runtime state directory ``data/admin``. The tracked example assets
+    and the tracked fictional fixture tree are not markers. Each marker check tests existence alone
+    and reads no working file.
+    """
+    deploy = root / "deploy"
+    return (
+        (root / ".env").exists()
+        or (deploy / "Caddyfile").exists()
+        or any(deploy.glob("*.service.in"))
+        or (root / "data" / "admin").exists()
+    )
+
+
+class CheckoutRenamed(Exception):
+    """A clean checkout was renamed and its Python environment rebuilt.
+
+    The exception carries the new path and its message states the path and the command to run there.
+    """
+
+    def __init__(self, target: Path) -> None:
+        self.target = target
+        super().__init__(target)
+
+    def __str__(self) -> str:
+        """Return the new path with the command to run from it."""
+        return (
+            f"the checkout is now {self.target}; run the same command again from there: "
+            f"cd {shlex.quote(str(self.target))}"
+        )
+
+
+def prepare_checkout_path(
+    root: Path,
+    instance_key: str,
+    checkout_suffix: str,
+    *,
+    runner: mechanics.ProcessRunner,
+    write: Callable[[str], None],
+) -> None:
+    """Rename a clean checkout to ``course-explorer-<key><suffix>`` and rebuild its environment.
+
+    A checkout whose folder already carries the target name returns unchanged. A linked worktree
+    keeps its checkout path and prints the exact ``git worktree move`` command. A configured
+    checkout writes the exact quoted rename and returns unchanged, so its running deployment keeps
+    its folder. A clean checkout is renamed, its stale ``.venv`` is removed, and one locked
+    environment sync runs in the new folder, after which ``CheckoutRenamed`` carries the new path.
+    An existing target and a malformed suffix raise ``ValueError``.
+    """
+    if _CHECKOUT_SUFFIX_PATTERN.fullmatch(checkout_suffix) is None:
+        raise ValueError("checkout_suffix must be empty or lowercase hyphen-prefixed segments")
+    target = root.parent / f"course-explorer-{instance_key}{checkout_suffix}"
+    if root.name == target.name:
+        return
+    quoted_root = shlex.quote(str(root))
+    quoted_target = shlex.quote(str(target))
+    if (root / ".git").is_file():
+        write(f"git worktree move {quoted_root} {quoted_target}")
+        return
+    if _checkout_is_configured(root):
+        write(f"mv {quoted_root} {quoted_target}")
+        return
+    if target.exists() or target.is_symlink():
+        raise ValueError(f"the checkout target {target} already exists; move or remove it first")
+    environment = root / ".venv"
+    if environment.is_symlink() or (environment.exists() and not environment.is_dir()):
+        raise ValueError(f"{environment} must be a regular directory or absent")
+    write(f"rename the checkout to {target.name}")
+    root.rename(target)
+    environment = target / ".venv"
+    if environment.exists():
+        write("remove the stale Python environment")
+        shutil.rmtree(environment)
+    write("rebuild the Python environment")
+    child_environment = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
+    try:
+        runner.run(
+            ("uv", "sync", "--locked", "--no-managed-python", "--python", sys._base_executable),
+            cwd=target,
+            env=child_environment,
+        )
+    except Exception as exc:
+        raise CheckoutRenamed(target) from exc
+    raise CheckoutRenamed(target)
 
 
 def _require_working_files(root: Path) -> None:
@@ -324,7 +442,9 @@ def _prepare_embedding_artifact(
 ) -> None:
     """Check once for the pinned artifact, then download it only after an explicit confirmation."""
     runtime = load_embedding_runtime_settings()
-    path = root / runtime.embedding_artifact_path
+    path = load_shared_storage_settings().resolve_embedding_artifact(
+        runtime.embedding_artifact_path
+    )
     if artifacts.artifact_present(path, runtime.embedding_artifact_sha256):
         return
     if not confirm_download:
@@ -332,7 +452,7 @@ def _prepare_embedding_artifact(
             "the pinned embedding model is absent; confirm the download before running the workflow"
         )
     _require_download_space(path, str(runtime.embedding_artifact_url), write)
-    write(f"download the pinned embedding model to {runtime.embedding_artifact_path}")
+    write(f"download the pinned embedding model to {path}")
     artifacts.download_artifact(
         runner,
         root,
@@ -575,14 +695,9 @@ def _user_unit_directory() -> Path:
     return Path.home() / ".config" / "systemd" / "user"
 
 
-def _unit_names(root: Path) -> tuple[str, str, str]:
-    """Derive the three owned user-unit names from the checkout's safe basename."""
-    name = root.name
-    if _UNIT_SAFE_CHECKOUT.fullmatch(name) is None:
-        raise ValueError(
-            "the checkout directory name must be a nonempty filesystem- and unit-safe basename"
-        )
-    prefix = f"course-explorer-{name}"
+def _unit_names(instance_key: str, checkout_suffix: str = "") -> tuple[str, str, str]:
+    """Derive the three owned user-unit names from the instance key and optional checkout suffix."""
+    prefix = f"course-explorer-{instance_key}{checkout_suffix}"
     return (
         f"{prefix}-web.service",
         f"{prefix}-admin-web.service",
@@ -596,15 +711,17 @@ def _render_unit(
     """Render one unit template's checkout, uv path and paired timer service name."""
     rendered = template.replace("@CHECKOUT@", str(root)).replace("@UV_BIN@", str(uv_bin))
     if feedback_service is not None:
-        rendered = rendered.replace(
-            "tuni-course-explorer-feedback-sender.service", feedback_service
-        )
+        rendered = rendered.replace("@FEEDBACK_SERVICE@", feedback_service)
     return rendered
 
 
-def _install_user_units(root: Path, runner: mechanics.ProcessRunner) -> tuple[str, str, str]:
+def _install_user_units(
+    root: Path, runner: mechanics.ProcessRunner, checkout_suffix: str = ""
+) -> tuple[str, str, str]:
     """Render the four owned user units, reusing identical files and refusing any different one."""
-    web_unit, admin_unit, feedback_unit = _unit_names(root)
+    web_unit, admin_unit, feedback_unit = _unit_names(
+        load_instance_settings().instance_key, checkout_suffix
+    )
     timer_unit = f"{feedback_unit.removesuffix('.service')}.timer"
     uv_bin = shutil.which("uv")
     if uv_bin is None:
@@ -612,11 +729,11 @@ def _install_user_units(root: Path, runner: mechanics.ProcessRunner) -> tuple[st
     directory = _user_unit_directory()
     directory.mkdir(parents=True, exist_ok=True)
     mappings = (
-        ("tuni-course-explorer-web.service.in", web_unit, None),
-        ("tuni-course-explorer-admin-web.service.in", admin_unit, None),
-        ("tuni-course-explorer-feedback-sender.service.in", feedback_unit, None),
+        ("course-explorer-web.service.in", web_unit, None),
+        ("course-explorer-admin-web.service.in", admin_unit, None),
+        ("course-explorer-feedback-sender.service.in", feedback_unit, None),
         (
-            "tuni-course-explorer-feedback-sender.timer.in",
+            "course-explorer-feedback-sender.timer.in",
             timer_unit,
             feedback_unit,
         ),
@@ -706,9 +823,64 @@ def _require_publication_destination(root: Path) -> None:
     if configured == example:
         raise ValueError(
             "publication needs a real feedback repository; set it with `uv run python scripts/"
-            "admin.py config set config/feedback.toml FEEDBACK_GITHUB_REPOSITORY OWNER/REPOSITORY` "
-            "and see docs/backend/feedback-publication.md"
+            "admin.py config set config/feedback.toml FEEDBACK_GITHUB_REPOSITORY OWNER/REPOSITORY`"
         )
+
+
+def _apply_instance_choices(options: ExampleSetupInput, root: Path) -> None:
+    """Write the instance key, ports, origins, feature defaults and shared root, then create it.
+
+    Every save validates one candidate through its owning settings family. Embedding and inference
+    start off, and the prerequisites switch follows the selected map entry's source family. The
+    shared directory is resolved from the written or configured setting and created or adopted
+    outside the checkout with its ``models`` and ``locks`` directories.
+    """
+    configuration.set_configuration_value(
+        "config/web.toml", "INSTANCE_KEY", json.dumps(options.instance_key)
+    )
+    configuration.set_configuration_value(
+        "config/web.toml", "WEB_PORT", json.dumps(options.web_port)
+    )
+    app_url = options.app_url or f"http://localhost:{options.web_port}/"
+    configuration.set_configuration_value("config/web.toml", "WEB_APP_URL", json.dumps(app_url))
+    configuration.set_configuration_value(
+        "config/admin_web.toml", "ADMIN_WEB_PORT", json.dumps(options.admin_web_port)
+    )
+    admin_origin = options.admin_origin or f"https://localhost:{options.admin_web_port}"
+    configuration.set_configuration_value(
+        "config/admin_web.toml", "ADMIN_WEB_ORIGIN", json.dumps(admin_origin)
+    )
+    configuration.set_configuration_value(
+        "config/database.toml", "POSTGRES_PORT", json.dumps(options.postgres_port)
+    )
+    configuration.set_configuration_value(
+        "config/search.toml", "EMBEDDING_PORT", json.dumps(options.embedding_port)
+    )
+    configuration.set_configuration_value(
+        "config/feedback.toml", "FEEDBACK_POSTGRES_PORT", json.dumps(options.postgres_port)
+    )
+    configuration.set_configuration_value(
+        "config/web.toml", "WEB_EMBEDDINGS_ENABLED", json.dumps(False)
+    )
+    configuration.set_configuration_value(
+        "config/web.toml", "WEB_INFERENCE_ENABLED", json.dumps(False)
+    )
+    configuration.set_configuration_value(
+        "config/web.toml",
+        "WEB_PREREQUISITES_ENABLED",
+        json.dumps(UNIVERSITIES[options.instance_key].source_family == "sisu"),
+    )
+    if options.shared_root is not None:
+        configuration.set_configuration_value(
+            "config/database.toml", "ADMIN_SHARED_ROOT", json.dumps(str(options.shared_root))
+        )
+    shared = load_shared_storage_settings()
+    shared_root = shared.shared_root.resolve()
+    if shared_root.is_relative_to(root.resolve()):
+        raise ValueError("the shared directory must be outside this checkout")
+    shared_root.mkdir(parents=True, exist_ok=True)
+    shared.models_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    shared.locks_root.mkdir(mode=0o700, parents=True, exist_ok=True)
 
 
 def setup_example(
@@ -716,14 +888,17 @@ def setup_example(
     *,
     runner: mechanics.ProcessRunner,
     write: Callable[[str], None],
+    checkout_suffix: str = "",
 ) -> SelfHostReport:
     """Take a fresh checkout to a site that serves the bundled example data.
 
     Absent templates are materialized first. The enrollment and example preconditions are checked
-    before any supplied key edit or fresh credential is written. The pinned model, both services,
-    the example import, the feedback store, the documented builds and the chosen startup mode follow
-    in that order, and the workflow proves both shells and the bootstrap serving identity before it
-    returns. No dataset is enrolled.
+    before any supplied key edit or fresh credential is written. The instance key, ports, origins,
+    feature-switch defaults and shared directory are then applied, and every later step reads the
+    edited configuration. The pinned model, both services, the example import, the feedback store,
+    the documented builds and the chosen startup mode follow in that order, and the workflow proves
+    both shells and the bootstrap serving identity before it returns. No dataset is enrolled.
+    A ``checkout_suffix`` adds its segment to the generated user-unit names.
     """
     root = administration.repository_root()
     write("copy absent working files")
@@ -748,12 +923,9 @@ def setup_example(
         )
 
     write("apply device settings")
-    if options.app_url is not None:
-        configuration.set_configuration_value(
-            "config/web.toml", "WEB_APP_URL", json.dumps(options.app_url)
-        )
+    _apply_instance_choices(options, root)
     if options.mode == "user":
-        web_unit, admin_unit, _ = _unit_names(root)
+        web_unit, admin_unit, _ = _unit_names(options.instance_key, checkout_suffix)
         configuration.set_configuration_value(
             "config/admin_web.toml",
             "ADMIN_SITE_WEB_SERVICE_UNIT",
@@ -853,7 +1025,7 @@ def setup_example(
 
     write("start and prove the site")
     if options.mode == "user":
-        _, _, timer_unit = _install_user_units(root, runner)
+        _, _, timer_unit = _install_user_units(root, runner, checkout_suffix=checkout_suffix)
         if publication:
             _enable_feedback_timer(runner, root, timer_unit)
         _explain_linger(runner, root, write)
@@ -896,7 +1068,11 @@ def setup_real_database(
             timeout=lifecycle.stop_timeout_seconds,
             follow_redirects=False,
         ) as client:
-            previous_identity = dataset_owner.read_serving_identity(client, website.port)
+            # A stopped web unit serves nothing to compare, as in a promotion.
+            try:
+                previous_identity = dataset_owner.read_serving_identity(client, website.port)
+            except httpx.ConnectError:
+                previous_identity = None
         port = website.port
 
         def start(prove: Callable[[], None]) -> None:

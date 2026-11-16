@@ -42,11 +42,16 @@ const witnessOrder: VariableOrder<Witness> = {
 /** One transient decision DAG of exact satisfaction witness families. */
 class WitnessFamilies extends Families<Witness> {
   private readonly creditsByGroupId: ReadonlyMap<string, number>;
+  private readonly unknownCreditGroupIds: ReadonlySet<string>;
   private readonly attestedCredits = new Map<string, number | null>();
 
-  constructor(creditsByGroupId: ReadonlyMap<string, number>) {
+  constructor(
+    creditsByGroupId: ReadonlyMap<string, number>,
+    unknownCreditGroupIds: ReadonlySet<string>,
+  ) {
     super(witnessOrder);
     this.creditsByGroupId = creditsByGroupId;
+    this.unknownCreditGroupIds = unknownCreditGroupIds;
   }
 
   /** Return the singleton family holding exactly the one-course witness. */
@@ -85,6 +90,22 @@ class WitnessFamilies extends Families<Witness> {
     return (
       variable[0] === "attested" &&
       (this.attestedCredits.get(variable[1]) ?? null) === null
+    );
+  }
+
+  /** Return whether one witness variable is a course whose minimum credit is substituted. */
+  usesAssumedCredit(variable: Witness): boolean {
+    return (
+      variable[0] === "course" && this.unknownCreditGroupIds.has(variable[1])
+    );
+  }
+
+  /** Return whether one family retains a witness whose minimum credit is substituted. */
+  hasAssumedCredit(family: number): boolean {
+    return (
+      this.splitByPredicate(family, (variable) =>
+        this.usesAssumedCredit(variable),
+      )[1] !== Families.ZERO
     );
   }
 
@@ -131,6 +152,8 @@ class SatisfactionEvaluator extends PieceEvaluator<CandidateEvaluation> {
   private readonly basis: ReadonlySet<string>;
   private readonly families: WitnessFamilies;
   private readonly memo = new Map<string, CandidateEvaluation>();
+  /** Whether a credit-bound piece retained a course whose minimum credit is substituted. */
+  usesAssumedCredits = false;
 
   constructor(
     index: StructureIndex,
@@ -336,6 +359,9 @@ class SatisfactionEvaluator extends PieceEvaluator<CandidateEvaluation> {
       isUnknown,
     );
     const family = this.families.filter(known, { weight, lower, upper });
+    if (piece.kind === "credits" && this.families.hasAssumedCredit(family)) {
+      this.usesAssumedCredits = true;
+    }
     const nontrivial = lower > 0 || upper !== null;
     return candidate(
       family,
@@ -362,7 +388,11 @@ export class SatisfactionSession {
   private readonly structure: SolverStructure;
   private readonly evaluator: SatisfactionEvaluator;
 
-  constructor(structure: SolverStructure, basisGroupIds: Iterable<string>) {
+  constructor(
+    structure: SolverStructure,
+    basisGroupIds: Iterable<string>,
+    assumedCourseCredits: string,
+  ) {
     const basis = new Set<string>();
     for (const groupId of basisGroupIds) {
       if (groupId.trim().length === 0) {
@@ -370,14 +400,24 @@ export class SatisfactionSession {
       }
       basis.add(groupId);
     }
-    const credits = creditsByGroupId(structure);
+    const credits = creditsByGroupId(structure, assumedCourseCredits);
+    const unknownCreditGroupIds = new Set(
+      structure.courses
+        .filter((course) => course.credits_min === null)
+        .map((course) => course.group_id),
+    );
     this.structure = structure;
     this.basisGroupIds = basis;
     this.evaluator = new SatisfactionEvaluator(
       indexStructure(structure),
       basis,
-      new WitnessFamilies(credits),
+      new WitnessFamilies(credits, unknownCreditGroupIds),
     );
+  }
+
+  /** Return whether one evaluated credit bound retained a substitute-minimum course. */
+  get usesAssumedCredits(): boolean {
+    return this.evaluator.usesAssumedCredits;
   }
 
   /** Return one piece's public tri-state. A `null` piece is satisfied. */
@@ -398,6 +438,7 @@ export type SatisfactionEvaluation = {
   active_only: boolean;
   basis_group_ids: string[];
   requirements_state: SatisfactionState;
+  uses_assumed_credits: boolean;
 };
 
 /**
@@ -409,8 +450,13 @@ export type SatisfactionEvaluation = {
 export function evaluateSatisfaction(
   structure: SolverStructure,
   basisGroupIds: Iterable<string>,
+  assumedCourseCredits: string,
 ): SatisfactionEvaluation {
-  const session = new SatisfactionSession(structure, basisGroupIds);
+  const session = new SatisfactionSession(
+    structure,
+    basisGroupIds,
+    assumedCourseCredits,
+  );
   let requirementsState: SatisfactionState;
   if (structure.excluded_group_ids.includes(structure.root_group_id)) {
     requirementsState = "unsatisfied";
@@ -430,8 +476,15 @@ export function evaluateSatisfaction(
     active_only: structure.active_only,
     basis_group_ids: [...session.basisGroupIds].sort(),
     requirements_state: requirementsState,
+    uses_assumed_credits: session.usesAssumedCredits,
   };
 }
+
+/** One graph evaluation: the box states and whether an assumed credit entered a bound. */
+export type NodeStateEvaluation = {
+  states: GraphNodeState[];
+  uses_assumed_credits: boolean;
+};
 
 /**
  * Return one presentation state per emitted display node.
@@ -439,14 +492,18 @@ export function evaluateSatisfaction(
  * Course states read the canonical excluded, completed and basis sets. A non-course node is
  * automatic only when at least one calculation piece binds to it and every bound piece is
  * satisfied in the unmarked completed-only and chosen-basis contexts. Manual flags are direct
- * binding mark lookups with exclusion precedence. The result is sorted by node ID.
+ * binding mark lookups with exclusion precedence. The assumed-credit flag is true when a
+ * credit-bound piece retains a course whose minimum credit is substituted, and false when no
+ * retained witness set includes such a course or the bound counts courses. The result is sorted by
+ * node ID.
  */
 export function evaluateNodeStates(
   structure: SolverStructure,
   basisGroupIds: Iterable<string>,
   displayNodes: readonly GraphDisplayNode[],
   completedGroupIds: Iterable<string>,
-): GraphNodeState[] {
+  assumedCourseCredits: string,
+): NodeStateEvaluation {
   const basis = new Set(basisGroupIds);
   const completed = new Set(completedGroupIds);
   const excludedGroupIds = new Set(structure.excluded_group_ids);
@@ -458,8 +515,16 @@ export function evaluateNodeStates(
     excluded_node_keys: [],
     excluded_group_ids: [],
   };
-  const completedSession = new SatisfactionSession(shallow, completed);
-  const basisSession = new SatisfactionSession(shallow, basis);
+  const completedSession = new SatisfactionSession(
+    shallow,
+    completed,
+    assumedCourseCredits,
+  );
+  const basisSession = new SatisfactionSession(
+    shallow,
+    basis,
+    assumedCourseCredits,
+  );
   const bindingsByNode = new Map<string, SolverSupportBinding[]>();
   for (const binding of structure.bindings) {
     for (const nodeId of binding.node_ids) {
@@ -517,5 +582,9 @@ export function evaluateNodeStates(
         ? 1
         : 0,
   );
-  return states;
+  return {
+    states,
+    uses_assumed_credits:
+      completedSession.usesAssumedCredits || basisSession.usesAssumedCredits,
+  };
 }

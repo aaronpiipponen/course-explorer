@@ -12,8 +12,8 @@ from collections.abc import Callable, Collection, Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import and_, distinct, func, or_, select
+from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from course_explorer.curriculum import (
     CatalogueCourse,
@@ -33,7 +33,6 @@ from course_explorer.curriculum import (
     CatalogueSummary,
     CatalogueTeachingCourse,
     CatalogueTeachingCourseVersion,
-    CatalogueTeachingText,
     CatalogueTeachingTextInput,
     CourseSummary,
     CurriculumDiscoveryRead,
@@ -45,7 +44,6 @@ from course_explorer.curriculum import (
 )
 from course_explorer.db.models import (
     Course,
-    CourseText,
     CourseVersion,
     CourseVersionCurriculumPeriod,
     CurriculumPeriod,
@@ -53,13 +51,16 @@ from course_explorer.db.models import (
     ModuleRuleNode,
     ModuleVersion,
     ModuleVersionCurriculumPeriod,
+    OfficialCourseText,
+    OfficialModuleText,
     OfficialPrerequisiteOption,
     OfficialPrerequisiteOptionMember,
     OfficialSubstitutionOption,
     OfficialSubstitutionOptionMember,
     SourceSnapshot,
 )
-from course_explorer.enums import ModuleRuleType, PrerequisiteMemberType
+from course_explorer.enums import ModuleRuleType, OfficialTextField, PrerequisiteMemberType
+from course_explorer.instance import UniversityMetadata
 
 
 def _require_representative_versions(
@@ -82,38 +83,55 @@ def select_representative_source_ids(
     current_academic_year_start: int,
     activity_window_years: int,
 ) -> dict[str, str | None]:
-    """Rank each version's eligible membership by year, retaining one best candidate per course."""
+    """Rank each version's eligible membership by year, retaining one best candidate per course.
+
+    A version with no eligible dated membership is eligible only when it has no membership rows at
+    all, and then by greatest non-null source modification ordinal and greatest source version
+    identity. A version whose memberships are all future stays ineligible.
+    """
     result = {group_id: None for group_id in group_ids}
     if not group_ids:
         return result
+    all_membership = aliased(CourseVersionCurriculumPeriod)
     rows = session.execute(
         select(
             Course.group_id,
-            CourseVersion.sisu_course_unit_id,
+            CourseVersion.source_version_id,
             CourseVersion.source_modification_ordinal,
-            func.max(CurriculumPeriod.academic_year_start),
+            func.max(CurriculumPeriod.academic_year_start).label("eligible_year"),
+            func.count(distinct(all_membership.curriculum_period_id)).label("membership_count"),
         )
         .join(CourseVersion, CourseVersion.course_id == Course.id)
-        .join(
+        .outerjoin(
             CourseVersionCurriculumPeriod,
             CourseVersionCurriculumPeriod.course_version_id == CourseVersion.id,
         )
-        .join(
+        .outerjoin(
             CurriculumPeriod,
-            CurriculumPeriod.id == CourseVersionCurriculumPeriod.curriculum_period_id,
+            and_(
+                CurriculumPeriod.id == CourseVersionCurriculumPeriod.curriculum_period_id,
+                CurriculumPeriod.academic_year_start <= current_academic_year_start,
+            ),
         )
-        .where(
-            Course.group_id.in_(group_ids),
-            CurriculumPeriod.academic_year_start <= current_academic_year_start,
+        .outerjoin(
+            all_membership,
+            all_membership.course_version_id == CourseVersion.id,
         )
+        .where(Course.group_id.in_(group_ids))
         .group_by(
             Course.group_id,
-            CourseVersion.sisu_course_unit_id,
+            CourseVersion.source_version_id,
             CourseVersion.source_modification_ordinal,
         )
-    )
+    ).all()
     best_by_group: dict[str, tuple[tuple[int, int], int, str]] = {}
-    for group_id, source_id, ordinal, year in rows:
+    running_groups: set[str] = set()
+    # One row per exact version. The first pass keeps eligible dated candidates. A group with none
+    # uses the membership-free fallback in the second pass.
+    for group_id, source_id, ordinal, year, _membership_count in rows:
+        if year is None:
+            continue
+        running_groups.add(group_id)
         if year == current_academic_year_start:
             rank = (2, year)
         elif is_within_activity_window(
@@ -129,6 +147,16 @@ def select_representative_source_ids(
         if previous is None or candidate > previous:
             best_by_group[group_id] = candidate
             result[group_id] = source_id
+    for group_id, source_id, ordinal, year, membership_count in rows:
+        if year is not None or membership_count:
+            continue
+        if group_id in running_groups:
+            continue
+        candidate = ((-1, -1), -1 if ordinal is None else ordinal, source_id)
+        previous = best_by_group.get(group_id)
+        if previous is None or candidate > previous:
+            best_by_group[group_id] = candidate
+            result[group_id] = source_id
     return result
 
 
@@ -140,65 +168,125 @@ class _RepresentativeActivityContext(Protocol):
     activity_window_years: int
 
 
-def _representative_teaching_texts(
+_TEACHING_FIELDS = (
+    OfficialTextField.NAME,
+    OfficialTextField.CONTENT,
+    OfficialTextField.OUTCOMES,
+)
+_ALL_OFFICIAL_FIELDS = tuple(OfficialTextField)
+
+
+def _course_text_cells(
+    session: Session,
+    version_ids: Collection[UUID],
+    fields: Collection[OfficialTextField],
+) -> dict[UUID, dict[OfficialTextField, dict[str, str]]]:
+    """Batch-read the requested official course cells for already-selected version ids."""
+    identifiers = tuple(dict.fromkeys(version_ids))
+    cells: dict[UUID, dict[OfficialTextField, dict[str, str]]] = {
+        version_id: {field: {} for field in fields} for version_id in identifiers
+    }
+    if not identifiers:
+        return cells
+    rows = session.execute(
+        select(
+            OfficialCourseText.course_version_id,
+            OfficialCourseText.field,
+            OfficialCourseText.language,
+            OfficialCourseText.text,
+        ).where(
+            OfficialCourseText.course_version_id.in_(identifiers),
+            OfficialCourseText.field.in_(tuple(fields)),
+        )
+    )
+    for version_id, field, language, text in rows:
+        cells[version_id][field][language] = text
+    return cells
+
+
+def _module_name_cells(
+    session: Session, version_ids: Collection[UUID]
+) -> dict[UUID, dict[str, str]]:
+    """Batch-read the official name cells for already-selected module version ids."""
+    identifiers = tuple(dict.fromkeys(version_ids))
+    cells: dict[UUID, dict[str, str]] = {version_id: {} for version_id in identifiers}
+    if not identifiers:
+        return cells
+    rows = session.execute(
+        select(
+            OfficialModuleText.module_version_id,
+            OfficialModuleText.language,
+            OfficialModuleText.text,
+        ).where(
+            OfficialModuleText.module_version_id.in_(identifiers),
+            OfficialModuleText.field == "name",
+        )
+    )
+    for version_id, language, text in rows:
+        cells[version_id][language] = text
+    return cells
+
+
+def _selected_representative_rows(
     session: Session,
     selected_ids: Collection[str],
     *,
-    include_identity: bool = False,
-) -> dict[str, CatalogueRepresentativeTeachingText | CatalogueTeachingCourseVersion]:
-    """Load official representative identity/teaching text for exact selected source IDs.
+    include_identity: bool,
+) -> tuple[Any, ...]:
+    """Select the persisted rows of exact representative source IDs in canonical order.
 
-    This is the one selected-source projection shared by every representative teaching read. The
-    default read selects only the requested source IDs' identity, name, and official
-    content/outcomes columns. ``include_identity`` adds the selected representative's source hash
-    and code through the snapshot join for consumers that compare those identities. A selected
-    representative with no persisted version row fails loudly.
+    ``include_identity`` makes this function join the snapshot for the source hash and code. The
+    default projection carries only the row ID and source identity.
     """
     source_ids = tuple(dict.fromkeys(selected_ids))
     if not source_ids:
-        return {}
-    columns: list[Any] = [
-        CourseVersion.sisu_course_unit_id,
-        CourseVersion.name_fi,
-        CourseVersion.name_en,
-        CourseText.content_fi,
-        CourseText.content_en,
-        CourseText.outcomes_fi,
-        CourseText.outcomes_en,
-    ]
+        return ()
+    columns = [CourseVersion.id, CourseVersion.source_version_id]
     if include_identity:
-        columns[1:1] = [SourceSnapshot.source_hash, CourseVersion.code]
+        columns.extend((SourceSnapshot.source_hash, CourseVersion.code))
     statement = (
         select(*columns)
-        .outerjoin(CourseText, CourseText.course_version_id == CourseVersion.id)
-        .where(CourseVersion.sisu_course_unit_id.in_(source_ids))
-        .order_by(CourseVersion.sisu_course_unit_id)
+        .where(CourseVersion.source_version_id.in_(source_ids))
+        .order_by(CourseVersion.source_version_id)
     )
     if include_identity:
         statement = statement.join(
             SourceSnapshot, SourceSnapshot.id == CourseVersion.source_snapshot_id
         )
+    return tuple(session.execute(statement))
+
+
+def _representative_teaching_texts(
+    session: Session,
+    selected_ids: Collection[str],
+    *,
+    fields: Collection[OfficialTextField] = _TEACHING_FIELDS,
+    include_identity: bool = False,
+) -> dict[str, CatalogueRepresentativeTeachingText | CatalogueTeachingCourseVersion]:
+    """Load official representative identity/teaching cells for exact selected source IDs.
+
+    This is the one selected-source teaching projection. The default read selects only the
+    requested source IDs' identity and official name/content/outcomes cells. A caller that requests
+    other ``fields`` receives those official cells instead. ``include_identity`` adds the selected
+    representative's source hash and code through the snapshot join for consumers that compare
+    those identities. A selected representative with no persisted version row fails loudly.
+    """
+    source_ids = tuple(dict.fromkeys(selected_ids))
+    if not source_ids:
+        return {}
+    rows = _selected_representative_rows(session, source_ids, include_identity=include_identity)
+    cells = _course_text_cells(session, (row.id for row in rows), fields)
     by_source_id: dict[
         str, CatalogueRepresentativeTeachingText | CatalogueTeachingCourseVersion
     ] = {}
-    for row in session.execute(statement):
-        common = {
-            "sisu_course_unit_id": row.sisu_course_unit_id,
-            "name_fi": row.name_fi,
-            "name_en": row.name_en,
-            "teaching_text": CatalogueTeachingText(
-                content_fi=row.content_fi,
-                content_en=row.content_en,
-                outcomes_fi=row.outcomes_fi,
-                outcomes_en=row.outcomes_en,
-            ),
-        }
+    for row in rows:
+        common = {"source_version_id": row.source_version_id, "texts": cells[row.id]}
         if include_identity:
-            by_source_id[row.sisu_course_unit_id] = CatalogueTeachingCourseVersion(
+            by_source_id[row.source_version_id] = CatalogueTeachingCourseVersion(
                 **common, source_hash=row.source_hash, code=row.code
             )
         else:
-            by_source_id[row.sisu_course_unit_id] = CatalogueRepresentativeTeachingText(**common)
+            by_source_id[row.source_version_id] = CatalogueRepresentativeTeachingText(**common)
     _require_representative_versions(source_ids, by_source_id)
     return by_source_id
 
@@ -206,8 +294,15 @@ def _representative_teaching_texts(
 class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDiscoveryRead):
     """Load canonical official curriculum data through fixed, shared-loader read queries only."""
 
-    def __init__(self, factory: sessionmaker[Session]):
+    def __init__(
+        self,
+        factory: sessionmaker[Session],
+        *,
+        university: UniversityMetadata,
+    ):
         self._factory = factory
+        self._university = university
+        self._display_fallback = self._university.display_fallback
 
     def list_courses(self, *, active_only: bool | None = None) -> tuple[CatalogueCourse, ...]:
         """Return detached canonical courses and computed official representatives."""
@@ -221,6 +316,17 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
         with self._factory() as session:
             return self._load_courses(
                 session, active_only=active_only, group_ids=None, teaching_only=True
+            )
+
+    def list_prompt_courses(self) -> tuple[CatalogueTeachingCourse, ...]:
+        """Return canonical activity context with each representative's official text cells."""
+        with self._factory() as session:
+            return self._load_courses(
+                session,
+                active_only=None,
+                group_ids=None,
+                teaching_only=True,
+                fields=_ALL_OFFICIAL_FIELDS,
             )
 
     def get_courses(self, group_ids: Collection[str]) -> tuple[CatalogueCourse, ...]:
@@ -399,12 +505,13 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
         active_only: bool | None,
         group_ids: Collection[str] | None,
         teaching_only: bool = False,
+        fields: Collection[OfficialTextField] = _TEACHING_FIELDS,
     ) -> tuple[CatalogueCourse, ...] | tuple[CatalogueTeachingCourse, ...]:
         """Assemble detached canonical courses under an optional activity and identity scope.
 
         The full read returns every official structure. ``teaching_only`` returns the
-        activity context plus the selected representative's identity/hash/code/names/teaching text
-        through the shared selector and the selected-source projection.
+        activity context plus the selected representative's identity/hash/code and the requested
+        official ``fields`` through the shared selector and the selected-source projection.
         """
         courses = self._scoped_courses(
             session, active_only=active_only, group_ids=group_ids, teaching_only=teaching_only
@@ -415,7 +522,9 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
         )
         if teaching_only:
             versions = (
-                _representative_teaching_texts(session, representative_ids, include_identity=True)
+                _representative_teaching_texts(
+                    session, representative_ids, fields=fields, include_identity=True
+                )
                 if representative_ids
                 else {}
             )
@@ -459,19 +568,18 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
 
         version_rows = tuple(
             session.execute(
-                select(CourseVersion, SourceSnapshot, CourseText)
+                select(CourseVersion, SourceSnapshot)
                 .join(SourceSnapshot, SourceSnapshot.id == CourseVersion.source_snapshot_id)
-                .outerjoin(CourseText, CourseText.course_version_id == CourseVersion.id)
-                .where(CourseVersion.sisu_course_unit_id.in_(representative_ids))
-                .order_by(CourseVersion.sisu_course_unit_id)
+                .where(CourseVersion.source_version_id.in_(representative_ids))
+                .order_by(CourseVersion.source_version_id)
             )
         )
-        versions_by_source: dict[str, tuple[CourseVersion, SourceSnapshot, CourseText | None]] = {
-            version.sisu_course_unit_id: (version, snapshot, text)
-            for version, snapshot, text in version_rows
+        versions_by_source: dict[str, tuple[CourseVersion, SourceSnapshot]] = {
+            version.source_version_id: (version, snapshot) for version, snapshot in version_rows
         }
         _require_representative_versions(representative_ids, versions_by_source)
-        version_ids = tuple(version.id for version, _, _ in version_rows)
+        version_ids = tuple(version.id for version, _ in version_rows)
+        texts_by_version = _course_text_cells(session, version_ids, _ALL_OFFICIAL_FIELDS)
 
         period_rows = tuple(
             session.scalars(
@@ -528,12 +636,12 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
             source_id: _course_version_dto(
                 version,
                 snapshot,
-                text,
+                texts_by_version[version.id],
                 tuple(periods_by_version[version.id]),
                 tuple(prerequisite_by_version.get(version.id, ())),
                 tuple(substitution_by_version.get(version.id, ())),
             )
-            for source_id, (version, snapshot, text) in versions_by_source.items()
+            for source_id, (version, snapshot) in versions_by_source.items()
         }
         return tuple(
             CatalogueCourse(
@@ -648,14 +756,13 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
         columns: list[Any] = [
             Course.group_id,
             Course.is_active,
-            CourseVersion.sisu_course_unit_id,
+            CourseVersion.id,
+            CourseVersion.source_version_id,
         ]
         if include_identity:
             columns.append(SourceSnapshot.source_hash)
         columns.extend(
             (
-                CourseVersion.name_fi,
-                CourseVersion.name_en,
                 CourseVersion.code,
                 CourseVersion.credits_min,
                 CourseVersion.credits_max,
@@ -665,38 +772,42 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
         statement = (
             select(*columns)
             .join(CourseVersion, CourseVersion.course_id == Course.id)
-            .where(CourseVersion.sisu_course_unit_id.in_(tuple(selected.values())))
+            .where(CourseVersion.source_version_id.in_(tuple(selected.values())))
             .order_by(Course.group_id)
         )
         if include_identity:
             statement = statement.join(
                 SourceSnapshot, SourceSnapshot.id == CourseVersion.source_snapshot_id
             )
+        rows = tuple(session.execute(statement))
+        names_by_version = _course_text_cells(
+            session, (row.id for row in rows), (OfficialTextField.NAME,)
+        )
         summaries_by_source: dict[str, CourseSummary | RepresentedCourseSummary] = {}
-        for row in session.execute(statement):
+        for row in rows:
             summary = course_summary_from_fields(
                 group_id=row.group_id,
                 is_active=row.is_active,
-                name_fi=row.name_fi,
-                name_en=row.name_en,
+                names=names_by_version[row.id][OfficialTextField.NAME],
+                display_fallback=self._display_fallback,
                 code=row.code,
                 credits_min=row.credits_min,
                 credits_max=row.credits_max,
                 official_url=row.official_url,
             )
             if include_identity:
-                summaries_by_source[row.sisu_course_unit_id] = RepresentedCourseSummary(
+                summaries_by_source[row.source_version_id] = RepresentedCourseSummary(
                     summary=summary,
-                    sisu_course_unit_id=row.sisu_course_unit_id,
+                    source_version_id=row.source_version_id,
                     source_hash=row.source_hash,
                 )
             else:
-                summaries_by_source[row.sisu_course_unit_id] = summary
+                summaries_by_source[row.source_version_id] = summary
         _require_representative_versions(selected.values(), summaries_by_source)
         return tuple(summaries_by_source[selected[group_id]] for group_id in sorted(selected))
 
     def get_representative_teaching_texts(
-        self, sisu_course_unit_ids: Collection[str]
+        self, source_version_ids: Collection[str]
     ) -> tuple[CatalogueRepresentativeTeachingText, ...]:
         """Return selected representatives' official identity and teaching text for exact source IDs.
 
@@ -705,7 +816,7 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
         version of an affected group is therefore absent, and the caller rejects it as not a
         selected representative.
         """
-        source_ids = tuple(dict.fromkeys(sisu_course_unit_ids))
+        source_ids = tuple(dict.fromkeys(source_version_ids))
         if not source_ids:
             return ()
         with self._factory() as session:
@@ -713,7 +824,7 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
                 session.scalars(
                     select(Course.group_id)
                     .join(CourseVersion, CourseVersion.course_id == Course.id)
-                    .where(CourseVersion.sisu_course_unit_id.in_(source_ids))
+                    .where(CourseVersion.source_version_id.in_(source_ids))
                     .distinct()
                 )
             )
@@ -845,9 +956,10 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
         else:
             version_ids = tuple(version.id for version, _ in version_rows)
         periods_by_version = self._module_periods_by_version(session, version_ids=version_ids)
+        names_by_version = _module_name_cells(session, version_ids)
         if lookup_only:
             identities_by_module = _assemble_module_version_identities(
-                version_rows, periods_by_version
+                version_rows, periods_by_version, names_by_version
             )
             return tuple(
                 CatalogueModuleLookup(
@@ -871,7 +983,7 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
             )
         )
         versions_by_module = _assemble_module_versions(
-            version_rows, periods_by_version, rules_by_version
+            version_rows, periods_by_version, rules_by_version, names_by_version
         )
         return tuple(
             CatalogueModule(
@@ -898,11 +1010,9 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
             statement = select(
                 ModuleVersion.id,
                 ModuleVersion.module_id,
-                ModuleVersion.sisu_module_id,
+                ModuleVersion.source_version_id,
                 ModuleVersion.module_type,
                 ModuleVersion.code,
-                ModuleVersion.name_fi,
-                ModuleVersion.name_en,
                 ModuleVersion.validity_start,
                 ModuleVersion.validity_end,
             )
@@ -913,7 +1023,7 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
         return tuple(
             session.execute(
                 statement.where(ModuleVersion.module_id.in_(module_ids)).order_by(
-                    ModuleVersion.module_id, ModuleVersion.sisu_module_id
+                    ModuleVersion.module_id, ModuleVersion.source_version_id
                 )
             )
         )
@@ -977,18 +1087,17 @@ class CurriculumRepository(CurriculumRead, CurriculumStructureRead, CurriculumDi
 def _course_version_dto(
     version: CourseVersion,
     snapshot: SourceSnapshot,
-    text: CourseText | None,
+    texts: dict[OfficialTextField, dict[str, str]],
     period_ids: tuple[str, ...],
     prerequisite_options: tuple[CataloguePrerequisiteOption, ...],
     substitution_options: tuple[CatalogueSubstitutionOption, ...],
 ) -> CatalogueCourseVersion:
     """Map one bulk-loaded course row and its ordered child DTOs."""
     return CatalogueCourseVersion(
-        sisu_course_unit_id=version.sisu_course_unit_id,
+        source_version_id=version.source_version_id,
         source_hash=snapshot.source_hash,
         code=version.code,
-        name_fi=version.name_fi,
-        name_en=version.name_en,
+        texts=texts,
         credits_min=version.credits_min,
         credits_max=version.credits_max,
         official_url=version.official_url,
@@ -996,16 +1105,6 @@ def _course_version_dto(
         validity_start=version.validity_start,
         validity_end=version.validity_end,
         curriculum_period_ids=period_ids,
-        teaching_text=CatalogueTeachingText(
-            content_fi=None if text is None else text.content_fi,
-            content_en=None if text is None else text.content_en,
-            outcomes_fi=None if text is None else text.outcomes_fi,
-            outcomes_en=None if text is None else text.outcomes_en,
-        ),
-        prerequisite_text_fi=None if text is None else text.prerequisite_text_fi,
-        prerequisite_text_en=None if text is None else text.prerequisite_text_en,
-        additional_info_fi=None if text is None else text.additional_info_fi,
-        additional_info_en=None if text is None else text.additional_info_en,
         prerequisite_options=prerequisite_options,
         substitution_options=substitution_options,
     )
@@ -1078,18 +1177,18 @@ def _assemble_module_versions(
     version_rows: Sequence[tuple[ModuleVersion, SourceSnapshot]],
     periods_by_version: dict[UUID, list[CatalogueCurriculumPeriod]],
     rules_by_version: dict[UUID, CatalogueModuleRule],
+    names_by_version: dict[UUID, dict[str, str]],
 ) -> dict[UUID, list[CatalogueModuleVersion]]:
     """Map each exact module-version row into its ordered detached DTO."""
     versions_by_module: dict[UUID, list[CatalogueModuleVersion]] = defaultdict(list)
     for version, snapshot in version_rows:
         versions_by_module[version.module_id].append(
             CatalogueModuleVersion(
-                sisu_module_id=version.sisu_module_id,
+                source_version_id=version.source_version_id,
                 source_hash=snapshot.source_hash,
                 module_type=version.module_type,
                 code=version.code,
-                name_fi=version.name_fi,
-                name_en=version.name_en,
+                names=names_by_version[version.id],
                 target_credits_min=version.target_credits_min,
                 target_credits_max=version.target_credits_max,
                 document_state=version.document_state,
@@ -1105,27 +1204,25 @@ def _assemble_module_versions(
 def _assemble_module_version_identities(
     version_rows: Sequence[tuple[Any, ...]],
     periods_by_version: dict[UUID, list[CatalogueCurriculumPeriod]],
+    names_by_version: dict[UUID, dict[str, str]],
 ) -> dict[UUID, list[CatalogueModuleVersionIdentity]]:
     """Map each module-version projection row into its ordered detached identity DTO."""
     versions_by_module: dict[UUID, list[CatalogueModuleVersionIdentity]] = defaultdict(list)
     for (
         version_id,
         module_id,
-        sisu_module_id,
+        source_version_id,
         module_type,
         code,
-        name_fi,
-        name_en,
         validity_start,
         validity_end,
     ) in version_rows:
         versions_by_module[module_id].append(
             CatalogueModuleVersionIdentity(
-                sisu_module_id=sisu_module_id,
+                source_version_id=source_version_id,
                 module_type=module_type,
                 code=code,
-                name_fi=name_fi,
-                name_en=name_en,
+                names=names_by_version[version_id],
                 validity_start=validity_start,
                 validity_end=validity_end,
                 curriculum_periods=tuple(periods_by_version[version_id]),

@@ -9,28 +9,30 @@ Every class in the table below lives in `src/course_explorer/config.py` and subc
 | Class | TOML file | Purpose |
 |---|---|---|
 | `WebAppSettings` | `config/web.toml` | The one external app address shared by the administration App link and the feedback exact-site boundary, with its derived origin |
-| `WebSettings` | `config/web.toml` | The inherited app address, loopback bind, process count and malloc arena cap, child respawn bounds, browser-drawing limit, the two retained-cache byte regions, the four request-input bounds, and the two served feature switches |
+| `InstanceSettings` | `config/web.toml` | The one configured university instance key, its optional `INSTANCE_DISPLAY_LABEL` override and read-only `display_label` property, its mapped display metadata, its one source block and its curriculum source attribution statements |
+| `WebSettings` | `config/web.toml` | The inherited app address, instance key and display label, loopback bind, process count and malloc arena cap, child respawn bounds, browser-drawing limit, the two retained-cache byte regions, the four request-input bounds, and the three served feature switches |
 | `UsageSettings` | `config/web.toml` | The retention window of the per-request usage records |
 | `AdmissionSettings` | `config/admission.toml`, and `config/web.toml` for the shared `WEB_WORKERS` key | The front router's admission policy of the read-only API and the shared `WEB_WORKERS` worker count |
-| `AdminWebSettings` | `config/admin_web.toml`, and `config/web.toml` for the inherited app address | Administration loopback bind, exact HTTPS origin, session lifetimes, the anonymous session creation limit, the command-log entry limit, the console poll interval, the GitHub repository address and the console's App link address |
+| `AdminWebSettings` | `config/admin_web.toml`, and `config/web.toml` for the inherited app address, instance key and display label | Administration loopback bind, exact HTTPS origin, session lifetimes, the anonymous session creation limit, the command-log entry limit, the console poll interval, the GitHub repository address, the console's App link address and the site's display label |
 | `DatabaseSettings` | `config/database.toml` | Curriculum PostgreSQL connection components, the configured example database name, and the administrative state root |
+| `SharedStorageSettings` | `config/database.toml` | The machine-wide directory outside the checkout that the example workflow creates or adopts, as an absolute or home-prefixed path |
 | `FeedbackSettings` | `config/feedback.toml` | The feedback application store connection and the attachment root |
 | `FeedbackIntakeSettings` | `config/web.toml` for the inherited app address, `config/feedback.toml` for the destination and intake policy | The feedback site origin derived from the app address, destination repository and visibility, the two hourly submission allowances and the request body bound |
 | `FeedbackDestinationSettings` | `config/feedback.toml` | The destination repository and visibility shared by the intake and sender families |
 | `FeedbackSenderCredentialsSettings` | `config/feedback.toml` for the timeout, the environment file for `FEEDBACK_GITHUB_TOKEN` | The required sender token and the bound of one GitHub publication attempt |
 | `FeedbackSenderSettings` | The destination and the credential families | The sender's destination, credential and attempt timeout composed together |
-| `AdministrativeDatasetSettings` | `config/database.toml` with the derived prefixes in `config/worker.toml` | Dataset-role state root, the two derived database-name prefixes, and the database operation timeout `ADMIN_DATABASE_OPERATION_TIMEOUT_SECONDS` |
+| `AdministrativeDatasetSettings` | `config/database.toml` for the dataset-role state root, `config/worker.toml` for the two database-name prefixes and the operation timeout | Dataset-role state root, the two derived database-name prefixes, and the database operation timeout `ADMIN_DATABASE_OPERATION_TIMEOUT_SECONDS` |
 | `AdministrativeSiteSettings` | `config/admin_web.toml` | The two systemd service identities of this site's web and administration processes, and the manager scope of the feature web unit |
 | `CaptureSettings` | `config/curriculum.toml` | Raw capture location and checkpoint response count |
-| `KoriSettings` | `config/curriculum.toml` | Anonymous public Kori source, batching, retry, and academic-year bounds |
-| `NormalizationSettings` | `config/curriculum.toml` | Current academic year, activity window, and course-guide base |
+| `KoriSettings` | `config/curriculum.toml`, and `config/web.toml` for the inherited instance key | The shared anonymous public request policy of every source family, batching, retry, pacing, and academic-year bounds, with the active source block's facts derived from the instance map |
+| `NormalizationSettings` | `config/curriculum.toml`, and `config/web.toml` for the inherited instance key | Current academic year and activity window, with the course-guide base derived from the instance map |
 | `LocalLifecycleSettings` | `config/curriculum.toml` and `config/search.toml` for state roots, `config/worker.toml` for timing | Local stage state roots and bounded startup, polling, and stop policy |
 | `EmbeddingRuntimeSettings` | `config/search.toml` | Loopback embedding runtime, generation chunking, and pinned artifact identity |
-| `SearchSettings` | `config/search.toml` | Search tier order, the request policy of one search query embedding, comparison thresholds, recommendation policy, and the route compact-node limit |
+| `SearchSettings` | `config/search.toml` | Search tier order, the request policy of one search query embedding, comparison thresholds, recommendation policy, the route compact-node limit, and the assumed course credit value |
 | `TranslationSettings` | `config/translation.toml` | Loopback translation runtime, model identity, and generation limits |
 | `TranslationControllerSettings` | `config/translation.toml` for its own root and attempts, `config/worker.toml` for the connection base | Translation controller state root and health attempts |
 | `InferenceSettings` | `config/inference.toml` | Loopback generation runtime, the two local fit keys, and closed policy literals |
-| `InferenceContextSettings` | `config/inference.toml` | Multiview evaluation fields and the fusion rank offset |
+| `InferenceContextSettings` | `config/inference.toml` | Multiview evaluation fields, the fusion rank offset, and the optional target and pool prompt field overrides |
 | `InferenceSelectionSettings` | `config/inference.toml` | Embedding pool depth and final candidate ceiling |
 | `InferenceRerankSettings` | `config/inference.toml` | Loopback cross-encoder runtime and its serving contract |
 | `InferenceRerankInputSettings` | `config/inference.toml` | Cross-encoder query and document bounds and text layout |
@@ -54,10 +56,10 @@ The search command projects the query embedding request policy onto the embeddin
 4. The projected subsystem-file values, a callable that reads them through `configuration.read_public_configuration`.
 5. Each field's own code default.
 
-Each configurable field declares a `validation_alias`, and the alias is the configuration key. A field fixed in the code declares none, such as `embedding_dimension` on `EmbeddingRuntimeSettings`. The excerpt below shows the fields `WebSettings` declares, in addition to the inherited `WEB_APP_URL` field, before its host and port validators.
+Each configurable field declares a `validation_alias`, and the alias is the configuration key. A field fixed in the code declares none, such as `embedding_dimension` on `EmbeddingRuntimeSettings`. The excerpt below shows the fields `WebSettings` declares, in addition to the inherited `WEB_APP_URL` and `INSTANCE_KEY` fields, before its host and port validators.
 
 ```python
-class WebSettings(WebAppSettings):
+class WebSettings(WebAppSettings, InstanceSettings):
     model_config = SettingsConfigDict(extra="ignore", env_prefix="")
 
     web_host: str = Field(validation_alias="WEB_HOST")
@@ -71,6 +73,7 @@ class WebSettings(WebAppSettings):
     )
     embeddings_enabled: bool = Field(validation_alias="WEB_EMBEDDINGS_ENABLED")
     inference_enabled: bool = Field(validation_alias="WEB_INFERENCE_ENABLED")
+    prerequisites_enabled: bool = Field(validation_alias="WEB_PREREQUISITES_ENABLED")
     web_next_course_report_cache_bytes: int = Field(
         validation_alias="WEB_NEXT_COURSE_REPORT_CACHE_BYTES", gt=0
     )
@@ -87,13 +90,35 @@ class WebSettings(WebAppSettings):
 
 `WEB_MALLOC_ARENA_MAX` requires a positive integer and is the number of glibc malloc arenas per web process. The launcher adds it to the child environment as `MALLOC_ARENA_MAX`, which glibc reads at process start, and the front router and every forked worker inherit it. The example sets 2.
 
-`WEB_EMBEDDINGS_ENABLED` and `WEB_INFERENCE_ENABLED` are required booleans with no code default, so a site states both values in its own `config/web.toml`. The example file sets both to `true`. The four request-input bounds `WEB_REQUEST_MAX_COURSE_ITEMS`, `WEB_REQUEST_MAX_IDENTIFIER_LENGTH`, `WEB_REQUEST_MAX_QUERY_LENGTH` and `WEB_REQUEST_BODY_MAX_BYTES` each require a positive value, and `web_request_body_max_bytes` is the bound the front router reads for every request body except the feedback submission. The feedback path reads its own bound, `FEEDBACK_MAX_REQUEST_BYTES` in `config/feedback.toml`.
+`WEB_EMBEDDINGS_ENABLED`, `WEB_INFERENCE_ENABLED` and `WEB_PREREQUISITES_ENABLED` are required booleans with no code default, so a site states all three values in its own `config/web.toml`. The example file sets all three to `true`. The example workflow writes the embedding and inference switches to `false` into a checkout it prepares, and it writes the prerequisites switch on for the Sisu source family and off for every other family. The four request-input bounds `WEB_REQUEST_MAX_COURSE_ITEMS`, `WEB_REQUEST_MAX_IDENTIFIER_LENGTH`, `WEB_REQUEST_MAX_QUERY_LENGTH` and `WEB_REQUEST_BODY_MAX_BYTES` each require a positive value, and `web_request_body_max_bytes` is the bound the front router reads for every request body except the feedback submission. The feedback path reads its own bound, `FEEDBACK_MAX_REQUEST_BYTES` in `config/feedback.toml`.
 
 The supervisor resolves one `ServingSettings` bundle and every worker reads it instead of loading a family or resolving the pointer itself. The bundle holds the `WebSettings` value, the `SearchSettings` value, the `EmbeddingRuntimeSettings` value or `None` on a site with embedding features off, the configured academic year start, the resolved serving dataset, the embedding configuration identity and the shared query-embedding client. The identity and the client are `None` on a site with the embedding features off. The resolved dataset carries its connection settings and its serving identity. [Web supervisor](/docs/backend/interfaces/web-supervisor.md#startup-and-validation) states where the bundle is built, and [Serving state](/docs/backend/interfaces/serving-state.md) states what the dataset value supplies.
 
 `WebAppSettings` declares the required `WEB_APP_URL` field with `validate_web_app_url`, and its read-only `web_app_origin` property returns that value without its optional root slash. The validator strips that one slash and delegates to `_require_exact_origin` with the loopback-HTTP allowance, so the address is one root HTTP or HTTPS address with no credentials, wildcard, whitespace, query or fragment, and HTTPS is required unless the hostname is `localhost`, `127.0.0.1` or `::1`. The value is kept as it is spelled for the App link, while the property supplies the exact origin. `WebSettings`, `AdminWebSettings` and `FeedbackIntakeSettings` subclass it, so one alias serves all three consumers and `CONFIGURATION_SETTINGS_FAMILIES` needs no separate base entry.
 
-`AdminWebSettings` declares `ADMIN_WEB_HOST`, `ADMIN_WEB_PORT`, `ADMIN_WEB_ORIGIN`, `ADMIN_WEB_SESSION_IDLE_MINUTES`, `ADMIN_WEB_SESSION_MAX_HOURS`, `ADMIN_WEB_ANONYMOUS_SESSION_LIMIT`, `ADMIN_WEB_ANONYMOUS_SESSION_WINDOW_SECONDS`, `ADMIN_WEB_COMMAND_LOG_LIMIT`, `ADMIN_WEB_POLL_SECONDS` and `ADMIN_WEB_REPOSITORY_URL`, and it inherits `WEB_APP_URL`. The host validator reuses the loopback predicate, the port validator reuses the TCP-port predicate, the two session lifetimes, the anonymous-session count and window, the log limit and the poll interval must be positive, and `ADMIN_WEB_ORIGIN` must be one exact `https://` origin whose spelling equals `https://` plus its parsed netloc. `ADMIN_WEB_REPOSITORY_URL` is one HTTPS GitHub owner and repository address. `AdministrativeSiteSettings` declares `ADMIN_SITE_WEB_SERVICE_UNIT`, `ADMIN_SITE_ADMIN_SERVICE_UNIT` and `ADMIN_SITE_WEB_SERVICE_SCOPE`, which it reads from the same file. The administration backend loads this family in its own process through the ordinary automatic composition, so no administration key travels the web launcher's allowlist.
+`InstanceSettings` declares the required `INSTANCE_KEY` field. `universities.toml` at the repository root is the sole finite table from a key to the university's English and Finnish display names, its source block, its curriculum source attribution statements and its language policy: the ordered official languages, the display fallback per interface language, the translation priority map and the inference language/origin list. The loader in `src/course_explorer/instance.py` reads it at package load and converts its arrays and tables to the metadata types.
+
+It rejects a missing required value, an unknown source family or variant, a missing or doubled source block, an empty period list, a period that does not end after it starts, and a malformed language policy.
+
+Each entry carries exactly one source block. A `SisuSourceMetadata` block holds the Kori base, the university root identity, the first academic year and the course-guide base. A `PeppiLegacySourceMetadata` block holds the API origin, the guide origin, the discovery variant, the published curriculum periods and the course-page templates indexed by language. A `PeppiPsgSourceMetadata` block holds the API origin, the guide origin, the published academic years and the course-page template. A `GuideSourceMetadata` block holds the guide origin, the fetch variant, which is `plain_http` or `headless_browser`, and the published one-year periods. The `source_attribution_en` and `source_attribution_fi` fields hold one attribution statement per language for the footer, and the features response transports them under `source_attribution`.
+
+The validator refuses a key outside it with a key-only error, and it rejects a malformed policy or a missing or doubled source block at the map boundary. The read-only `university` property returns the mapped metadata.
+
+`WebSettings`, `AdminWebSettings`, `KoriSettings` and `NormalizationSettings` inherit the family, so both serving processes and the ingestion families read the same key, and `load_instance_settings()` loads it alone for setup generation.
+
+`language_policy_overrides()` returns only the official-language and translation-priority values and canonicalized inference pairs that differ from the Finnish/English baseline, so a default entry adds nothing to a compatibility identity. The inference cycle and retained-session fingerprints read only `inference_language_policy_overrides()`, which selects the official-language list and canonicalized inference pairs. Translation priority belongs to the translation fingerprint.
+
+The map also holds each university's default target and pool prompt field selection. It names each entry's study-plan import script and the formats the site offers, and the loader rejects an unknown script or format, a repeated format, a format outside the entry's source family, a configured script without its platform's capture format and a capture format without its script.
+
+`InferenceContextSettings.resolved_target_fields` and `resolved_pool_fields` return an instance's optional override or the map default, and `prompt_field_policy` adds the selection to the inference cycle and retained-session identities only when it differs from the name, content and outcomes baseline.
+
+`KoriSettings` reads the active source block's facts through read-only properties. `kori_base_url`, `university_id` and `kori_first_academic_year` return the Sisu block's values and raise one clear error when the configured entry has no Sisu block. `first_academic_year_start` returns the Sisu block's first year for that family and the first mapped period start of the configured Peppi legacy, Peppi PSG or guide family otherwise. `NormalizationSettings` reads the active block's guide base through the mapped `course_guide_base_url`. Those values are therefore outside every settings source: a constructor value or a process value cannot replace them, and a change of `INSTANCE_KEY` is the one way to change the source an instance reads. `KoriSettings` declares the remaining request policy, including `KORI_REQUEST_INTERVAL_SECONDS`, which requires a positive finite number of seconds.
+
+`KORI_REQUEST_INTERVAL_SECONDS` is the minimum delay between source request starts across every concurrent request. The Sisu client holds one lock and the monotonic time of its last request start, so the configured interval applies to a retry and to a parallel batch in the same way. The Peppi legacy, Peppi PSG and guide clients hold the monotonic time of their last request start alone, and each waits out the interval before a request starts.
+
+`AdminWebSettings` declares `ADMIN_WEB_HOST`, `ADMIN_WEB_PORT`, `ADMIN_WEB_ORIGIN`, `ADMIN_WEB_SESSION_IDLE_MINUTES`, `ADMIN_WEB_SESSION_MAX_HOURS`, `ADMIN_WEB_ANONYMOUS_SESSION_LIMIT`, `ADMIN_WEB_ANONYMOUS_SESSION_WINDOW_SECONDS`, `ADMIN_WEB_COMMAND_LOG_LIMIT`, `ADMIN_WEB_POLL_SECONDS` and `ADMIN_WEB_REPOSITORY_URL`, and it inherits `WEB_APP_URL` and `INSTANCE_KEY`. The host validator reuses the loopback predicate, the port validator reuses the TCP-port predicate, the two session lifetimes, the anonymous-session count and window, the log limit and the poll interval must be positive, and `ADMIN_WEB_ORIGIN` must be one exact `https://` origin whose spelling equals `https://` plus its parsed netloc. `ADMIN_WEB_REPOSITORY_URL` is one HTTPS GitHub owner and repository address.
+
+`AdministrativeSiteSettings` declares `ADMIN_SITE_WEB_SERVICE_UNIT`, `ADMIN_SITE_ADMIN_SERVICE_UNIT` and `ADMIN_SITE_WEB_SERVICE_SCOPE`, which it reads from the same file. The administration backend loads this family in its own process through the ordinary automatic composition, so no administration key travels the web launcher's allowlist.
 
 `LocalConfigurationSource` subclasses `EnvSettingsSource` and replaces only the value mapping, reading `configuration.read_local_configuration`. `read_public_configuration` selects exactly the aliases a class declares and reads no other file.
 
@@ -103,7 +128,9 @@ Setting `COURSE_EXPLORER_SETTINGS_SOURCE=environment` makes `settings_customise_
 
 The seven families are the raw database, normalization, search, web, admission, feedback connection and feedback intake settings. A site with embedding features off therefore composes no embedding family, while its supervisor opens the artifact build for the catalogue and study fragments alone. A site that serves them opens the hub pair, the shared stores and the packed search group count beside those two files.
 
-The launcher hands over no `UsageSettings` value, because the retention key belongs to the usage report alone, it supplies one value for the shared `WEB_WORKERS` key that both settings families read, and it supplies one `WEB_APP_URL` value that the web and feedback intake families both read. It forwards no `FEEDBACK_GITHUB_TOKEN`, `FEEDBACK_GITHUB_TIMEOUT_SECONDS`, administration key or worker key. A feedback request reads `config/feedback-form.json` through the feedback service, because that file is the feedback definition rather than a settings source.
+The launcher hands over no `UsageSettings` value, because the retention key belongs to the usage report alone, it supplies one value for the shared `WEB_WORKERS` key that both settings families read, and it supplies one `WEB_APP_URL` value that the web and feedback intake families both read. The configured `INSTANCE_KEY` travels with the web family. It forwards no `FEEDBACK_GITHUB_TOKEN`, `FEEDBACK_GITHUB_TIMEOUT_SECONDS`, administration key or worker key. A feedback request reads `config/feedback-form.json` through the feedback service, because that file is the feedback definition rather than a settings source.
+
+`SharedStorageSettings` declares the required `ADMIN_SHARED_ROOT` field. The `validate_shared_root` validator expands a leading `~/` against the home directory and refuses a blank or relative value. `load_shared_storage_settings()` reads it through the automatic composition, and the example workflow resolves the path, requires it outside the checkout and creates it with its parents and its `models` and `locks` directories when absent. Its `models_root` and `locks_root` properties derive those two directories from the one configured root, and `resolve_embedding_artifact` places a relative `EMBEDDING_ARTIFACT_PATH` inside the shared directory while an absolute path is used as written. The worker model paths keep their configured absolute or worker-checkout-relative meaning. The class is a member of `CONFIGURATION_SETTINGS_FAMILIES`, so the configuration editor saves the key through the family that owns it.
 
 ## The paired database resolver
 
@@ -135,7 +162,7 @@ Cross-field checks that a reader is most likely to meet:
 
 | Class | Check |
 |---|---|
-| `KoriSettings` | The first academic year must not exceed the current academic year |
+| `KoriSettings` | The mapped first academic year must not exceed `CURRENT_ACADEMIC_YEAR`, and `KORI_REQUEST_INTERVAL_SECONDS` must be a positive finite number |
 | `EmbeddingRuntimeSettings` | `EMBEDDING_CHUNK_OVERLAP_CHARACTERS` must be smaller than `EMBEDDING_CHUNK_MAX_CHARACTERS` |
 | `TranslationSettings` | `TRANSLATION_MAX_TOKENS` must be smaller than `TRANSLATION_CONTEXT_SIZE` |
 | `InferenceSettings` | Exactly two ordered local fit keys, unique alias and port, increasing context, MTP count on the first key only |
@@ -145,12 +172,13 @@ Cross-field checks that a reader is most likely to meet:
 | `InferenceRerankSettings` | `INFERENCE_RERANK_BATCH_SIZE` must not exceed `INFERENCE_RERANK_CONTEXT_SIZE`, and the artifact path basename must equal `INFERENCE_RERANK_ARTIFACT_FILE` |
 | `AdministrativeDatasetSettings` | The dataset and worker database prefixes must be distinct |
 | `WebAppSettings` | `WEB_APP_URL` must be one root HTTP or HTTPS address whose origin, without the optional root slash, matches its parsed scheme and netloc, with HTTPS unless the hostname is a loopback host |
+| `SharedStorageSettings` | `ADMIN_SHARED_ROOT` must be nonblank and absolute, or begin with `~/` |
 | `AdminWebSettings` | `ADMIN_WEB_ORIGIN` must be one exact HTTPS origin without credentials, path, query or fragment, and its spelling must equal its parsed scheme and netloc. `ADMIN_WEB_REPOSITORY_URL` must be one HTTPS GitHub owner and repository address. The inherited `WEB_APP_URL` follows the `WebAppSettings` rule |
 | `SearchSettings` | `SEARCH_TIER_PRIORITY` must contain all four search methods once, and each comparison threshold must be below its upper neighbour |
 | `WebSettings` | The report region `WEB_NEXT_COURSE_REPORT_CACHE_BYTES`, the query-embedding region `WEB_QUERY_EMBEDDING_CACHE_BYTES` and the four request-input bounds must be positive |
 | `AdmissionSettings` | `ADMISSION_ENABLED` requires `WEB_WORKERS` of at least 2, `ADMISSION_SCORE_HEADROOM` must be at most `ADMISSION_SCORE_RELEASE`, which must be below `ADMISSION_SCORE_SATURATION`, and each cost curve's knee basis must be above its origin basis |
 
-Field-level checks bound ports to 1 to 65535, require loopback hosts, require absolute worker paths and repository-relative state roots, and require lowercase 40-character revisions and 64-character SHA-256 identities.
+Field-level checks bound ports to 1 to 65535, require loopback hosts, require absolute worker paths and repository-relative state roots, accept absolute or checkout-relative inference and rerank artifact paths, and require lowercase 40-character revisions and 64-character SHA-256 identities.
 
 ## The configuration editor
 
@@ -160,7 +188,11 @@ The families in `CONFIGURATION_SETTINGS_FAMILIES` of `src/course_explorer/config
 
 `FeedbackSettings` owns the feedback connection and attachment-root keys of the registered `config/feedback.toml`, and `FeedbackIntakeSettings` owns its destination and intake keys and inherits the `WEB_APP_URL` key of `config/web.toml`, so those keys are editable in the same way. The feedback definition is not a TOML file, so the editor neither lists nor writes it.
 
-`AdministrativeSiteSettings` declares the two service unit names and `ADMIN_SITE_WEB_SERVICE_SCOPE`, whose only values are `user` and `system` and whose default is `user`. `WebSettings` inherits the app address from `WebAppSettings` and owns the two web feature-switch keys and `UsageSettings` owns the web file's usage-retention key, so the editor reads and saves them like any other key of `config/web.toml`. An edit of `WEB_APP_URL` validates through `WebSettings`, `AdminWebSettings` and `FeedbackIntakeSettings`, the three families that inherit it.
+`AdministrativeSiteSettings` declares the two service unit names and `ADMIN_SITE_WEB_SERVICE_SCOPE`, whose only values are `user` and `system` and whose default is `user`. `SharedStorageSettings` owns `ADMIN_SHARED_ROOT` of `config/database.toml`. `InstanceSettings` owns `INSTANCE_KEY` and the optional `INSTANCE_DISPLAY_LABEL` and exposes the read-only `display_label` property, and `WebSettings` inherits the app address from `WebAppSettings` and the instance key and display label property from `InstanceSettings`, so those keys and the three web feature-switch keys are editable in `config/web.toml`, and `UsageSettings` owns the web file's usage-retention key.
+
+An edit of `WEB_APP_URL` validates through `WebSettings`, `AdminWebSettings` and `FeedbackIntakeSettings`, the three families that inherit it. An edit of `INSTANCE_KEY` validates through `InstanceSettings`, `WebSettings`, `AdminWebSettings`, `KoriSettings` and `NormalizationSettings`, which all inherit the key. An edit of `INSTANCE_DISPLAY_LABEL` validates through the same five families.
+
+The example workflow names its checkout `course-explorer-<key>` and accepts an optional wrapper-supplied suffix that joins both the checkout name and the generated user-unit names.
 
 `AdmissionSettings` owns the admission keys of `config/admission.toml`, and an edit of the shared `WEB_WORKERS` key validates both `WebSettings` and `AdmissionSettings`. `AdminWebSettings` owns the 10 administration keys of the registered `config/admin_web.toml`, and `AdministrativeSiteSettings` owns the three site keys, so those 13 keys are editable in the same way.
 
@@ -174,7 +206,7 @@ A subsystem-file candidate omits every local name whose lowercase spelling match
 
 ## The Compose environment file
 
-`src/course_explorer_admin/compose.py` owns the one generated environment file for Docker Compose. `compose_environment()` projects `load_raw_database_settings()` and `load_embedding_runtime_settings()` onto the interpolation aliases in `docker-compose.yml`. `_write_bridge` writes `compose.env` with `os.open(..., 0o600)` inside a `tempfile.mkdtemp` directory changed to mode 0700, and `main` passes it as `--env-file` to `sudo docker compose`. `_quote_bridge_value` renders each value in single quotes, rejects a value carrying a line break, and escapes an inner quote. A caller-supplied `COMPOSE_PROJECT_NAME` is forwarded as `--project-name` rather than written into the file. The `finally` block removes the directory after the subprocess returns.
+`src/course_explorer_admin/compose.py` owns the one generated environment file for Docker Compose. `compose_environment()` projects `load_raw_database_settings()`, `load_embedding_runtime_settings()` and `load_instance_settings()` onto the interpolation aliases in the runtime and example Compose files. It derives `COURSE_EXPLORER_PROJECT_NAME` as `course-explorer-<instance key>`, which the example Compose file uses as its project name. `_write_bridge` writes `compose.env` with `os.open(..., 0o600)` inside a `tempfile.mkdtemp` directory changed to mode 0700, and `main` passes it as `--env-file` to `sudo docker compose`. `_quote_bridge_value` renders each value in single quotes, rejects a value carrying a line break, and escapes an inner quote. A caller-supplied `COMPOSE_PROJECT_NAME` is forwarded as `--project-name` rather than written into the file. The `finally` block removes the directory after the subprocess returns.
 
 ## Adding a setting
 

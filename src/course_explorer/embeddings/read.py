@@ -32,8 +32,8 @@ from course_explorer.db.models import (
 from course_explorer.embeddings.hub import subtract_hub, subtract_hub_for_field
 from course_explorer.enums import (
     CourseEmbeddingStatus,
+    LanguageCode,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
 )
 
@@ -57,12 +57,12 @@ class TeachingEmbeddingChunk:
     chunk_id: uuid.UUID
     group_id: str
     field: TeachingTextField
-    language: TeachingTextLanguage
+    language: LanguageCode
     chunk_index: int
     text_origin: TeachingTextOrigin
     character_count: int
     embedding: Sequence[float] | numpy.ndarray
-    sisu_course_unit_id: str = ""
+    source_version_id: str = ""
     representative_source_hash: str = ""
 
 
@@ -94,7 +94,7 @@ class TeachingEmbeddingNeighbor:
     """One request-local nearest stored chunk hit for one representative triple."""
 
     group_id: str
-    sisu_course_unit_id: str
+    source_version_id: str
     representative_source_hash: str
 
 
@@ -116,7 +116,7 @@ class TeachingEmbeddingRepository:
 
         An empty request returns `()` before opening a session. Otherwise column-projected
         statements join `course_embedding_chunks -> course_versions -> courses`, scoped by the exact
-        requested `(group_id, sisu_course_unit_id, representative_source_hash)` triples in sorted
+        requested `(group_id, source_version_id, representative_source_hash)` triples in sorted
         batches of `_REQUEST_BATCH_SIZE`, so a whole-catalogue request stays within the database's
         expression depth. Each course has one requested triple, so the batches concatenate in
         order. The read returns only completed, non-null, exact-configuration rows. A missing
@@ -152,7 +152,7 @@ class TeachingEmbeddingRepository:
         requested = {
             (
                 record.summary.group_id,
-                record.sisu_course_unit_id,
+                record.source_version_id,
                 record.source_hash,
             )
             for record in represented
@@ -181,7 +181,7 @@ class TeachingEmbeddingRepository:
             select(
                 CourseEmbeddingChunk.id,
                 Course.group_id,
-                CourseVersion.sisu_course_unit_id,
+                CourseVersion.source_version_id,
                 CourseEmbeddingChunk.representative_source_hash,
                 CourseEmbeddingChunk.field,
                 CourseEmbeddingChunk.language,
@@ -195,7 +195,7 @@ class TeachingEmbeddingRepository:
             .where(
                 tuple_(
                     Course.group_id,
-                    CourseVersion.sisu_course_unit_id,
+                    CourseVersion.source_version_id,
                     CourseEmbeddingChunk.representative_source_hash,
                 ).in_(tuple(requested)),
                 CourseEmbeddingChunk.status == CourseEmbeddingStatus.COMPLETED,
@@ -211,7 +211,7 @@ class TeachingEmbeddingRepository:
         )
         return tuple(
             (
-                (group_id, sisu_course_unit_id, representative_source_hash),
+                (group_id, source_version_id, representative_source_hash),
                 TeachingEmbeddingChunk(
                     chunk_id=chunk_id,
                     group_id=group_id,
@@ -221,14 +221,14 @@ class TeachingEmbeddingRepository:
                     text_origin=text_origin,
                     character_count=character_count,
                     embedding=numpy.asarray(embedding, dtype=numpy.float64),
-                    sisu_course_unit_id=sisu_course_unit_id,
+                    source_version_id=source_version_id,
                     representative_source_hash=representative_source_hash,
                 ),
             )
             for (
                 chunk_id,
                 group_id,
-                sisu_course_unit_id,
+                source_version_id,
                 representative_source_hash,
                 field,
                 language,
@@ -273,7 +273,7 @@ class TeachingEmbeddingRepository:
             select(
                 query_values.c.query_index.label("query_index"),
                 Course.group_id.label("group_id"),
-                CourseVersion.sisu_course_unit_id.label("sisu_course_unit_id"),
+                CourseVersion.source_version_id.label("source_version_id"),
                 CourseEmbeddingChunk.representative_source_hash.label("source_hash"),
                 CourseEmbeddingNeighbor.score.label("score"),
                 func.row_number()
@@ -308,11 +308,11 @@ class TeachingEmbeddingRepository:
         statement = (
             select(
                 ranked.c.group_id,
-                ranked.c.sisu_course_unit_id,
+                ranked.c.source_version_id,
                 ranked.c.source_hash,
             )
             .where(ranked.c.position <= top_k)
-            .group_by(ranked.c.group_id, ranked.c.sisu_course_unit_id, ranked.c.source_hash)
+            .group_by(ranked.c.group_id, ranked.c.source_version_id, ranked.c.source_hash)
         )
         with self._factory() as session:
             rows = tuple(session.execute(statement))

@@ -44,6 +44,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from course_explorer.constants import COURSE_EMBEDDING_DIMENSION
 from course_explorer.enums import (
+    LANGUAGE_CODE_PATTERN,
     CourseEmbeddingStatus,
     InferenceWorkStatus,
     InferredCoverageState,
@@ -51,15 +52,16 @@ from course_explorer.enums import (
     IngestionRunStatus,
     ModuleRuleType,
     ModuleType,
+    OfficialTextField,
     PrerequisiteMemberType,
     PrerequisiteRequirementKind,
     SourceObjectType,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
     TranslationMethod,
 )
 
+# SQLAlchemy naming templates for index, unique, check, foreign-key and primary-key names.
 NAMING_CONVENTION = {
     "ix": "ix_%(table_name)s_%(column_0_name)s",
     "uq": "uq_%(table_name)s_%(column_0_name)s",
@@ -188,11 +190,11 @@ class Course(Base):
 
 
 class CourseVersion(Base):
-    """One exact Kori course-unit version linked to canonical course identity."""
+    """One exact course-unit version linked to canonical course identity."""
 
     __tablename__ = "course_versions"
     __table_args__ = (
-        _not_blank("sisu_course_unit_id"),
+        _not_blank("source_version_id"),
         _not_blank("code"),
         _not_blank("official_url"),
         _not_blank("document_state"),
@@ -215,14 +217,12 @@ class CourseVersion(Base):
     course_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("courses.id", ondelete="RESTRICT")
     )
-    sisu_course_unit_id: Mapped[str] = mapped_column(Text, unique=True)
+    source_version_id: Mapped[str] = mapped_column(Text, unique=True)
     code: Mapped[str] = mapped_column(Text)
-    name_fi: Mapped[str | None] = mapped_column(Text, nullable=True)
-    name_en: Mapped[str | None] = mapped_column(Text, nullable=True)
-    credits_min: Mapped[float] = mapped_column(Numeric(6, 2))
+    credits_min: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
     credits_max: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
     official_url: Mapped[str] = mapped_column(Text)
-    document_state: Mapped[str] = mapped_column(Text)
+    document_state: Mapped[str | None] = mapped_column(Text, nullable=True)
     validity_start: Mapped[date | None] = mapped_column(Date, nullable=True)
     validity_end: Mapped[date | None] = mapped_column(Date, nullable=True)
     source_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -249,29 +249,47 @@ class CourseVersionCurriculumPeriod(Base):
     )
 
 
-class CourseText(Base):
-    """Localized source text attached to one exact course version."""
+class OfficialCourseText(Base):
+    """One official course-version text cell for a field and official language."""
 
-    __tablename__ = "course_texts"
+    __tablename__ = "official_course_texts"
+    __table_args__ = (
+        CheckConstraint(f"language ~ '{LANGUAGE_CODE_PATTERN}'", name="language_canonical"),
+    )
 
     course_version_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("course_versions.id", ondelete="CASCADE"), primary_key=True
     )
-    content_fi: Mapped[str | None] = mapped_column(Text, nullable=True)
-    content_en: Mapped[str | None] = mapped_column(Text, nullable=True)
-    outcomes_fi: Mapped[str | None] = mapped_column(Text, nullable=True)
-    outcomes_en: Mapped[str | None] = mapped_column(Text, nullable=True)
-    prerequisite_text_fi: Mapped[str | None] = mapped_column(Text, nullable=True)
-    prerequisite_text_en: Mapped[str | None] = mapped_column(Text, nullable=True)
-    additional_info_fi: Mapped[str | None] = mapped_column(Text, nullable=True)
-    additional_info_en: Mapped[str | None] = mapped_column(Text, nullable=True)
+    field: Mapped[OfficialTextField] = mapped_column(
+        _enum(OfficialTextField, "official_text_field"), primary_key=True
+    )
+    language: Mapped[str] = mapped_column(Text, primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+
+
+class OfficialModuleText(Base):
+    """One official module-version name cell for an official language."""
+
+    __tablename__ = "official_module_texts"
+    __table_args__ = (
+        CheckConstraint("field = 'name'", name="field_name_only"),
+        CheckConstraint(f"language ~ '{LANGUAGE_CODE_PATTERN}'", name="language_canonical"),
+    )
+
+    module_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("module_versions.id", ondelete="CASCADE"), primary_key=True
+    )
+    field: Mapped[str] = mapped_column(Text, primary_key=True)
+    language: Mapped[str] = mapped_column(Text, primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
 
 
 class DerivedCourseText(Base):
     """Explicitly derived translation of one teaching-text field for an exact course version.
 
-    Rows record their own provenance and never write into `course_versions` names or
-    `course_texts`. Official and derived text are never merged into one field.
+    Rows record their own provenance and never write into the official text cells of
+    `official_course_texts` or `official_module_texts`. Official and derived text are never merged
+    into one field.
     """
 
     __tablename__ = "derived_course_texts"
@@ -279,6 +297,11 @@ class DerivedCourseText(Base):
         _not_blank("text"),
         _not_blank("source_text_hash"),
         CheckConstraint("source_language <> language", name="source_and_target_languages_differ"),
+        CheckConstraint(f"language ~ '{LANGUAGE_CODE_PATTERN}'", name="language_canonical"),
+        CheckConstraint(
+            f"source_language ~ '{LANGUAGE_CODE_PATTERN}'",
+            name="source_language_canonical",
+        ),
         CheckConstraint("source_text_hash ~ '^[0-9a-f]{64}$'", name="source_text_hash_sha256"),
         CheckConstraint(
             "(translation_method = 'manual' AND translation_model IS NULL) "
@@ -301,13 +324,9 @@ class DerivedCourseText(Base):
     field: Mapped[TeachingTextField] = mapped_column(
         _enum(TeachingTextField, "teaching_text_field")
     )
-    language: Mapped[TeachingTextLanguage] = mapped_column(
-        _enum(TeachingTextLanguage, "derived_target_language")
-    )
+    language: Mapped[str] = mapped_column(Text)
     text: Mapped[str] = mapped_column(Text)
-    source_language: Mapped[TeachingTextLanguage] = mapped_column(
-        _enum(TeachingTextLanguage, "derived_source_language")
-    )
+    source_language: Mapped[str] = mapped_column(Text)
     source_text_hash: Mapped[str] = mapped_column(Text)
     translation_method: Mapped[TranslationMethod] = mapped_column(
         _enum(TranslationMethod, "translation_method")
@@ -351,6 +370,7 @@ class CourseEmbeddingChunk(Base):
             name="embedding_configuration_hash_sha256",
         ),
         CheckConstraint("chunk_index >= 0", name="chunk_index_nonnegative"),
+        CheckConstraint(f"language ~ '{LANGUAGE_CODE_PATTERN}'", name="language_canonical"),
         CheckConstraint(
             "(text_origin = 'official' AND effective_text_hash = source_text_hash "
             "AND translation_method IS NULL AND translation_model IS NULL "
@@ -390,9 +410,7 @@ class CourseEmbeddingChunk(Base):
     field: Mapped[TeachingTextField] = mapped_column(
         _enum(TeachingTextField, "teaching_text_field")
     )
-    language: Mapped[TeachingTextLanguage] = mapped_column(
-        _enum(TeachingTextLanguage, "derived_target_language")
-    )
+    language: Mapped[str] = mapped_column(Text)
     chunk_index: Mapped[int] = mapped_column(Integer)
     text_origin: Mapped[TeachingTextOrigin] = mapped_column(
         _enum(TeachingTextOrigin, "teaching_text_origin")
@@ -432,7 +450,7 @@ class CourseEmbeddingCentroid(Base):
 
     __tablename__ = "course_embedding_centroids"
     __table_args__ = (
-        _not_blank("sisu_course_unit_id"),
+        _not_blank("source_version_id"),
         CheckConstraint(
             "representative_source_hash ~ '^[0-9a-f]{64}$'",
             name="representative_source_hash_sha256",
@@ -453,7 +471,7 @@ class CourseEmbeddingCentroid(Base):
         ForeignKey("courses.group_id", ondelete="CASCADE"),
         primary_key=True,
     )
-    sisu_course_unit_id: Mapped[str] = mapped_column(Text)
+    source_version_id: Mapped[str] = mapped_column(Text)
     representative_source_hash: Mapped[str] = mapped_column(Text)
     embedding_configuration_hash: Mapped[str] = mapped_column(Text)
     chunk_count: Mapped[int] = mapped_column(Integer)
@@ -507,7 +525,7 @@ class CourseEmbeddingSearchGroup(Base):
     __table_args__ = (
         UniqueConstraint(
             "group_id",
-            "sisu_course_unit_id",
+            "source_version_id",
             "representative_source_hash",
             name="uq_course_embedding_search_groups_identity",
         ),
@@ -515,7 +533,7 @@ class CourseEmbeddingSearchGroup(Base):
 
     group_no: Mapped[int] = mapped_column(Integer, primary_key=True)
     group_id: Mapped[str] = mapped_column(Text)
-    sisu_course_unit_id: Mapped[str] = mapped_column(Text)
+    source_version_id: Mapped[str] = mapped_column(Text)
     representative_source_hash: Mapped[str] = mapped_column(Text)
 
 
@@ -564,11 +582,11 @@ class Module(Base):
 
 
 class ModuleVersion(Base):
-    """One exact Kori module version, including source state and target credits."""
+    """One exact module version, including source state and target credits."""
 
     __tablename__ = "module_versions"
     __table_args__ = (
-        _not_blank("sisu_module_id"),
+        _not_blank("source_version_id"),
         _not_blank("document_state"),
         CheckConstraint(
             "(target_credits_min IS NULL OR target_credits_min >= 0) "
@@ -597,14 +615,12 @@ class ModuleVersion(Base):
     module_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("modules.id", ondelete="RESTRICT")
     )
-    sisu_module_id: Mapped[str] = mapped_column(Text, unique=True)
+    source_version_id: Mapped[str] = mapped_column(Text, unique=True)
     module_type: Mapped[ModuleType] = mapped_column(_enum(ModuleType, "module_type"))
     code: Mapped[str | None] = mapped_column(Text, nullable=True)
-    name_fi: Mapped[str | None] = mapped_column(Text, nullable=True)
-    name_en: Mapped[str | None] = mapped_column(Text, nullable=True)
     target_credits_min: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
     target_credits_max: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
-    document_state: Mapped[str] = mapped_column(Text)
+    document_state: Mapped[str | None] = mapped_column(Text, nullable=True)
     validity_start: Mapped[date | None] = mapped_column(Date, nullable=True)
     validity_end: Mapped[date | None] = mapped_column(Date, nullable=True)
     source_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)

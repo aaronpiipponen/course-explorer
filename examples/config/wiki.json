@@ -1,5 +1,5 @@
 {
-  "repositoryUrl": "https://github.com/aaronpiipponen/tuni-course-explorer",
+  "repositoryUrl": "https://github.com/aaronpiipponen/course-explorer",
   "repositoryRef": "main",
   "home": {
     "id": "home",
@@ -9,7 +9,7 @@
   "sections": [
     {
       "title": "Guides",
-      "description": "How to use the app: a first session, each tab, profiles and language, Sisu import and feedback.",
+      "description": "How to use the app: a first session, each tab, profiles and language, Sisu and Peppi import and feedback.",
       "page": {
         "id": "quickstart",
         "path": "docs/guides/README.md",
@@ -58,9 +58,21 @@
             "children": []
           },
           {
+            "id": "guide-study-plan-import",
+            "path": "docs/guides/importing-a-study-plan.md",
+            "nav": "Importing a study plan",
+            "children": []
+          },
+          {
             "id": "guide-sisu-import",
             "path": "docs/guides/sisu-import.md",
             "nav": "Importing a Sisu plan",
+            "children": []
+          },
+          {
+            "id": "guide-peppi-import",
+            "path": "docs/guides/peppi-import.md",
+            "nav": "Importing a Peppi plan",
             "children": []
           },
           {
@@ -142,6 +154,12 @@
                 "id": "ingestion",
                 "path": "docs/backend/catalogue/ingestion.md",
                 "nav": "Ingestion",
+                "children": []
+              },
+              {
+                "id": "source-families",
+                "path": "docs/backend/catalogue/source-families.md",
+                "nav": "Source families",
                 "children": []
               },
               {

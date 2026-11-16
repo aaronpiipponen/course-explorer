@@ -100,6 +100,7 @@ const makeReport = (
     element_count: 1,
   },
   dataset_identity: "dataset-a",
+  assumed_course_credits: "5",
   max_compact_nodes: 10000,
   solver: structure,
   display: null,
@@ -196,6 +197,7 @@ describe("explicit route ownership", () => {
       operation: "route",
       structure,
       basis_group_ids: [],
+      assumed_course_credits: "5",
       max_compact_nodes: 10000,
     });
     mount(inputs, report);
@@ -209,6 +211,7 @@ describe("explicit route ownership", () => {
       operation: "route",
       structure,
       basis_group_ids: [],
+      assumed_course_credits: "5",
       max_compact_nodes: 10000,
     });
     expect(calculation.terminated).toBe(false);
@@ -241,6 +244,16 @@ describe("explicit route ownership", () => {
     expect(session?.result).toBeNull();
     act(() => session?.find());
     expect(workers.instances).toHaveLength(1);
+    expect(session?.result).toEqual(response);
+
+    // The assumption is part of the route cache identity, so a changed value starts new work.
+    const policyReport = makeReport({ assumed_course_credits: "7" });
+    mount(inputs, policyReport);
+    expect(session?.result).toBeNull();
+    act(() => session?.find());
+    expect(workers.instances).toHaveLength(2);
+    expect(workers.instances[1].request?.assumed_course_credits).toBe("7");
+    await act(async () => workers.instances[1].emitResult(response));
     expect(session?.result).toEqual(response);
   });
 
@@ -288,6 +301,7 @@ describe("explicit route ownership", () => {
         operation: "route",
         structure,
         basis_group_ids: [],
+        assumed_course_credits: "5",
         max_compact_nodes: 10000,
       });
       mount(inputs, report);

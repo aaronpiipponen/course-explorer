@@ -16,10 +16,10 @@ import { useWebFeatures } from "./useWebFeatures";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { ProfileButton } from "../features/profiles/ProfileButton";
 import { LanguageSwitch } from "../shared/LanguageSwitch";
-import { DOCS_REPOSITORY_URL } from "../features/docs/repository";
 import {
   COMPARE_ICON,
   DISCOVER_ICON,
+  GITHUB_MARK,
   GRAPH_ICON,
   MORE_ICON,
   SEARCH_ICON,
@@ -121,15 +121,18 @@ const TAB_ICONS: Record<TabId, ReactElement> = {
 
 /** Render the phone tab bar and its More sheet. */
 export function PhoneTabBar({
+  repositoryUrl,
   openDocs,
   openFeedback,
 }: {
+  repositoryUrl: string;
   openDocs: () => void;
   openFeedback: () => void;
 }) {
   const storedTab = useActiveTab();
-  const { embeddings_enabled } = useWebFeatures();
-  const activeTab = effectiveTab(storedTab, embeddings_enabled);
+  const { embeddings_enabled, prerequisites_enabled } = useWebFeatures();
+  const features = { embeddings_enabled, prerequisites_enabled };
+  const activeTab = effectiveTab(storedTab, features);
   const { runAction, error } = useAction();
   const { language, t } = useWording();
   const reducedMotion = useReducedMotion();
@@ -160,7 +163,7 @@ export function PhoneTabBar({
   return (
     <>
       <nav className="phone-tabbar" aria-label={t("Main navigation")}>
-        {visibleTabs(embeddings_enabled).map((tab) => {
+        {visibleTabs(features).map((tab) => {
           const current = tab.id === activeTab;
           return (
             <button
@@ -245,6 +248,15 @@ export function PhoneTabBar({
                   <LanguageSwitch />
                   <div className="phone-more-links">
                     <a
+                      className="phone-more-docs phone-more-github"
+                      href={repositoryUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {GITHUB_MARK}
+                      {t("GitHub")}
+                    </a>
+                    <a
                       className="phone-more-docs"
                       href="/feedback"
                       onClick={(event) => {
@@ -268,10 +280,7 @@ export function PhoneTabBar({
                     </a>
                   </div>
                 </div>
-                <AppFooter
-                  repositoryUrl={DOCS_REPOSITORY_URL}
-                  measures={false}
-                />
+                <AppFooter measures={false} />
               </div>
             </div>
           </motion.section>

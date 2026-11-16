@@ -23,10 +23,14 @@ from course_explorer.config import (
     InferenceRerankSettings,
     InferenceSelectionSettings,
     InferenceSettings,
+    load_instance_settings,
 )
-from course_explorer.curriculum import CatalogueCourse, CatalogueTeachingCourse, CurriculumRead
+from course_explorer.curriculum import (
+    CatalogueTeachingCourse,
+    CurriculumRead,
+)
 from course_explorer.embeddings.generation import embedding_configuration_sha256
-from course_explorer.enums import TeachingTextField
+from course_explorer.enums import OfficialTextField, TeachingTextField, TeachingTextOrigin
 from course_explorer.inference.context import (
     InferenceCandidatePacket,
     InferenceCourseEmbeddingIdentity,
@@ -34,9 +38,9 @@ from course_explorer.inference.context import (
     InferencePacketCourse,
     InferenceSelectionReferences,
     InferenceTargetPacket,
-    _course_reference,
     _packet_course,
     catalogue_identity_sha256,
+    course_reference,
     selection_references_sha256,
 )
 from course_explorer.inference.context_repository import InferenceCandidateRepository
@@ -56,6 +60,7 @@ from course_explorer.inference.operational_selection import (
 )
 from course_explorer.inference.provider import RerankProvider
 from course_explorer.inference.target_pass import TargetGenerationProvider, run_target
+from course_explorer.instance import UniversityMetadata
 from course_explorer.teaching_text.service import (
     EffectiveCourseTeachingText,
     EffectiveTeachingTextCatalogue,
@@ -80,22 +85,26 @@ class _OperationalModel(BaseModel):
 class OperationalCatalogue(_OperationalModel):
     """One once-per-batch catalogue carrier for the operational target pipeline.
 
-    It holds the current canonical course identity, activity context, and selected representative
-    when one exists, the resolved effective teaching text for every represented course, the exact
-    represented identity universe, and the catalogue and embedding-configuration digests. The
-    course mapping accepts either canonical course model, and
-    :func:`prepare_operational_catalogue` fills it from the teaching projection. Selection and
-    packet assembly read only identity, activity, and effective teaching text. A caller builds the
-    carrier once per batch boundary and reuses it across every target, and no per-target function
-    rereads the catalogue.
+    It holds the current canonical course identity, activity context, the selected representative's
+    official text cells when one exists, the resolved effective teaching text for every represented
+    course filtered to the configured inference language/origin pairs, the full teaching-text
+    catalogue used for embedding readiness, the exact represented identity universe, the selected
+    target and pool prompt fields with the official subset of the inference languages, and the
+    catalogue and embedding-configuration digests. Selection and packet assembly read identity,
+    activity, teaching text and the selected prompt cells. A caller builds the carrier once per
+    batch boundary and reuses it across every target, and no per-target function rereads the
+    catalogue.
     """
 
-    courses_by_group: Mapping[str, CatalogueCourse | CatalogueTeachingCourse]
+    courses_by_group: Mapping[str, CatalogueTeachingCourse]
     effective_by_group: Mapping[str, EffectiveCourseTeachingText]
     teaching_text_catalogue: EffectiveTeachingTextCatalogue
     represented_courses: tuple[InferenceCourseEmbeddingIdentity, ...]
     catalogue_identity_sha256: str
     embedding_configuration_sha256: str
+    prompt_target_fields: tuple[OfficialTextField, ...]
+    prompt_pool_fields: tuple[OfficialTextField, ...]
+    prompt_official_languages: tuple[str, ...]
 
     @model_validator(mode="after")
     def validate_catalogue_shape(self) -> OperationalCatalogue:
@@ -131,7 +140,7 @@ class OperationalCatalogue(_OperationalModel):
             course = self.courses_by_group[identity.group_id]
             representative = course.representative
             if representative is None or (
-                representative.sisu_course_unit_id != identity.sisu_course_unit_id
+                representative.source_version_id != identity.source_version_id
                 or representative.source_hash != identity.representative_source_sha256
             ):
                 raise ValueError(
@@ -144,28 +153,62 @@ def prepare_operational_catalogue(
     curriculum: CurriculumRead,
     teaching_text: TeachingTextService,
     embedding_settings: EmbeddingRuntimeSettings,
+    *,
+    university: UniversityMetadata | None = None,
+    target_fields: tuple[OfficialTextField, ...] | None = None,
+    pool_fields: tuple[OfficialTextField, ...] | None = None,
 ) -> OperationalCatalogue:
     """Read the current catalogue and effective text once and derive both bound identities.
 
     This is the only operational catalogue read. It lists every course (active or not) because
-    inactive courses remain valid candidate prerequisite sources, builds the effective-text
-    catalogue once, derives the compatible embedding configuration hash, and hashes the canonical
-    identity, activity, and effective-text evidence. The result carries the group-keyed teaching
-    projection, the group-keyed effective text, the represented identities, and both digests.
+    inactive courses remain valid candidate prerequisite sources, reads each selected
+    representative's official text cells, builds the full effective-text catalogue once, derives the
+    compatible embedding configuration hash, and hashes the canonical identity, activity, and full
+    effective-text evidence. The inference projection keeps only the configured language/origin
+    pairs while retaining every represented identity, even with no allowed cell. An absent
+    prompt-field argument uses the configured university map entry's default. The result carries the
+    group-keyed prompt projection, the filtered inference text, the represented identities, the
+    prompt field selection, the official subset of the inference languages and both digests.
     """
-    courses = curriculum.list_teaching_courses(active_only=None)
+    resolved = load_instance_settings().university if university is None else university
+    allowed = set(resolved.inference_languages)
+    target_prompt_fields = (
+        resolved.inference_target_fields if target_fields is None else target_fields
+    )
+    pool_prompt_fields = resolved.inference_pool_fields if pool_fields is None else pool_fields
+    prompt_languages = tuple(
+        dict.fromkeys(
+            language
+            for language, origin in resolved.inference_languages
+            if origin is TeachingTextOrigin.OFFICIAL
+        )
+    )
+    courses = curriculum.list_prompt_courses()
     teaching_text_catalogue = teaching_text.build_catalogue(courses=courses)
     embedding_hash = embedding_configuration_sha256(embedding_settings)
     catalogue_identity = catalogue_identity_sha256(
         courses, teaching_text_catalogue, embedding_configuration_hash=embedding_hash
     )
+    effective_by_group = {
+        course.group_id: course.model_copy(
+            update={
+                "texts": tuple(
+                    cell for cell in course.texts if (cell.language, cell.origin) in allowed
+                )
+            }
+        )
+        for course in teaching_text_catalogue.courses
+    }
     return OperationalCatalogue(
         courses_by_group={course.group_id: course for course in courses},
-        effective_by_group={course.group_id: course for course in teaching_text_catalogue.courses},
+        effective_by_group=effective_by_group,
         teaching_text_catalogue=teaching_text_catalogue,
         represented_courses=represented_identities(courses),
         catalogue_identity_sha256=catalogue_identity,
         embedding_configuration_sha256=embedding_hash,
+        prompt_target_fields=target_prompt_fields,
+        prompt_pool_fields=pool_prompt_fields,
+        prompt_official_languages=prompt_languages,
     )
 
 
@@ -241,7 +284,16 @@ def materialize_selection_packet(
         effective = catalogue.effective_by_group.get(reference.group_id)
         if effective is None:
             raise ValueError(f"reference {reference.group_id} has no effective teaching text")
-        return _packet_course(candidate_course, effective)
+        return _packet_course(
+            candidate_course,
+            effective,
+            prompt_fields=(
+                catalogue.prompt_target_fields
+                if reference.group_id == references.target.group_id
+                else catalogue.prompt_pool_fields
+            ),
+            prompt_languages=catalogue.prompt_official_languages,
+        )
 
     return InferenceTargetPacket(
         packet_version="v1",
@@ -304,9 +356,9 @@ def select_operational_multiview_pool(
     if len(fused) < pool_k:
         raise TargetSelectionError("insufficient_candidates")
     references = InferenceSelectionReferences(
-        target=_course_reference(target, catalogue.effective_by_group[target_group_id]),
+        target=course_reference(target, catalogue.effective_by_group[target_group_id]),
         candidates=tuple(
-            _course_reference(
+            course_reference(
                 catalogue.courses_by_group[entry.match.course.group_id],
                 catalogue.effective_by_group[entry.match.course.group_id],
             )

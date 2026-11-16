@@ -65,9 +65,18 @@ export function DiscoverResults({
     <div className="discover-results">
       {list === "next" && next && nextRows.length > 0 && (
         <section aria-label={t("Next courses")}>
-          <h2 className="discover-tier">
-            // {t("next courses · {count}", { count: nextRows.length })}
-          </h2>
+          <div className="discover-tier-row">
+            <h2 className="discover-tier">
+              // {t("next courses · {count}", { count: nextRows.length })}
+            </h2>
+            {next.uses_assumed_credits && (
+              <p className="discover-tier-note">
+                <span className="assumed-note">
+                  {t("Assumed credits used")}
+                </span>
+              </p>
+            )}
+          </div>
           <div className="discover-result-list">
             {nextRows.map((result) => (
               <DiscoverResultRow
@@ -82,17 +91,19 @@ export function DiscoverResults({
       )}
       {list === "recommended" && similarity.length > 0 && (
         <section aria-label={t("Recommended for you")}>
-          <h2 className="discover-tier">
-            <span className="discover-tier-label">
+          <div className="discover-tier-row">
+            <h2 className="discover-tier">
               //{" "}
-              {t("recommended for you · {count}", { count: similarity.length })}
-            </span>
-            <span className="discover-tier-note">
+              {t("recommended for you · {count}", {
+                count: similarity.length,
+              })}
+            </h2>
+            <p className="discover-tier-note">
               {t(
                 "Similarity analysis is based on official teaching text and derived translations",
               )}
-            </span>
-          </h2>
+            </p>
+          </div>
           <div className="discover-result-list">
             {similarity.map((result) => (
               <DiscoverResultRow

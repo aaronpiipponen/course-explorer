@@ -36,14 +36,13 @@ A run can also be paused with `pause` and continued with `resume` in place of `s
 | Enrollment and copy | `config/database.toml` | `ADMIN_STATE_ROOT` | The repository-relative root that holds both role pointers, the dataset receipts, and the session evidence. The example sets `data/admin`. |
 | Enrollment | `config/database.toml` | `EXAMPLE_POSTGRES_DB` | The configured database that the example workflow leaves unenrolled. The real-database workflow leaves `POSTGRES_DB` at this name and enrolls the named database through the Selected pointer. A configured-database deployment sets `POSTGRES_DB` to a different name and enrolls it with `setup datasets`. |
 | Ingestion | `config/curriculum.toml` | `RAW_DATA_ROOT` | The repository-relative root that holds one directory per capture run. The example sets `data/raw`. |
-| Ingestion | `config/curriculum.toml` | `KORI_BASE_URL` | The curriculum source base. The settings accept the anonymous canonical `https://sisu.tuni.fi/kori` alone. |
-| Ingestion | `config/curriculum.toml` | `TUNI_UNIVERSITY_ID` | The university root the capture starts from. The example file carries a placeholder value. |
-| Ingestion | `config/curriculum.toml` | `KORI_FIRST_ACADEMIC_YEAR` | The first academic year of the capture, written as a four-digit range such as `2006-2007`. |
-| Ingestion | `config/curriculum.toml` | `CURRENT_ACADEMIC_YEAR` | The reference academic year of the run. Normalization chooses the representative version against it, and the first year must not be after it. |
+| Ingestion | `config/web.toml` | `INSTANCE_KEY` | The university instance whose map entry supplies the public curriculum source, its root identity, its first academic year and its course-page address. The example sets `example`. |
+| Ingestion | `config/curriculum.toml` | `CURRENT_ACADEMIC_YEAR` | The reference academic year of the run. Normalization chooses the representative version against it, and the mapped first year must not be after it. Set it to a year the configured source publishes. When a source's highest published year is earlier, set it to that year. |
 | Ingestion | `config/curriculum.toml` | `ACTIVE_ACADEMIC_YEAR_WINDOW` | The number of academic years inside which a listed version makes a course active. The example sets 3. |
+| Ingestion | `config/curriculum.toml` | `KORI_REQUEST_INTERVAL_SECONDS` | The minimum seconds between source request starts across every concurrent request. The example sets 0.4. |
 | Embedding | `config/search.toml` | `EMBEDDING_ARTIFACT_PATH`, `EMBEDDING_ARTIFACT_SHA256` | The pinned embedding model file and its digest. An embedding start requires the file at that path to match the digest. |
 
-The same files hold the request pacing, the retry bounds, and the stage state roots, and their example values apply to the public source. [Configuration](/docs/backend/configuration.md) describes how the settings owner reads the subsystem files and the [environment file](/docs/reference/glossary.md#configuration).
+The same files hold the retry bounds and the stage state roots, and their example values apply to the public source. [Configuration](/docs/backend/configuration.md) describes how the settings owner reads the subsystem files and the [environment file](/docs/reference/glossary.md#configuration).
 
 ## Enroll the dataset
 
@@ -74,7 +73,7 @@ Ingestion runs as one stage with two steps: the capture stores exactly what the 
 
    The command reserves the stage, starts the database service when it is not running, and launches one detached worker. It returns once the launch is acknowledged, and the work continues in that worker. The report holds the stage name, the lifecycle, the session id, the checkout revision, the options, and the progress.
 
-   The start requires the configured source base and university root, and the database at the checkout's migration head.
+   The start requires the configured instance's mapped source base and university root, and the database at the checkout's migration head.
 
 2. Read the status.
 

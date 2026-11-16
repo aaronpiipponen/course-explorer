@@ -7,6 +7,6 @@
 namespace tce {
 
 /* Mirrors `FORMAT_VERSION` in `prerequisite/native_compiler.py`. A mismatch refuses the library. */
-constexpr int32_t kPrerequisiteFormatVersion = 5;
+constexpr int32_t kPrerequisiteFormatVersion = 7;
 
 }  // namespace tce

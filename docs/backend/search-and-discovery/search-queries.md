@@ -19,11 +19,11 @@ The search package merges the match methods into ordered course summaries from a
 
 `UnifiedCourseSearchService` holds a `CourseSearchService` or `None` when the site serves no semantic matching, a `CourseLookupService`, and `SearchSettings`. `CourseSearchService` holds a `SemanticSearchRead` repository, an `EmbeddingProvider`, the opened build's catalogue hub, and `SearchSettings`. `CourseLookupService` holds `SearchSettings` and the required `LookupProjection` that the caller builds, either the supervisor before it forks the workers or the search command.
 
-Every result DTO is frozen and closed: `FuzzyCourseResult(course, score)`, `CourseSearchResult(course, score)`, `SemanticCourseScore(group_id, sisu_course_unit_id, representative_source_hash, score)`, and `UnifiedCourseSearchResult(course, match_sources, fuzzy_score, semantic_score)`. `UnifiedSearchReport` carries the display language, the two effective thresholds, the activity scope, `semantic_available`, the effective tier order, and the merged results.
+Every result DTO is frozen and closed: `FuzzyCourseResult(course, score)`, `CourseSearchResult(course, score)`, `SemanticCourseScore(group_id, source_version_id, representative_source_hash, score)`, and `UnifiedCourseSearchResult(course, match_sources, fuzzy_score, semantic_score)`. `UnifiedSearchReport` carries the display language, the two effective thresholds, the activity scope, `semantic_available`, the effective tier order, and the merged results.
 
 ## Normalization and ordering
 
-`normalized_text(value)` in `src/course_explorer/search/projection.py` is `unicodedata.normalize("NFKC", value).casefold().strip()`, so case, compatibility forms, and outer whitespace never decide a match. `build_lookup_rows(summaries)` retains one `CourseLookupRow(summary, code_key, name_fi_key, name_en_key)` per summary, so a matcher normalizes each name and code once per dataset. A row carries no position, because a matcher reaches a row through the name list its projection stores and the position array beside it. `official_name(name_fi, name_en, display_language)` returns the official name of the requested language and falls back to the other official name only when the requested one is absent, so a hidden second name is never matched. `official_display_name(summary, display_language)` is the same rule over a `CourseSummary`.
+`normalized_text(value)` in `src/course_explorer/search/projection.py` is `unicodedata.normalize("NFKC", value).casefold().strip()`, so case, compatibility forms, and outer whitespace never decide a match. `build_lookup_rows(summaries)` retains one `CourseLookupRow(summary, code_key, name_fi_key, name_en_key)` per summary, so a matcher normalizes each name and code once per dataset. A row carries no position, because a matcher reaches a row through the name list its projection stores and the position array beside it. `official_name(name_fi, name_en, display_language)` returns the [displayed summary name](/docs/reference/glossary.md#courses-and-the-catalogue) of the requested interface language and falls back to the other display name only when the requested one is absent, so a hidden second name is never matched. `official_display_name(summary, display_language)` is the same rule over a `CourseSummary`.
 
 `name_code_key(summary, display_name)` orders by `(display_name is None, normalized display name, normalized code, summary.group_id)`, using `""` where a name is absent. `_alphabetical_key` prepends `not row.summary.is_active`, and `exact_code_search` and `substring_search` both sort with it.
 
@@ -56,7 +56,7 @@ Jaro-Winkler times 100 and the native similarity both return a `0-100` score, so
 `SemanticSearchRepository.search` calls the installed packed scan function once with the hub-centred query and the build's group count. It joins the returned group number to the canonical representative identity and the course activity state, applies the threshold, and returns every qualifying identity order by canonical group and version. Its equivalent SQL is:
 
 ```sql
-SELECT g.group_id, g.sisu_course_unit_id, g.representative_source_hash, s.score
+SELECT g.group_id, g.source_version_id, g.representative_source_hash, s.score
 FROM course_embedding_search_scan(
     'course_embedding_search_blocks'::regclass,
     :centred_query,
@@ -66,10 +66,10 @@ FROM course_embedding_search_scan(
 JOIN course_embedding_search_groups AS g ON g.group_no = s.group_no
 JOIN courses AS c ON c.group_id = g.group_id
 WHERE s.score >= :min_score
-ORDER BY g.group_id, g.sisu_course_unit_id
+ORDER BY g.group_id, g.source_version_id
 ```
 
-When `include_inactive` is false the statement adds `AND c.is_active`. The scan returns one row per stored group, and one group is one `(group_id, sisu_course_unit_id, representative_source_hash)` with the greatest centred cosine of its chunks. The scan function takes the vector dimension from the query vector it receives and checks every block payload against that dimension, so a block must hold that many float32 vectors. The artifact set reads the packed meta row once when it opens and keeps the group count alone in `ServingSearchMeta`, so no request reads or verifies that row.
+When `include_inactive` is false the statement adds `AND c.is_active`. The scan returns one row per stored group, and one group is one `(group_id, source_version_id, representative_source_hash)` with the greatest centred cosine of its chunks. The scan function takes the vector dimension from the query vector it receives and checks every block payload against that dimension, so a block must hold that many float32 vectors. The artifact set reads the packed meta row once when it opens and keeps the group count alone in `ServingSearchMeta`, so no request reads or verifies that row.
 
 `SemanticSearchRead` is the protocol of that read. It declares the query embedding, the hub, the threshold and the activity scope. The service call and the concrete repository share one signature, so a read that needs a hub cannot be reached without one. The embedding configuration is fixed by the `embedding-<configuration hash>` directory the opened set maps, and the build writes the packed relation from the completed rows of that same configuration, so a vector of another configuration takes no part in the scan.
 
@@ -79,7 +79,7 @@ When `include_inactive` is false the statement adds `AND c.is_active`. The scan 
 2. Embeds the query once: `provider.embed((query,))[0]`.
 3. Calls the repository with the query vector, `hub`, the threshold and `include_inactive`.
 4. Maps the caller-supplied `represented` records by `summary.group_id`.
-5. Keeps a score only when its `sisu_course_unit_id` and `representative_source_hash` equal the record's, so a score whose stored version or representative source hash differs from the record's is dropped.
+5. Keeps a score only when its `source_version_id` and `representative_source_hash` equal the record's, so a score whose stored version or representative source hash differs from the record's is dropped.
 6. Returns `CourseSearchResult` rows sorted by `(not is_active, -score, group_id)`.
 
 `search_courses` requires the `represented` sequence, which is how one unified query pairs the semantic scores with the current representatives. `tests/search/test_search_service.py` proves the identity filtering, the exact-identity pairing of a supplied sequence, the configured and overridden thresholds, the active-only scope, and the absence of a result cap.

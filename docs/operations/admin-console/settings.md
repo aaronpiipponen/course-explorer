@@ -6,7 +6,7 @@ The Settings tab edits the site's settings files and holds the dataset roles and
 
 The **Configuration** editor spans the tab first, then the **Datasets** panel, **Backups**, **Rebuild** and **Worker provisioning**, and **Feature switches** last.
 
-![The Settings tab with the configuration file list, the Datasets panel, the backup list, the rebuild steps, the worker provisioning form and the feature switches](/docs/screenshots/admin-console-settings.png)
+![The Settings tab with the configuration file list, the Datasets panel, the backup list, the rebuild steps, the worker provisioning form and the three feature switches](/docs/screenshots/admin-console-settings.png)
 
 ## Configuration editor
 
@@ -20,6 +20,8 @@ Every key of the open file appears with its value. A string value edits its own 
 
 Before the first write, the panel checks every changed value. A change to a number, on/off value, list or table that is not valid JSON stops the save before any key is written, and the notice names the key.
 
+A save of `CURRENT_ACADEMIC_YEAR` or `ACTIVE_ACADEMIC_YEAR_WINDOW` in `config/curriculum.toml` also refreshes the stored activity of every course in every present dataset role and, when no Selected dataset is enrolled, of the configured bootstrap database. The save is refused while any preparation stage runs. A database failure after the file is written is reported, the saved key is in the file, and selecting save again applies the refresh again.
+
 The save writes the changed keys one at a time in the order the file lists them. If one key is refused, the keys before it are saved and the rest are unsaved. The panel shows the failure and states how many of the changed keys are saved. Selecting the save control again retries the unsaved keys. When every changed key is saved, the panel states **All changed keys are saved.**
 
 The affected process reads a saved change when it restarts. The open file reads again automatically while it has no changed value, so its values follow the file.
@@ -27,7 +29,7 @@ The affected process reads a saved change when it restarts. The open file reads 
 > [!WARNING]
 > Selecting another file clears the unsaved edits of the open file.
 
-![The configuration editor with the web settings file open, its keys in text fields, the save control at the top right and the file list on the left](/docs/screenshots/admin-console-settings-configuration.png)
+![The configuration editor with `config/web.toml` open, its keys in text fields, the save control at the top right and the file list on the left](/docs/screenshots/admin-console-settings-configuration.png)
 
 The [Configuration](/docs/backend/configuration.md) page describes how the settings files compose and how a saved value reaches a process.
 
@@ -45,11 +47,11 @@ The **Backups** panel lists one row per backup file, with its name, its modifica
 
 The **Rebuild** panel lists the four steps of an app rebuild in order: **Build the site frontend**, **Recreate the database and embedding containers**, **Restart the site's web server** and **Verify the web server's loopback bind**. The web server status in **Dashboard** reads its unit from the same manager. [Setup and preflight](/docs/operations/setup-and-preflight.md#the-two-rebuild-scopes) states what each step runs and the manager the restart uses.
 
-**Rebuild app** asks for confirmation first. It runs the four steps and shows the steps it ran and the bind it verified.
+**Rebuild app** asks for confirmation first. It runs the four steps and shows the steps it ran and the bind it verified. The rebuild holds the checkout reservation for its whole run, so it refuses before any step while a preparation stage or a Working dataset operation holds the checkout.
 
 ![The Rebuild app confirmation dialog with the rebuild question above Cancel and Confirm](/docs/screenshots/admin-console-settings-rebuild-dialog.png)
 
-**Rebuild admin panel** asks for confirmation first, and the dialog states that it signs all operators out. It builds the console, and the administration backend then restarts. The console returns to the sign-in screen with **The admin panel is restarting. Sign in again.**
+**Rebuild administration console** asks for confirmation first, and the dialog states that it signs all operators out. It builds the console, and the administration backend then restarts. The console returns to the sign-in screen with **The administration console is restarting. Sign in again.**
 
 While either action runs, the panel shows **Running…** and disables both actions. A failed rebuild shows its failure in the panel. A restart step without the grant fails the rebuild, and the panel shows the failure. A completed administration rebuild ends every administration session, and a failed administration build queues no restart and leaves the console signed in.
 
@@ -71,7 +73,7 @@ A full setup also performs the worker bootstrap and prepares its resources. The 
 
 ## Feature switches
 
-The **Feature switches** panel holds the two switches that decide which features the site serves. **Inference features** covers the inferred toggle, inferred tags and Discover. **Embedding features** covers recommendations, the semantic tier and the vector meters.
+The **Feature switches** panel holds the three switches that decide which features the site serves. The **Inference features** detail reads "Inferred toggle and inferred tags". The **Embedding features** detail reads "Recommendations, semantic tier, vector meters". The **Prerequisite features** detail reads "Prerequisite graph and Next courses. Discover appears only while the embedding switch or this switch is on."
 
 Each switch writes its setting when selected. A successful write shows the written position and adds a notice above the panels that names the setting and its state and states that a rebuild or restart applies it to serving. A refused write shows the position the file holds and the failure. A value the file does not report as on or off shows **unknown** in place of the switch.
 

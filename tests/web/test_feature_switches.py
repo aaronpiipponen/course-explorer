@@ -1,5 +1,6 @@
-"""Server enforcement proofs for the two per-site feature switches, the serving dataset identity,
-and the shared serving objects that the routes read."""
+"""Exercise the server enforcement of the three per-site feature switches, the serving dataset
+identity and the shared serving objects the routes read.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +15,9 @@ from pydantic import BaseModel
 from course_explorer.administration import administrative_json, atomic_write_private_text
 from course_explorer.comparison import commands as comparison_commands
 from course_explorer.datasets import DatasetPointer, DatasetReceipt
+from course_explorer.example_data import EXAMPLE_SOURCE_ATTRIBUTION
 from course_explorer.hashing import json_sha256
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.next_courses import commands as next_courses_commands
 from course_explorer.prerequisite import commands as prerequisite_commands
 from course_explorer.recommendations import commands as recommendation_commands
@@ -462,6 +465,7 @@ def test_site_feature_switch_bounds_delegated_policy(
     }
     if case.drawing_limit:
         expected_response["max_compact_nodes"] = _COMPACT_NODE_LIMIT
+        expected_response["assumed_course_credits"] = "5"
     assert response.json() == expected_response
     expected = _policy_expected(case, body, site_enabled, requested)
     received_kwargs = received[0]
@@ -566,6 +570,18 @@ def test_cached_reads_report_one_serving_dataset_identity(
     feature = client.post("/api/features", json={})
     assert feature.status_code == 200
     assert feature.json()["dataset_identity"] == initial_identity
+    assert feature.json()["display_label"] == UNIVERSITIES["example"].display_label
+    assert feature.json()["study_plan_script"] == UNIVERSITIES["example"].study_plan_script
+    assert feature.json()["study_plan_formats"] == list(UNIVERSITIES["example"].study_plan_formats)
+    assert feature.json()["prerequisites_enabled"] is True
+    assert "instance_key" not in feature.json()
+    if selected:
+        assert feature.json()["source_attribution"] == {
+            "en": UNIVERSITIES["example"].source_attribution_en,
+            "fi": UNIVERSITIES["example"].source_attribution_fi,
+        }
+    else:
+        assert feature.json()["source_attribution"] == EXAMPLE_SOURCE_ATTRIBUTION
     response = client.post(case.endpoint, json=case.body)
     assert response.status_code == 200
     if case.endpoint == "/api/catalogue":
@@ -582,6 +598,7 @@ def test_cached_reads_report_one_serving_dataset_identity(
     }
     if case.with_compact_nodes:
         expected_response["max_compact_nodes"] = _COMPACT_NODE_LIMIT
+        expected_response["assumed_course_credits"] = "5"
     assert response.json() == expected_response
     assert len(calls) == 1
     served = calls[0].kwargs["database_settings"]
@@ -634,7 +651,6 @@ def test_cached_reads_report_one_serving_dataset_identity(
 
     # The ordinary paired resolver and the feature read agree on the resolved identity.
     features = json.loads(client.post("/api/features", json={}).text)
-    assert set(features) == {"embeddings_enabled", "inference_enabled", "dataset_identity"}
     assert resolve_serving_dataset().identity == features["dataset_identity"]
 
 
@@ -660,3 +676,31 @@ def test_graph_read_marks_the_root_id_and_its_official_code_for_measurement(
 
     assert response.status_code == 200
     assert (response.headers.get(MEASURE_GRAPH_HEADER) == "1") is measured
+
+
+def test_prerequisites_off_refuses_graph_and_next_courses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prerequisites-off site refuses both reads before either command runs and reports the switch."""
+    monkeypatch.setenv("WEB_EMBEDDINGS_ENABLED", "1")
+    monkeypatch.setenv("WEB_INFERENCE_ENABLED", "1")
+    monkeypatch.setenv("WEB_PREREQUISITES_ENABLED", "0")
+    refresh_serving_settings()
+
+    def refuse_reached_command(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a prerequisites-off route ran its command")
+
+    monkeypatch.setattr(prerequisite_commands, "run_prerequisite_command", refuse_reached_command)
+    monkeypatch.setattr(next_courses_commands, "run_next_courses_command", refuse_reached_command)
+    client = TestClient(app)
+    for endpoint, body in (
+        ("/api/prerequisites", {"target_code": "COMP.CS.100"}),
+        ("/api/next-courses", {"display_language": "fi"}),
+    ):
+        response = client.post(endpoint, json=body)
+        assert response.status_code == 403
+        assert response.json() == {"detail": "Feature disabled"}
+
+    feature = client.post("/api/features", json={})
+    assert feature.status_code == 200
+    assert feature.json()["prerequisites_enabled"] is False

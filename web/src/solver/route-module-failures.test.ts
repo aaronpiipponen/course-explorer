@@ -18,6 +18,7 @@ describe("route module failures", () => {
     const allCourses = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.all_courses`),
       [],
+      "5",
     );
     expect(allCourses.state).toBe("exact");
     expect(selectedGroupIds(allCourses)).toEqual(["active-a", "inactive-b"]);
@@ -27,6 +28,7 @@ describe("route module failures", () => {
     const ordinary = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.ordinary`),
       [],
+      "5",
     );
     expect(ordinary.state).toBe("no_solution");
     expect(ordinary.shortfalls).toEqual([]);
@@ -34,6 +36,7 @@ describe("route module failures", () => {
     const impossible = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.impossible`),
       [],
+      "5",
     );
     expect(impossible.state).toBe("no_solution");
     expect(impossible.shortfalls).toEqual([]);
@@ -41,6 +44,7 @@ describe("route module failures", () => {
     const tooHigh = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.too_high`),
       [],
+      "5",
     );
     expect(tooHigh.state).toBe("no_solution");
     expect(tooHigh.shortfalls).toEqual([]);
@@ -48,6 +52,7 @@ describe("route module failures", () => {
     const withUnresolved = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.module_with_unresolved`),
       [],
+      "5",
     );
     expect(withUnresolved.state).toBe("unresolved");
     expect(withUnresolved.shortfalls).toEqual([]);
@@ -55,6 +60,7 @@ describe("route module failures", () => {
     const cyclic = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.cyclic`),
       [],
+      "5",
     );
     expect(cyclic.state).toBe("unresolved");
     expect(cyclic.shortfalls).toEqual([]);
@@ -62,6 +68,7 @@ describe("route module failures", () => {
     const nestedOrdinary = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.nested_ordinary`),
       [],
+      "5",
     );
     expect(nestedOrdinary.state).toBe("no_solution");
     expect(nestedOrdinary.shortfalls).toEqual([]);
@@ -69,6 +76,7 @@ describe("route module failures", () => {
     const numeric = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.numeric_compilation`),
       [],
+      "5",
     );
     expect(numeric.state).toBe("no_solution");
     expect(numeric.shortfalls).toEqual([]);
@@ -76,6 +84,7 @@ describe("route module failures", () => {
     const outerCredit = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.outer_credit`),
       [],
+      "5",
     );
     expect(outerCredit.state).toBe("no_solution");
     expect(outerCredit.shortfalls).toEqual([]);
@@ -83,6 +92,7 @@ describe("route module failures", () => {
     const exactWins = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.exact_wins`),
       [],
+      "5",
     );
     expect(exactWins.state).toBe("exact");
     expect(selectedGroupIds(exactWins)).toEqual(["active-a"]);
@@ -91,6 +101,7 @@ describe("route module failures", () => {
     const excluded = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.excluded`),
       [],
+      "5",
     );
     expect(excluded.state).toBe("no_solution");
     expect(excluded.shortfalls).toEqual([]);

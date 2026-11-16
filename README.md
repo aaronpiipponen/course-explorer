@@ -1,18 +1,18 @@
 # course-explorer
 
-course-explorer explores Tampere University curriculum data through a React browser app and a read-only FastAPI backend, with an offline Python pipeline over PostgreSQL and pgvector.
+course-explorer explores one university's curriculum data through a React browser app and a read-only FastAPI backend, with an offline Python pipeline over PostgreSQL and pgvector.
 
-The browser application searches courses by code, name and meaning, compares courses, draws official prerequisite structures and separately marked inferred ones, computes a minimum-new-credit route, lists what can be studied next, and keeps one browser-local study plan across every tab.
+The browser application searches courses by code, name and meaning, compares courses, draws official prerequisite structures and separately marked inferred ones, computes the minimum route by new credits, lists what can be studied next, and keeps one browser-local study plan across every tab.
 
 The app is available at [course-explorer.duckdns.org](https://course-explorer.duckdns.org/). Its [wiki](https://course-explorer.duckdns.org/docs) holds the guides to each tab and the documentation of how the system behaves. Installation, self-hosting and the code-level documentation are read in [`docs/`](/docs/) in this repository.
 
 The example setup in this repository runs on an invented dataset, not on university data.
 
-![The five tabs and the Feedback and Docs controls above a list of course search results](/docs/screenshots/search-course-list.png)
+![The five tabs with the GitHub, Feedback and Docs controls above a list of course search results](/docs/screenshots/search-course-list.png)
 
 ## Features
 
-The application has five tabs that share one browser-local study plan. A site sets in `config/web.toml` whether it serves the embedding features (the **Compare** tab, the **Recommended** list and semantic search) and the inference features (the **Inferred** toggle and inferred prerequisites), and the app leaves out what the site does not serve.
+The application has five tabs that share one browser-local study plan. A site sets in `config/web.toml` whether it serves the embedding features (the **Compare** tab, the **Recommended** list and semantic search), the inference features (the **Inferred** toggle and inferred prerequisites) and the prerequisite features (the **Prerequisites** tab and **Next courses**), and the app leaves out what the site does not serve.
 
 ### Search
 
@@ -52,15 +52,13 @@ The profile menu in the top bar is named after the active profile (**My plan** b
 
 The same menu exports one profile or all saved data as a file and imports those files for transfer between browsers or backup. [Profiles and language](/docs/guides/profiles-and-language.md#exporting-a-profile-or-the-saved-data) describes the file controls and their confirmations.
 
-![The profile panel lists My plan and Alternative plan with their selected and completed counts, above the New profile form, the import area and the Copy Sisu import script and Export controls](/docs/screenshots/profile-menu.png)
+![The profile panel lists My plan and Alternative plan with their selected and completed counts, above the New profile form, the import area and the Copy import script and Export controls](/docs/screenshots/profile-controls.png)
 
-### Sisu plan import
+### Study plan import
 
-A script copied from the profile menu reads an open plan in Sisu's **Structure of studies** view and downloads one capture file. Importing that file creates one browser-local profile with the plan's programmes, choices and completions, and the exact module versions Sisu showed.
+A script copied from the profile menu reads an open plan page in Sisu or Peppi and downloads one capture file. Importing that file creates one browser-local profile with the plan's programmes, choices and completions, and the exact module versions the source showed. A saved page and, on a Sisu site, a plan PDF import the same way.
 
-The script runs in the Sisu browser tab. It reads the open page and asks the public Kori interface for the modules and courses the plan shows, without sending the Sisu login cookies. [Importing a Sisu plan](/docs/guides/sisu-import.md) gives the capture and PDF import steps.
-
-![The Import Sisu plan dialog with a typed profile name and the captured programme listed above Cancel and Import](/docs/screenshots/sisu-import-dialog.png)
+The app offers only the study-plan formats the configured university names. The script runs in the source's browser tab, reads the open page and downloads one capture file with no network request, so the same script works on every plan page of that platform. [Importing a study plan](/docs/guides/importing-a-study-plan.md) describes the import, and [Importing a Sisu plan](/docs/guides/sisu-import.md) and [Importing a Peppi plan](/docs/guides/peppi-import.md) give the saved-page, PDF and capture steps.
 
 ### Feedback
 
@@ -74,7 +72,7 @@ The limits adjust to server load, using the host's CPU use and the admitted requ
 
 ## Data and limits
 
-- Official facts come from Tampere University's public Kori curriculum data. Machine translations and inferred prerequisites are derived information, marked as such in the interface.
+- Official facts come from the configured university's public curriculum source, read through its Sisu Kori API, its Peppi legacy or Peppi PSG public JSON API, or its Peppi guide pages. Machine translations and inferred prerequisites are derived information, marked as such in the interface.
 - Prerequisite inference runs separately from the website, on a model hosted by whoever operates the project. The website only shows the results.
 - One browser `localStorage` store holds the profiles. Profiles stay in the browser that created them.
 - Selection and completion use one canonical course identity in every tab.
@@ -85,7 +83,7 @@ The limits adjust to server load, using the host's CPU use and the admitted requ
 
 The administration console is a separate signed-in browser application with its own backend, running the fixed administration commands. Its six tabs are **Dashboard**, **Data preparation**, **Inference**, **Logs**, **Settings** and **Feedback**.
 
-The console reports the website, host, database and model runtime, controls the preparation stages, records inference decisions, reads logs and usage, manages configuration, datasets and backups, and reads, filters and deletes the saved feedback. The course application is a read-only API client. Preparation and maintenance run through the console or the administration command.
+The console reports the serving state, the website, the host, the database and the embedding runtime, controls the preparation stages, records inference decisions, reads logs and usage, manages configuration, datasets and backups, and reads, filters and deletes the saved feedback. The course application is a read-only API client. Preparation and maintenance run through the console or the administration command.
 
 ![The administration console on the Dashboard tab, with the six tabs above the serving state, website, host, database and embedding runtime panels](/docs/screenshots/admin-console-dashboard.png)
 
@@ -98,8 +96,11 @@ Requirements:
 - Linux and a CPython 3.14.3 interpreter that exposes `os.memfd_create` and `os.MFD_CLOEXEC`. Not every build of that version does, so check the capability before selecting the interpreter.
 - [uv](https://docs.astral.sh/uv/).
 - Node.js `^22.22.2 || >=24.15.0` with npm.
+- The Chromium cache that a headless guide capture renders through, prepared with `uv run playwright install chromium --only-shell`.
 - Docker with Docker Compose, which the administration command runs through `sudo docker compose`.
 - The `libpq` and `libstdc++` shared libraries, which the compiled native modules load at run time. The native build itself runs in a container.
+- `curl`, which the setup's version check requires.
+- systemd with its user manager, `loginctl` and `systemctl --user`, for the user-unit startup mode.
 - Access to the Python and npm package registries, and to the pinned embedding model download.
 - The GitHub CLI `gh` for a site that publishes feedback, from a release whose `gh issue create` supports `--attach` and `--body-file -`.
 
@@ -111,7 +112,10 @@ Requirements:
    npm --prefix web ci --engine-strict --no-audit --no-fund
    npm --prefix admin-web ci --engine-strict --no-audit --no-fund
    .venv/bin/python -c 'import os; fd = os.memfd_create("course-explorer-preflight", os.MFD_CLOEXEC); os.close(fd)'
+   uv run playwright install chromium --only-shell
    ```
+
+   `uv run playwright install chromium --only-shell` prepares the shared Chromium cache that a guide capture with the `headless_browser` fetch variant renders through. The example setup runs no guide capture.
 
 2. Run the example setup workflow through the administration command.
 
@@ -119,7 +123,7 @@ Requirements:
    uv run python scripts/admin.py
    ```
 
-   Choose **1 Setup/preflight**, then **12 Set up example site**, and answer the prompts. The workflow writes the working configuration, both database passwords and the administration account. It builds and starts the database and the embedding service, migrates and loads the invented example dataset, prepares the feedback application store, builds the native libraries and both frontends, starts the site and the administration console, and proves both. [Installation](/docs/getting-started/installation.md) lists every prompt and gives the non-interactive form of the same command.
+   Choose **1 Setup/preflight**, then **12 Set up example site**, and answer the prompts. The workflow writes the working configuration, both database passwords and the administration account. It builds and starts the database and the embedding service, migrates and loads the invented example dataset, prepares the feedback application store, builds the native libraries and both frontends, starts the site and the administration console, and proves both. On a checkout with no working file, the first run renames the folder to `course-explorer-<key>`, rebuilds `.venv` there and stops with the command to run again from the renamed path. [Installation](/docs/getting-started/installation.md) lists every prompt and gives the non-interactive form of the same command.
 
 3. Open the address the workflow prints.
 
@@ -145,4 +149,4 @@ This project is licensed under the MIT License. See [`LICENSE`](/LICENSE).
 
 ## Independent project
 
-This is an independent project. It is not affiliated with, endorsed by, or connected to Tampere University. Tampere University curriculum data and other university material are not covered by this project's software license and remain subject to their own terms. The example dataset in `data/mock/` is invented for this project and is not university data.
+This is an independent project. It is not affiliated with, endorsed by, or connected to any university. University curriculum data and other university material are not covered by this project's software license and remain subject to their own terms. The example dataset in `data/mock/` is invented for this project and is not university data.

@@ -49,7 +49,7 @@ class SemanticSearchRepository:
         active_filter = "" if include_inactive else "AND c.is_active"
         statement = text(
             f"""
-            SELECT g.group_id, g.sisu_course_unit_id, g.representative_source_hash, s.score
+            SELECT g.group_id, g.source_version_id, g.representative_source_hash, s.score
             FROM course_embedding_search_scan(
                 'course_embedding_search_blocks'::regclass,
                 :centred_query,
@@ -59,7 +59,7 @@ class SemanticSearchRepository:
             JOIN course_embedding_search_groups AS g ON g.group_no = s.group_no
             JOIN courses AS c ON c.group_id = g.group_id
             WHERE s.score >= :min_score {active_filter}
-            ORDER BY g.group_id, g.sisu_course_unit_id
+            ORDER BY g.group_id, g.source_version_id
             """
         ).bindparams(query_parameter)
         with self._factory() as session:
@@ -75,9 +75,9 @@ class SemanticSearchRepository:
         return tuple(
             SemanticCourseScore(
                 group_id=group_id,
-                sisu_course_unit_id=sisu_course_unit_id,
+                source_version_id=source_version_id,
                 representative_source_hash=representative_source_hash,
                 score=float(score),
             )
-            for group_id, sisu_course_unit_id, representative_source_hash, score in rows
+            for group_id, source_version_id, representative_source_hash, score in rows
         )

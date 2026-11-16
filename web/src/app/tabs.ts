@@ -23,14 +23,27 @@ export const TABS: readonly {
   },
 ];
 
-const WITHOUT_COMPARE = TABS.filter((tab) => tab.id !== "compare");
+/** The served feature flags that decide which tabs this site shows. */
+export type ServedFeatures = {
+  embeddings_enabled: boolean;
+  prerequisites_enabled: boolean;
+};
 
-/** Return the tabs a site serves, in canonical order, without Compare where embeddings are off. */
-export function visibleTabs(embeddingsEnabled: boolean): typeof TABS {
-  return embeddingsEnabled ? TABS : WITHOUT_COMPARE;
+/** Return the tabs a site serves, in canonical order, under its feature switches. */
+export function visibleTabs(features: ServedFeatures): typeof TABS {
+  return TABS.filter(
+    (tab) =>
+      (tab.id !== "compare" || features.embeddings_enabled) &&
+      (tab.id !== "prerequisites" || features.prerequisites_enabled) &&
+      (tab.id !== "discover" ||
+        features.embeddings_enabled ||
+        features.prerequisites_enabled),
+  );
 }
 
-/** Return the served tab for one stored identity, resolving a hidden Compare to Search. */
-export function effectiveTab(tab: TabId, embeddingsEnabled: boolean): TabId {
-  return !embeddingsEnabled && tab === "compare" ? "search" : tab;
+/** Return the served tab for one stored identity, resolving a hidden tab to Search. */
+export function effectiveTab(tab: TabId, features: ServedFeatures): TabId {
+  return visibleTabs(features).some((served) => served.id === tab)
+    ? tab
+    : "search";
 }

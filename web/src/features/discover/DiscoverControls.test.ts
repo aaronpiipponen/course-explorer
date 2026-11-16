@@ -67,6 +67,7 @@ describe("Discover list preservation", () => {
 
   function render(
     embeddingsEnabled: boolean,
+    prerequisitesEnabled = true,
     cache = new ReadCache("synthetic-dataset", READ_CACHE_CAPACITY),
     discoveryCache = new DiscoveryReportCache(
       "synthetic-dataset",
@@ -84,7 +85,20 @@ describe("Discover list preservation", () => {
               value: {
                 embeddings_enabled: embeddingsEnabled,
                 inference_enabled: true,
+                prerequisites_enabled: prerequisitesEnabled,
                 dataset_identity: "synthetic-dataset",
+                display_label: "example-uni",
+                university_names: {
+                  en: "Example University",
+                  fi: "Esimerkkiyliopisto",
+                },
+                source_attribution: {
+                  en: "Source attribution",
+                  fi: "Lähdemerkintä",
+                },
+                assumed_course_credits: "5",
+                study_plan_script: null,
+                study_plan_formats: [],
               },
             },
             createElement(
@@ -150,6 +164,14 @@ describe("Discover list preservation", () => {
     ).toBe("true");
     expect(localStorage.getItem(BROWSER_STORAGE_KEY)).toBe(saved);
     expect(fetchSpy).not.toHaveBeenCalled();
+
+    // Prerequisites off with embeddings on serves Recommended only and keeps the stored list.
+    render(true, false);
+    expect(tabs().map((tab) => tab.textContent)).toEqual([
+      uiText("en", "Recommended"),
+    ]);
+    expect(tabs()[0].getAttribute("aria-selected")).toBe("true");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("preserves recommended result rows after another tab adds a comparison course", async () => {
@@ -207,6 +229,25 @@ describe("Discover list preservation", () => {
         },
       ],
     });
+    discoveryCache.put(identity, JSON.stringify(["next", request]), {
+      dataset_identity: identity,
+      selected_group_ids: ["course-basis"],
+      completed_group_ids: [],
+      basis: "selected",
+      mode: "all",
+      display_language: "en",
+      include_inferred: true,
+      active_only: true,
+      results: [
+        {
+          course: recommended,
+          required_coverage: 100,
+          recommended_coverage: null,
+          depends_on_inferred: false,
+        },
+      ],
+      uses_assumed_credits: true,
+    });
     cache.put(
       identity,
       JSON.stringify(["course-summaries", ["course-basis"]]),
@@ -216,11 +257,21 @@ describe("Discover list preservation", () => {
       },
     );
 
-    render(true, cache, discoveryCache);
+    render(true, true, cache, discoveryCache);
     await act(async () => {});
     await act(async () => {});
     const row = container.querySelector('[data-course-id="course-rec"]');
     expect(row).toBeTruthy();
+    const similarityNote = uiText(
+      "en",
+      "Similarity analysis is based on official teaching text and derived translations",
+    );
+    expect(
+      container.querySelector(".discover-tier-note")?.textContent,
+    ).toContain(similarityNote);
+    expect(
+      container.querySelector(".discover-tier")?.textContent,
+    ).not.toContain(similarityNote);
 
     const hydrated = new DiscoveryReportCache(identity, localStorage);
     expect(hydrated.get(JSON.stringify(["recommended", request]))).toBeTruthy();
@@ -243,5 +294,22 @@ describe("Discover list preservation", () => {
     expect(container.querySelector('[data-course-id="course-rec"]')).toBe(row);
     expect(container.querySelector(".discover-loading")).toBeNull();
     expect(fetchSpy).not.toHaveBeenCalled();
+
+    act(() =>
+      store.updateCurrent((state) => ({
+        ...state,
+        discover: { ...state.discover, list: "next" },
+      })),
+    );
+    render(true, true, cache, discoveryCache);
+    await act(async () => {});
+    await act(async () => {});
+    // The assumed-credit caption belongs beside the Next-courses heading, not inside it.
+    expect(
+      container.querySelector(".discover-tier")?.textContent,
+    ).not.toContain(uiText("en", "Assumed credits used"));
+    expect(
+      container.querySelector(".discover-tier-note")?.textContent,
+    ).toContain(uiText("en", "Assumed credits used"));
   });
 });

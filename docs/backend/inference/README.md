@@ -4,7 +4,7 @@ Inference processing reads effective text with local language models and publish
 
 ## Label safety
 
-A target packet carries the target course, its ranked candidates, and the effective text of each. Official prerequisite structure is excluded from candidate selection and every model input, and the rendered request carries no label, no rank, and no target-shaped example. The fit rule assigns each target to one local model key, and [Inference](/docs/backend/inference/inference.md) describes what the stage reads and writes.
+A target packet carries the target course, its ranked candidates, and each course's effective teaching cells and selected prompt cells. Official prerequisite structure is excluded from candidate selection and every model input, and the rendered request carries no label, no rank, and no target-shaped example. The fit rule assigns each target to one local model key, and [Inference](/docs/backend/inference/inference.md) describes what the stage reads and writes.
 
 ## The pipeline and its checkpoints
 

@@ -1,10 +1,11 @@
 """Real-subprocess, real-PostgreSQL contracts for the remote translation/inference lifecycle.
 
-These three proofs drive the real shared lifecycle core, a real detached server child, real worker
+The three slow proofs drive the real shared lifecycle core, a real detached server child, real worker
 helper subprocesses and the real dataset return/rotation owners over real disposable PostgreSQL. Only
 the external machine boundary (SSH/WSL, Compose service control, the keepalive, the native Windows
 boot, the model endpoint and the clock/boot observations) is substituted. Every SQL/persistence owner,
-worker checkout/schema checker, selector, job and publisher run as-is.
+worker checkout/schema checker, selector, job and publisher run as-is. The reservation round trip
+uses a scripted worker transport and no worker, database or subprocess.
 """
 
 from __future__ import annotations
@@ -15,11 +16,13 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import Engine, select
 
 from course_explorer import administration
+from course_explorer.administration import administrative_json
 from course_explorer.config import (
     load_database_settings,
     load_embedding_runtime_settings,
@@ -28,14 +31,17 @@ from course_explorer.config import (
 from course_explorer.datasets import read_dataset_verification, resolve_dataset_role
 from course_explorer.db.models import CourseVersion, DerivedCourseText
 from course_explorer.db.session import create_database_engine, create_session_factory, session_scope
-from course_explorer.enums import TeachingTextField, TeachingTextLanguage
+from course_explorer.enums import TeachingTextField
 from course_explorer.serving_build import build_serving_artifacts
-from course_explorer_admin import mechanics, remote_stages
+from course_explorer_admin import machine_locks, mechanics, remote_stages
 from course_explorer_admin.datasets import copy_to_working, initialize_selected_dataset
 from course_explorer_admin.inference.controller import InferenceControllerWorkerState
 from course_explorer_admin.lifecycle import read_lifecycle_state
 from course_explorer_admin.snapshots import dump_database, restore_database
-from course_explorer_admin.translation.controller import TranslationControllerWorkerState
+from course_explorer_admin.translation.controller import (
+    TranslationControllerStatus,
+    TranslationControllerWorkerState,
+)
 from course_explorer_admin.transport import WorkerCommandError, WorkerConnectionLost
 from course_explorer_web.dataset import resolve_serving_dataset
 from tests.admin._remote_support import (
@@ -63,11 +69,6 @@ from tests.config._support import (
 )
 from tests.inference._job_support import seed_embeddings
 from tests.inference._scheduling_support import seed_courses
-
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.slow,
-]
 
 _REPO = Path(__file__).resolve().parents[2]
 
@@ -147,6 +148,7 @@ def configure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, initial_databa
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("ADMIN_STATE_ROOT", "data/admin")
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(tmp_path / "shared"))
     monkeypatch.setenv("INGESTION_CONTROLLER_STATE_ROOT", "state/ingestion")
     monkeypatch.setenv("EMBEDDING_CONTROLLER_STATE_ROOT", "state/embedding")
     monkeypatch.setenv("TRANSLATION_CONTROLLER_STATE_ROOT", "state/translation")
@@ -345,6 +347,8 @@ def _cleanup_scenario(root: Path, *session_ids: str) -> None:
         raise ExceptionGroup("scenario cleanup failed", errors)
 
 
+@pytest.mark.integration
+@pytest.mark.slow
 def test_remote_due_checkpoint_reboots_and_continues_same_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sql_source: str
 ) -> None:
@@ -432,6 +436,8 @@ def test_remote_due_checkpoint_reboots_and_continues_same_session(
         _cleanup_scenario(lost_root, SESSION_ID)
 
 
+@pytest.mark.integration
+@pytest.mark.slow
 def test_remote_mirror_failure_is_safe_and_stop_recovers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sql_source: str
 ) -> None:
@@ -625,6 +631,8 @@ def test_remote_mirror_failure_is_safe_and_stop_recovers(
         _cleanup_scenario(root, SESSION_ID)
 
 
+@pytest.mark.integration
+@pytest.mark.slow
 def test_failed_return_is_recorded_and_rerun_stop_recovers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sql_source: str
 ) -> None:
@@ -733,7 +741,7 @@ def test_failed_return_is_recorded_and_rerun_stop_recovers(
                 .join(CourseVersion, CourseVersion.id == DerivedCourseText.course_version_id)
                 .where(
                     DerivedCourseText.field == TeachingTextField.CONTENT,
-                    DerivedCourseText.language == TeachingTextLanguage.EN,
+                    DerivedCourseText.language == "en",
                 )
             ).all()
             assert derived
@@ -775,3 +783,87 @@ def test_failed_return_is_recorded_and_rerun_stop_recovers(
     finally:
         runner.close()
         _cleanup_scenario(root, SESSION_ID)
+
+
+class _ScriptedTransport:
+    """One scripted worker transport that answers one helper run at a time and records each argv."""
+
+    def __init__(self, payloads: list[bytes]) -> None:
+        self._payloads = payloads
+        self.calls: list[tuple[str, ...]] = []
+
+    def run(self, argv, **_kwargs) -> bytes:
+        self.calls.append(tuple(argv))
+        return self._payloads.pop(0) if self._payloads else b""
+
+
+def test_remote_reservation_round_trip_refuses_a_foreign_owner_and_releases_its_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worker read refuses a foreign owner, releases the checkout and never acquires."""
+    stage = remote_stages.RemoteStage(
+        name="translation",
+        worker_module="course_explorer_admin.translation_controller",
+        status_type=TranslationControllerStatus,
+        load_connection=lambda: SimpleNamespace(
+            worker_project_root=Path("/srv/worker"), stop_timeout_seconds=30.0
+        ),
+        startup_attempts=1,
+        load_session=lambda session_id: (_ for _ in ()).throw(AssertionError("no session read")),
+        make_policy=lambda session_id: None,
+        configuration_sha256=lambda: "identity",
+    )
+    active: dict[str, _ScriptedTransport] = {}
+    monkeypatch.setattr(
+        remote_stages, "_transport", lambda _runner, _connection: active["transport"]
+    )
+    monkeypatch.setattr(
+        remote_stages, "load_instance_settings", lambda: SimpleNamespace(instance_key="example")
+    )
+    reserved: list[tuple[str, str, tuple[str, ...]]] = []
+    released: list[tuple[str, str, tuple[str, ...]]] = []
+
+    def reserve(name: str, session_id: str, names: tuple[str, ...]) -> bool:
+        reserved.append((name, session_id, names))
+        return True
+
+    monkeypatch.setattr(remote_stages, "reserve_local_stage", reserve)
+    monkeypatch.setattr(
+        remote_stages,
+        "unreserve_local_stage",
+        lambda name, session_id, names: released.append((name, session_id, names)),
+    )
+
+    clean = _ScriptedTransport([b"", b""])
+    active["transport"] = clean
+    stage.reserve(SESSION_ID, runner=None)  # type: ignore[arg-type]
+    assert [call[-5:] for call in clean.calls] == [
+        ("read", "worker", "example", "translation", SESSION_ID),
+        ("acquire", "worker", "example", "translation", SESSION_ID),
+    ]
+    assert reserved == [("translation", SESSION_ID, ("checkout",))]
+
+    foreign = machine_locks.Reservation(
+        instance_key="humak", operation="embedding", session_id="f" * 32
+    )
+    refusal = _ScriptedTransport([administrative_json(foreign).encode("utf-8")])
+    active["transport"] = refusal
+    released.clear()
+    with pytest.raises(RuntimeError, match="worker reservation is held by embedding in humak"):
+        stage.reserve(SESSION_ID, runner=None)  # type: ignore[arg-type]
+    assert all(call[-5] != "acquire" for call in refusal.calls)
+    assert released == [("translation", SESSION_ID, ("checkout",))]
+
+    # Unreserve sends the worker release before it releases the local checkout reservation.
+    release = _ScriptedTransport([b""])
+    active["transport"] = release
+    released.clear()
+    stage.unreserve(SESSION_ID, runner=None)  # type: ignore[arg-type]
+    assert release.calls[0][-5:] == (
+        "release",
+        "worker",
+        "example",
+        "translation",
+        SESSION_ID,
+    )
+    assert released == [("translation", SESSION_ID, ("checkout",))]

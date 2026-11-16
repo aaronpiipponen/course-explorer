@@ -8,7 +8,7 @@ import { useSyncExternalStore } from "react";
 import type { TabId } from "../state/types";
 import { TABS } from "./tabs";
 
-const ACTIVE_TAB_STORAGE_KEY = "tuni-course-explorer-active-tab";
+const ACTIVE_TAB_STORAGE_KEY = "course-explorer-active-tab";
 const DEFAULT_TAB: TabId = "search";
 const TAB_IDS: readonly string[] = TABS.map((tab) => tab.id);
 

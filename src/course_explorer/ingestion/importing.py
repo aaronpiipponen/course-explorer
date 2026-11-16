@@ -1,14 +1,13 @@
-"""Reusable live-source capture and current-run normalization composition.
+"""Live-source capture and normalization composition.
 
-This module sequences the accepted capture
-and normalization services behind one import contract for its callers. An optional
-lifecycle gate observes only durable response-unit boundaries. Normalization itself is one
-indivisible transaction that is never polled, split, or interrupted.
+This module sequences the capture and normalization services behind one import contract for its
+callers. An optional lifecycle gate observes only durable response-unit boundaries. Normalization
+itself is one indivisible transaction that is never polled, split, or interrupted.
 """
 
 from __future__ import annotations
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from course_explorer.enums import IngestionRunStatus
 from course_explorer.ingestion.capture import (
@@ -66,7 +65,6 @@ def import_curriculum(
     checkpoint_response_count: int,
     current_academic_year_start: int,
     activity_window_years: int,
-    course_guide_base_url: AnyHttpUrl,
     verification_start_index: int = 0,
     on_boundary: CaptureBoundary | None = None,
 ) -> CurriculumImportReport | None:
@@ -97,6 +95,5 @@ def import_curriculum(
         normalization_repository,
         current_academic_year_start=current_academic_year_start,
         activity_window_years=activity_window_years,
-        course_guide_base_url=course_guide_base_url,
     )
     return CurriculumImportReport(capture=capture, normalization=normalization)

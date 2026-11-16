@@ -11,8 +11,8 @@ import json
 
 from course_explorer.config import InferenceSettings
 from course_explorer.enums import (
+    OfficialTextField,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
 )
 from course_explorer.inference.context import (
@@ -20,6 +20,7 @@ from course_explorer.inference.context import (
     InferenceCourseEmbeddingIdentity,
     InferenceCourseReference,
     InferencePacketCourse,
+    InferencePacketPromptText,
     InferencePacketText,
     InferenceSelectionReferences,
     InferenceTargetPacket,
@@ -37,7 +38,7 @@ HASH_B = "b" * 64
 HASH_D = "d" * 64
 HASH_E = "e" * 64
 POOL_DEPTH = 1000
-TARGET_GROUP_ID = "tut-cu-g-99999"
+TARGET_GROUP_ID = "course-group-a"
 TARGET_CODE = "TARGET.1"
 
 
@@ -58,7 +59,7 @@ def _cell(field: TeachingTextField, text: str) -> InferencePacketText:
     digest = _text_sha(text)
     return InferencePacketText(
         field=field,
-        language=TeachingTextLanguage.FI,
+        language="fi",
         text=text,
         origin=TeachingTextOrigin.OFFICIAL,
         text_sha256=digest,
@@ -66,21 +67,32 @@ def _cell(field: TeachingTextField, text: str) -> InferencePacketText:
     )
 
 
+def _prompt_cell(field: TeachingTextField, text: str) -> InferencePacketPromptText:
+    return InferencePacketPromptText(
+        field=OfficialTextField(field.value),
+        language="fi",
+        text=text,
+        origin=TeachingTextOrigin.OFFICIAL,
+    )
+
+
 def packet_course(group_id: str, code: str, body: str) -> InferencePacketCourse:
+    cells = (
+        (TeachingTextField.NAME, f"name {group_id}"),
+        (TeachingTextField.CONTENT, body),
+    )
     return InferencePacketCourse(
         identity=InferenceCourseEmbeddingIdentity(
             group_id=group_id,
-            sisu_course_unit_id=f"source-{group_id}",
+            source_version_id=f"source-{group_id}",
             representative_source_sha256=_text_sha(f"source-{group_id}"),
         ),
         course_code=code,
         is_active=True,
         activity_as_of_academic_year_start=2026,
         activity_window_years=3,
-        texts=(
-            _cell(TeachingTextField.NAME, f"name {group_id}"),
-            _cell(TeachingTextField.CONTENT, body),
-        ),
+        texts=tuple(_cell(field, text) for field, text in cells),
+        prompt_texts=tuple(_prompt_cell(field, text) for field, text in cells),
     )
 
 
@@ -103,10 +115,10 @@ def target_packet(count: int = POOL_DEPTH) -> InferenceTargetPacket:
 def _reference(course: InferencePacketCourse) -> InferenceCourseReference:
     return InferenceCourseReference(
         group_id=course.identity.group_id,
-        sisu_course_unit_id=course.identity.sisu_course_unit_id,
+        source_version_id=course.identity.source_version_id,
         representative_source_sha256=course.identity.representative_source_sha256,
         teaching_text_sha256=processing_text_sha256(
-            tuple((cell.field.value, cell.language.value, cell.text) for cell in course.texts)
+            tuple((cell.field.value, cell.language, cell.text) for cell in course.texts)
         ),
     )
 

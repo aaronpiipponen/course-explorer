@@ -65,14 +65,20 @@ const KNOWN_MESSAGES: Record<string, UiTextKey> = {
   "Unsupported file type": "Unsupported file type",
   "Choose one file": "Choose one file",
   "There is no saved data to export": "There is no saved data to export",
-  "Invalid Sisu plan file": "Invalid Sisu plan file",
+  "Invalid plan file": "Invalid plan file",
   "Invalid Sisu PDF plan": "Invalid Sisu PDF plan",
-  "Sisu choice is ambiguous": "Sisu choice is ambiguous",
-  "Sisu plan selects two versions of a module":
-    "Sisu plan selects two versions of a module",
+  "The plan choice is ambiguous": "The plan choice is ambiguous",
+  "The plan selects two versions of a module":
+    "The plan selects two versions of a module",
+  "This file is not a saved Sisu plan page with every module expanded. Open the plan in Sisu's Structure of studies, expand every module, and save the page again.":
+    "This file is not a saved Sisu plan page with every module expanded. Open the plan in Sisu's Structure of studies, expand every module, and save the page again.",
+  "This file is not a saved Peppi HOPS page. Open the HOPS page (Tarkastelu) and save the page again.":
+    "This file is not a saved Peppi HOPS page. Open the HOPS page (Tarkastelu) and save the page again.",
+  "This file is not one of this site's import formats. Use a file type listed in the import area.":
+    "This file is not one of this site's import formats. Use a file type listed in the import area.",
   "Another version of this module is already selected":
     "Another version of this module is already selected",
-  "Could not copy Sisu import script": "Could not copy Sisu import script",
+  "Could not copy import script": "Could not copy import script",
 };
 
 /** Return the summary and technical detail of one error in one language. */

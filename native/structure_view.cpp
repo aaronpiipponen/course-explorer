@@ -65,7 +65,8 @@ void build_view(const Compilation &compilation, StructureView &view)
         entry.name_fi = summary.name_fi.c_str();
         entry.name_en = summary.name_en.c_str();
         entry.code = summary.code.c_str();
-        entry.credits_min = summary.credits_min_text.c_str();
+        entry.credits_min =
+            summary.credits_min < 0 ? nullptr : summary.credits_min_text.c_str();
         entry.credits_max = summary.credits_max_text.c_str();
         entry.official_url = summary.official_url.c_str();
         entry.has_name_fi = summary.has_name_fi ? 1 : 0;
@@ -155,7 +156,8 @@ void build_view(const Compilation &compilation, StructureView &view)
         entry.name_fi = summary.name_fi.c_str();
         entry.name_en = summary.name_en.c_str();
         entry.code = summary.code.c_str();
-        entry.credits_min = summary.credits_min_text.c_str();
+        entry.credits_min =
+            summary.credits_min < 0 ? nullptr : summary.credits_min_text.c_str();
         entry.credits_max = summary.credits_max_text.c_str();
         entry.official_url = summary.official_url.c_str();
         entry.has_name_fi = summary.has_name_fi ? 1 : 0;
@@ -174,7 +176,7 @@ void build_view(const Compilation &compilation, StructureView &view)
         const ModuleSummaryRec &summary = compilation.modules.at(group);
         CourseModuleRecord entry{};
         entry.group_id = summary.group.c_str();
-        entry.sisu_module_id = summary.sisu.c_str();
+        entry.source_version_id = summary.source_version_id.c_str();
         entry.module_type = summary.module_type.c_str();
         entry.code = summary.code.c_str();
         entry.name_fi = summary.name_fi.c_str();

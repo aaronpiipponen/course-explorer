@@ -15,7 +15,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from course_explorer.config import EmbeddingRuntimeSettings
+from course_explorer.config import EmbeddingRuntimeSettings, load_instance_settings
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.embeddings.generation import (
     CourseEmbeddingChunkInput,
@@ -26,6 +26,7 @@ from course_explorer.embeddings.hub import mean_unit_vectors
 from course_explorer.embeddings.read import TeachingEmbeddingChunk, TeachingEmbeddingRepository
 from course_explorer.embeddings.repository import CourseEmbeddingRepository
 from course_explorer.enums import TeachingTextField
+from course_explorer.instance import UniversityMetadata
 from course_explorer.teaching_text.repository import DerivedTranslationRepository
 from course_explorer.teaching_text.service import TeachingTextService
 
@@ -50,21 +51,29 @@ class EmbeddingHubs:
 
 
 def read_current_chunk_vectors(
-    factory: sessionmaker[Session], embedding: EmbeddingRuntimeSettings
+    factory: sessionmaker[Session],
+    embedding: EmbeddingRuntimeSettings,
+    *,
+    university: UniversityMetadata | None = None,
 ) -> CurrentChunkVectors:
     """Read the stored vector of every desired current chunk in curriculum order.
 
     The desired chunks are built from the effective teaching text of the represented courses under
     ``embedding``. Missing, stale, pending or failed desired work raises ``ValueError`` from the
     readiness read, and a desired chunk without a compatible stored vector raises ``ValueError``.
+    An omitted university resolves the configured instance once and is shared by the repositories
+    and the teaching service.
     """
+    resolved = load_instance_settings().university if university is None else university
     catalogue = TeachingTextService(
-        CurriculumRepository(factory), DerivedTranslationRepository(factory)
+        CurriculumRepository(factory, university=resolved),
+        DerivedTranslationRepository(factory, university=resolved),
+        university=resolved,
     ).build_catalogue()
     chunks = build_course_embedding_chunks(catalogue, embedding)
-    CourseEmbeddingRepository(factory).require_current_chunks(chunks)
+    CourseEmbeddingRepository(factory, university=resolved).require_current_chunks(chunks)
     stored = TeachingEmbeddingRepository(factory).read_stored_chunks(
-        CurriculumRepository(factory).list_represented_summaries(),
+        CurriculumRepository(factory, university=resolved).list_represented_summaries(),
         embedding_configuration_hash=embedding_configuration_sha256(embedding),
     )
     by_key = {

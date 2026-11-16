@@ -9,7 +9,6 @@ import httpx
 import pytest
 
 from course_explorer.config import TranslationSettings
-from course_explorer.enums import TeachingTextLanguage
 from course_explorer.http_retry import RequestNotStarted
 from course_explorer.translation.provider import (
     TranslationContractError,
@@ -64,8 +63,8 @@ def test_translation_provider_returns_exact_content() -> None:
     with TranslationProvider(settings(), transport=httpx.MockTransport(handler)) as provider:
         result = provider.translate(
             "Tämä kurssi opettaa lineaarialgebran perusteet.",
-            source_language=TeachingTextLanguage.FI,
-            target_language=TeachingTextLanguage.EN,
+            source_language="fi",
+            target_language="en",
         )
 
     assert result == "  " + CONTENT + "  "
@@ -90,8 +89,8 @@ def test_translation_provider_retries_transport_status_and_contract_failures() -
     ) as provider:
         result = provider.translate(
             "lähde",
-            source_language=TeachingTextLanguage.FI,
-            target_language=TeachingTextLanguage.EN,
+            source_language="fi",
+            target_language="en",
         )
 
     assert result == CONTENT
@@ -115,8 +114,8 @@ def test_translation_provider_stops_on_nonretryable_status_without_leaking_body(
         with pytest.raises(TranslationRequestError) as error:
             provider.translate(
                 "lähde",
-                source_language=TeachingTextLanguage.FI,
-                target_language=TeachingTextLanguage.EN,
+                source_language="fi",
+                target_language="en",
             )
 
     assert attempts == 1
@@ -147,8 +146,8 @@ def test_translation_provider_rejects_wrong_model_runtime_choice_role_finish_or_
             with pytest.raises(TranslationContractError):
                 provider.translate(
                     "lähde",
-                    source_language=TeachingTextLanguage.FI,
-                    target_language=TeachingTextLanguage.EN,
+                    source_language="fi",
+                    target_language="en",
                 )
 
 
@@ -176,8 +175,8 @@ def test_translation_provider_control_stops_contract_retry() -> None:
         with pytest.raises(TranslationContractError):
             provider.translate(
                 "lähde",
-                source_language=TeachingTextLanguage.FI,
-                target_language=TeachingTextLanguage.EN,
+                source_language="fi",
+                target_language="en",
             )
 
     assert calls == 1
@@ -201,7 +200,7 @@ def test_translation_provider_control_declines_initial_request_without_io() -> N
         with pytest.raises(RequestNotStarted):
             provider.translate(
                 "lähde",
-                source_language=TeachingTextLanguage.FI,
-                target_language=TeachingTextLanguage.EN,
+                source_language="fi",
+                target_language="en",
             )
     assert calls == 0

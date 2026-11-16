@@ -1,8 +1,12 @@
-/** Bootstrap proof that a failed feature read renders the failure alert in place of the shell. */
+/**
+ * Bootstrap proof that a failed feature read renders the failure alert in place of the shell, and
+ * that a ready read renders the configured display label and page title.
+ */
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebFeatures as WebFeaturesReport } from "../api/types";
+import { BrandMark } from "../shared/BrandMark";
 import { useReadCache } from "./useReadCache";
 import { useWebFeatures } from "./useWebFeatures";
 import { WebFeatures } from "./WebFeatures";
@@ -18,7 +22,14 @@ const identity = "synthetic-dataset";
 const features: WebFeaturesReport = {
   embeddings_enabled: true,
   inference_enabled: false,
+  prerequisites_enabled: true,
   dataset_identity: identity,
+  display_label: "example-uni",
+  university_names: { en: "Example University", fi: "Esimerkkiyliopisto" },
+  source_attribution: { en: "Source attribution", fi: "Lähdemerkintä" },
+  assumed_course_credits: "5",
+  study_plan_script: null,
+  study_plan_formats: [],
 };
 
 function FeatureProbe() {
@@ -29,6 +40,10 @@ function FeatureProbe() {
     { "data-testid": "feature-child" },
     `${served.dataset_identity} ${cache.getDatasetIdentity()}`,
   );
+}
+
+function BrandProbe() {
+  return createElement(BrandMark, { site: true });
 }
 
 interface StubResponse {
@@ -57,6 +72,7 @@ describe("feature bootstrap", () => {
     sessionStorage.clear();
     mode = "pending";
     release = null;
+    document.title = "course-explorer";
     container = document.createElement("div");
     document.body.appendChild(container);
     store = createBrowserStore(localStorage);
@@ -119,5 +135,27 @@ describe("feature bootstrap", () => {
           ?.textContent,
       ).toBe(`${identity} ${identity}`),
     );
+  });
+
+  it("renders the configured display label after feature bootstrap", async () => {
+    mode = "ready";
+    act(() =>
+      root.render(
+        createElement(
+          StoreContext.Provider,
+          { value: store },
+          createElement(WebFeatures, {
+            children: createElement(BrandProbe),
+          }),
+        ),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(container.querySelector(".brand")?.textContent).toBe(
+        "course-explorer/example-uni",
+      ),
+    );
+    expect(document.title).toBe("course-explorer/example-uni");
   });
 });

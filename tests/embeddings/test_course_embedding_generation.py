@@ -12,7 +12,6 @@ from course_explorer.embeddings.generation import (
 )
 from course_explorer.enums import (
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
     TranslationMethod,
 )
@@ -58,8 +57,8 @@ def test_build_chunks_preserves_field_language_origin_and_source_provenance() ->
         translation(
             "course-a-v1",
             TeachingTextField.NAME,
-            TeachingTextLanguage.EN,
-            TeachingTextLanguage.FI,
+            "en",
+            "fi",
             "Lineaarialgebra",
             "Linear algebra",
         ),
@@ -71,9 +70,9 @@ def test_build_chunks_preserves_field_language_origin_and_source_provenance() ->
 
     keys = [(chunk.field, chunk.language, chunk.text_origin, chunk.chunk_index) for chunk in chunks]
     assert keys == [
-        (TeachingTextField.NAME, TeachingTextLanguage.FI, TeachingTextOrigin.OFFICIAL, 0),
-        (TeachingTextField.NAME, TeachingTextLanguage.EN, TeachingTextOrigin.DERIVED, 0),
-        (TeachingTextField.CONTENT, TeachingTextLanguage.FI, TeachingTextOrigin.OFFICIAL, 0),
+        (TeachingTextField.NAME, "fi", TeachingTextOrigin.OFFICIAL, 0),
+        (TeachingTextField.NAME, "en", TeachingTextOrigin.DERIVED, 0),
+        (TeachingTextField.CONTENT, "fi", TeachingTextOrigin.OFFICIAL, 0),
     ]
     derived = chunks[1]
     assert derived.text == "Linear algebra"

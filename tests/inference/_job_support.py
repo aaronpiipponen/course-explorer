@@ -37,6 +37,7 @@ from course_explorer.inference import job as job_module
 from course_explorer.inference.operational import prepare_operational_catalogue
 from course_explorer.inference.prompts import load_prompt_pack
 from course_explorer.inference.scheduling_repository import InferenceSchedulingRepository
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.teaching_text.repository import DerivedTranslationRepository
 from course_explorer.teaching_text.service import TeachingTextService
 from tests.inference._http_support import InferenceHttpBoundary, install_inference_http
@@ -53,7 +54,7 @@ def seed_embeddings(factory: object, settings: EmbeddingRuntimeSettings) -> None
     Every chunk carries a nonzero unit vector so the real pgvector cosine ranking, fusion and
     selection run instead of collapsing on zero vectors.
     """
-    curriculum = CurriculumRepository(factory)
+    curriculum = CurriculumRepository(factory, university=UNIVERSITIES["example"])
     teaching_text = TeachingTextService(curriculum, DerivedTranslationRepository(factory))
     catalogue = prepare_operational_catalogue(curriculum, teaching_text, settings)
     chunks = build_course_embedding_chunks(catalogue.teaching_text_catalogue, settings)

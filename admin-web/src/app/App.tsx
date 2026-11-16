@@ -26,6 +26,7 @@ import { SignedInConsole } from "./SignedInConsole";
 /** Render the administration console. */
 export function App() {
   const [session, setSession] = useState<SessionReport | null>(null);
+  const [displayLabel, setDisplayLabel] = useState("");
   const [locked, setLocked] = useState(false);
   const [adminRebuilt, setAdminRebuilt] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -33,7 +34,9 @@ export function App() {
 
   const bootstrap = useCallback(async (): Promise<void> => {
     try {
-      setSession(await fetchSession());
+      const report = await fetchSession();
+      setDisplayLabel(report.display_label);
+      setSession(report);
       setLocked(false);
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) {
@@ -49,6 +52,12 @@ export function App() {
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);
+
+  useEffect(() => {
+    if (session !== null) {
+      document.title = `${wording.admin} · ${wording.brand}/${session.display_label}`;
+    }
+  }, [session]);
 
   useEffect(() => {
     // A granted session is a fresh admission attempt of its own, whatever ended the previous one.
@@ -103,6 +112,7 @@ export function App() {
 
   const onAuthenticated = useCallback((report: SessionReport): void => {
     setAdminRebuilt(false);
+    setDisplayLabel(report.display_label);
     setSession(report);
   }, []);
 
@@ -114,6 +124,7 @@ export function App() {
       <div>
         <SignIn
           session={null}
+          displayLabel={displayLabel}
           onAuthenticated={onAuthenticated}
           onRefusal={onRefusal}
         />
@@ -130,6 +141,7 @@ export function App() {
         <FailureNotice text={failure} />
         <SignIn
           session={session}
+          displayLabel={displayLabel}
           onAuthenticated={onAuthenticated}
           onRefusal={onRefusal}
         />

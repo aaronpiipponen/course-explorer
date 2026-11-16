@@ -49,7 +49,8 @@ class SessionReport(BaseModel):
     """The public facts of one session and the console presentation metadata.
 
     ``poll_seconds`` is the interval the console waits between completed panel reads, ``app_url`` is
-    the address its App link points at, and ``repository_url`` is the address its GitHub link opens.
+    the address its App link points at, ``repository_url`` is the address its GitHub link opens, and
+    ``display_label`` is the site's rendered display label.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -60,6 +61,7 @@ class SessionReport(BaseModel):
     poll_seconds: int
     app_url: str
     repository_url: str
+    display_label: str
 
 
 def _security(request: Request) -> AdminSecurity:
@@ -76,6 +78,7 @@ def _report(grant: SessionGrant, settings: AdminWebSettings) -> SessionReport:
         poll_seconds=settings.admin_web_poll_seconds,
         app_url=settings.web_app_url,
         repository_url=settings.admin_web_repository_url,
+        display_label=settings.display_label,
     )
 
 

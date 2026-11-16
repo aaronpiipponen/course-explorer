@@ -132,8 +132,8 @@ jobs:
 
   deploy:
     needs: verify
-    if: github.repository == 'aaronpiipponen/tuni-course-explorer' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, ARM64, tuni-deploy]
+    if: github.repository == 'aaronpiipponen/course-explorer' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, ARM64, course-explorer-deploy]
     concurrency:
       # One deployment at a time. A newer push cancels its superseded verification and
       # leaves an admitted deployment to finish its two restarts.

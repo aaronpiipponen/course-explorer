@@ -38,6 +38,10 @@ test(
           panel.querySelector(".route-error") === null
         );
       });
+      assert.equal(
+        await page.locator(".route-panel.open .assumed-note").count(),
+        0,
+      );
       assert.equal(workers.length >= 1, true, "the route runs in a worker");
 
       await page.locator(".route-panel.open .route-expand").click();

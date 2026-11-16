@@ -1,0 +1,54 @@
+/* The transient notice, item, reason and omitted-list styles of one study-plan import. */
+.import-notice {
+  overflow: hidden;
+}
+.import-notice-body {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 12px;
+  background: #0a0a0f;
+}
+.import-notice h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.import-notice ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.import-notice li {
+  display: grid;
+  gap: 2px;
+}
+.import-item {
+  color: #b07be8;
+  font:
+    12px "JetBrains Mono",
+    ui-monospace,
+    monospace;
+}
+.import-reason {
+  color: rgb(255 255 255 / 55%);
+  font-size: 12.5px;
+}
+.import-notice-body .pill-btn {
+  justify-self: start;
+}
+.import-omitted {
+  max-height: 180px;
+  margin: 0 0 18px;
+  padding-left: 18px;
+  overflow-y: auto;
+  color: rgb(255 255 255 / 75%);
+  font:
+    11.5px "JetBrains Mono",
+    ui-monospace,
+    monospace;
+}

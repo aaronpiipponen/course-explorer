@@ -12,24 +12,28 @@ from sqlalchemy import func, select
 
 from course_explorer.db.models import (
     Course,
-    CourseText,
     CourseVersion,
     CourseVersionCurriculumPeriod,
     CurriculumPeriod,
+    IngestionRun,
     ModuleRuleNode,
     ModuleVersion,
     ModuleVersionCurriculumPeriod,
+    OfficialCourseText,
+    OfficialModuleText,
     OfficialPrerequisiteOption,
     OfficialPrerequisiteOptionMember,
     OfficialSubstitutionOption,
     OfficialSubstitutionOptionMember,
     SourceSnapshot,
 )
+from course_explorer.enums import OfficialTextField
+from course_explorer.ingestion.importing import import_curriculum
 from course_explorer.ingestion.normalization import normalize_curriculum
 from course_explorer.ingestion.normalization_repository import NormalizationRepository
 from course_explorer.ingestion.repository import CaptureRepository
+from course_explorer.instance import UNIVERSITIES
 from tests.ingestion._normalization_repository_support import (
-    GUIDE_URL,
     build_completed_fixture_store,
     fixture_bytes,
     normalized_database_digest,
@@ -40,13 +44,21 @@ pytestmark = [
 ]
 
 
+class _CompletedStoreSource:
+    """Source boundary that fails if a completed capture asks for further source work."""
+
+    def capture_pending(self, *_args, **_kwargs):
+        """Reject a capture call that a completed store must never require."""
+        raise AssertionError("a completed capture must not ask the source for new responses")
+
+
 def test_normalization_round_trip_is_idempotent_and_preserves_official_structure(
     database: tuple[object, object], tmp_path: Path
 ) -> None:
     """Normalizing the same official structure twice is idempotent and preserves every row."""
     _, factory = database
     capture_repository = CaptureRepository(factory)
-    normalization_repository = NormalizationRepository(factory)
+    normalization_repository = NormalizationRepository(factory, university=UNIVERSITIES["example"])
     store = build_completed_fixture_store(
         tmp_path,
         capture_repository,
@@ -60,12 +72,11 @@ def test_normalization_round_trip_is_idempotent_and_preserves_official_structure
         normalization_repository,
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
     assert first.run_id == store.manifest.run_id
     with factory.begin() as session:
         membership_years = session.execute(
-            select(CourseVersion.sisu_course_unit_id, CurriculumPeriod.academic_year_start)
+            select(CourseVersion.source_version_id, CurriculumPeriod.academic_year_start)
             .join(
                 CourseVersionCurriculumPeriod,
                 CourseVersionCurriculumPeriod.course_version_id == CourseVersion.id,
@@ -74,7 +85,7 @@ def test_normalization_round_trip_is_idempotent_and_preserves_official_structure
                 CurriculumPeriod,
                 CurriculumPeriod.id == CourseVersionCurriculumPeriod.curriculum_period_id,
             )
-            .order_by(CourseVersion.sisu_course_unit_id, CurriculumPeriod.academic_year_start)
+            .order_by(CourseVersion.source_version_id, CurriculumPeriod.academic_year_start)
         ).all()
         assert membership_years == [
             ("course-a-v2", 2026),
@@ -87,7 +98,7 @@ def test_normalization_round_trip_is_idempotent_and_preserves_official_structure
             ("course-tie-b", 2020),
         ]
         module_membership_years = session.execute(
-            select(ModuleVersion.sisu_module_id, CurriculumPeriod.academic_year_start)
+            select(ModuleVersion.source_version_id, CurriculumPeriod.academic_year_start)
             .join(
                 ModuleVersionCurriculumPeriod,
                 ModuleVersionCurriculumPeriod.module_version_id == ModuleVersion.id,
@@ -96,7 +107,7 @@ def test_normalization_round_trip_is_idempotent_and_preserves_official_structure
                 CurriculumPeriod,
                 CurriculumPeriod.id == ModuleVersionCurriculumPeriod.curriculum_period_id,
             )
-            .order_by(ModuleVersion.sisu_module_id, CurriculumPeriod.academic_year_start)
+            .order_by(ModuleVersion.source_version_id, CurriculumPeriod.academic_year_start)
         ).all()
         assert module_membership_years == [
             ("module-group-degree-v1", 2026),
@@ -143,7 +154,7 @@ def test_normalization_round_trip_is_idempotent_and_preserves_official_structure
         prerequisite_options = session.scalars(
             select(OfficialPrerequisiteOption)
             .join(CourseVersion)
-            .where(CourseVersion.sisu_course_unit_id == "course-a-z1")
+            .where(CourseVersion.source_version_id == "course-a-z1")
             .order_by(
                 OfficialPrerequisiteOption.requirement_kind, OfficialPrerequisiteOption.option_index
             )
@@ -184,7 +195,7 @@ def test_normalization_round_trip_is_idempotent_and_preserves_official_structure
         substitutions = session.scalars(
             select(OfficialSubstitutionOption)
             .join(CourseVersion)
-            .where(CourseVersion.sisu_course_unit_id == "course-a-z1")
+            .where(CourseVersion.source_version_id == "course-a-z1")
             .order_by(OfficialSubstitutionOption.option_index)
         ).all()
         assert [option.option_index for option in substitutions] == [0, 1]
@@ -210,7 +221,7 @@ def test_normalization_round_trip_is_idempotent_and_preserves_official_structure
         nodes = session.scalars(
             select(ModuleRuleNode)
             .join(ModuleVersion)
-            .where(ModuleVersion.sisu_module_id == "module-group-grouping-v1")
+            .where(ModuleVersion.source_version_id == "module-group-grouping-v1")
             .order_by(ModuleRuleNode.parent_node_id, ModuleRuleNode.sibling_position)
         ).all()
         root = next(node for node in nodes if node.parent_node_id is None)
@@ -237,33 +248,53 @@ def test_normalization_round_trip_is_idempotent_and_preserves_official_structure
             "AnyModuleRule",
         }
     first_digest = normalized_database_digest(factory)
-    second = normalize_curriculum(
-        store,
-        normalization_repository,
+    unchanged_store = build_completed_fixture_store(tmp_path, capture_repository)
+    second = import_curriculum(
+        source=_CompletedStoreSource(),
+        store=unchanged_store,
+        capture_repository=capture_repository,
+        normalization_repository=normalization_repository,
+        checkpoint_response_count=100,
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
-    assert second.run_id == store.manifest.run_id
+    assert second is not None
+    assert second.normalization.run_id == unchanged_store.manifest.run_id
+    assert second.capture.status.value == "completed"
 
     assert first.new_course_version_count == 6
     assert first.new_module_version_count == 3
     assert first.active_course_count == 1
-    assert first.representative_changed_course_count == 3
     assert first.unresolved_course_group_count == 1
     assert first.unresolved_module_group_count == 1
     assert first.unrestricted_rule_count == 2
-    assert second.unchanged_course_version_count == 6
-    assert second.unchanged_module_version_count == 3
-    assert second.new_course_version_count == second.changed_course_version_count == 0
+    assert second.normalization.unchanged_course_version_count == 6
+    assert second.normalization.unchanged_module_version_count == 3
+    assert second.normalization.new_course_version_count == 0
+    assert second.normalization.changed_course_version_count == 0
     assert normalized_database_digest(factory) == first_digest
+    with factory.begin() as session:
+        assert (
+            session.scalar(
+                select(func.count(SourceSnapshot.id)).where(
+                    SourceSnapshot.ingestion_run_id == unchanged_store.manifest.run_id
+                )
+            )
+            == 0
+        )
+        assert (
+            session.scalar(
+                select(IngestionRun.id).where(IngestionRun.id == unchanged_store.manifest.run_id)
+            )
+            is None
+        )
 
     with factory.begin() as session:
         course = session.scalar(select(Course).where(Course.group_id == "course-group-a"))
         assert course is not None and course.is_active
         unbounded = session.scalar(
             select(CourseVersion.credits_max).where(
-                CourseVersion.sisu_course_unit_id == "course-a-v2"
+                CourseVersion.source_version_id == "course-a-v2"
             )
         )
         assert unbounded is None
@@ -272,45 +303,46 @@ def test_normalization_round_trip_is_idempotent_and_preserves_official_structure
         )
 
 
-def test_normalization_replaces_changed_versions_and_reports_representative_change(
+def test_normalization_replaces_changed_versions_and_reselects_the_representative(
     database: tuple[object, object], tmp_path: Path
 ) -> None:
     """Changed source hashes rewrite dependent normalized rows and reselect the representative."""
     _, factory = database
     capture_repository = CaptureRepository(factory)
-    normalization_repository = NormalizationRepository(factory)
+    normalization_repository = NormalizationRepository(factory, university=UNIVERSITIES["example"])
     first_store = build_completed_fixture_store(tmp_path, capture_repository)
     normalize_curriculum(
         first_store,
         normalization_repository,
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
     with factory.begin() as session:
         first_version_ids = {
-            row.sisu_course_unit_id: row.id for row in session.scalars(select(CourseVersion))
+            row.source_version_id: row.id for row in session.scalars(select(CourseVersion))
         }
         first_module_ids = {
-            row.sisu_module_id: row.id for row in session.scalars(select(ModuleVersion))
+            row.source_version_id: row.id for row in session.scalars(select(ModuleVersion))
         }
         unchanged_text_content = session.scalar(
-            select(CourseText.content_en).where(
-                CourseText.course_version_id == first_version_ids["course-a-v2"]
+            select(OfficialCourseText.text).where(
+                OfficialCourseText.course_version_id == first_version_ids["course-a-v2"],
+                OfficialCourseText.field == OfficialTextField.CONTENT,
+                OfficialCourseText.language == "en",
             )
         )
         old_prerequisite_ids = set(
             session.scalars(
                 select(OfficialPrerequisiteOption.id)
                 .join(CourseVersion)
-                .where(CourseVersion.sisu_course_unit_id == "course-a-z1")
+                .where(CourseVersion.source_version_id == "course-a-z1")
             )
         )
         old_rule_ids = set(
             session.scalars(
                 select(ModuleRuleNode.id)
                 .join(ModuleVersion)
-                .where(ModuleVersion.sisu_module_id == "module-group-grouping-v1")
+                .where(ModuleVersion.source_version_id == "module-group-grouping-v1")
             )
         )
 
@@ -340,28 +372,26 @@ def test_normalization_replaces_changed_versions_and_reports_representative_chan
         normalization_repository,
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
 
     assert report.changed_course_version_count == 1
     assert report.new_course_version_count == 1
     assert report.changed_module_version_count == 1
-    assert report.representative_changed_course_count == 1
     with factory.begin() as session:
         assert (
             session.scalar(
-                select(CourseVersion.code).where(CourseVersion.sisu_course_unit_id == "course-a-z1")
+                select(CourseVersion.code).where(CourseVersion.source_version_id == "course-a-z1")
             )
             == "CS.A1-CHANGED"
         )
         assert session.scalar(
-            select(CourseVersion.id).where(CourseVersion.sisu_course_unit_id == "course-a-v3")
+            select(CourseVersion.id).where(CourseVersion.source_version_id == "course-a-v3")
         )
         new_prerequisite_ids = set(
             session.scalars(
                 select(OfficialPrerequisiteOption.id)
                 .join(CourseVersion)
-                .where(CourseVersion.sisu_course_unit_id == "course-a-z1")
+                .where(CourseVersion.source_version_id == "course-a-z1")
             )
         )
         assert new_prerequisite_ids.isdisjoint(old_prerequisite_ids)
@@ -369,7 +399,7 @@ def test_normalization_replaces_changed_versions_and_reports_representative_chan
             session.scalars(
                 select(ModuleRuleNode.id)
                 .join(ModuleVersion)
-                .where(ModuleVersion.sisu_module_id == "module-group-grouping-v1")
+                .where(ModuleVersion.source_version_id == "module-group-grouping-v1")
             )
         )
         assert new_rule_ids.isdisjoint(old_rule_ids)
@@ -381,22 +411,31 @@ def test_normalization_replaces_changed_versions_and_reports_representative_chan
             )
             == "changed-any-course"
         )
+        surviving_snapshot_id = session.scalar(
+            select(CourseVersion.source_snapshot_id).where(
+                CourseVersion.source_version_id == "course-a-z1"
+            )
+        )
+        assert surviving_snapshot_id is not None
+        surviving_snapshot = session.get(SourceSnapshot, surviving_snapshot_id)
+        assert surviving_snapshot is not None
+        assert surviving_snapshot.source_object_id == "course-a-z1"
         assert (
             session.scalar(
                 select(func.count(SourceSnapshot.id)).where(
                     SourceSnapshot.source_object_id == "course-a-z1"
                 )
             )
-            == 2
+            == 1
         )
 
         # Exact versions and module versions keep their exact primary keys. Only the
         # changed course-a-z1 and the added course-a-v3 differ.
         assert {
-            row.sisu_course_unit_id: row.id
+            row.source_version_id: row.id
             for row in session.scalars(
                 select(CourseVersion).where(
-                    CourseVersion.sisu_course_unit_id.notin_(("course-a-z1", "course-a-v3"))
+                    CourseVersion.source_version_id.notin_(("course-a-z1", "course-a-v3"))
                 )
             )
         } == {
@@ -405,10 +444,10 @@ def test_normalization_replaces_changed_versions_and_reports_representative_chan
             if source_id != "course-a-z1"
         }
         assert {
-            row.sisu_module_id: row.id
+            row.source_version_id: row.id
             for row in session.scalars(
                 select(ModuleVersion).where(
-                    ModuleVersion.sisu_module_id != "module-group-grouping-v1"
+                    ModuleVersion.source_version_id != "module-group-grouping-v1"
                 )
             )
         } == {
@@ -420,17 +459,317 @@ def test_normalization_replaces_changed_versions_and_reports_representative_chan
         # dependent payload is rewritten with this fixture's content.
         assert (
             session.scalar(
-                select(CourseText.content_en).where(
-                    CourseText.course_version_id == first_version_ids["course-a-v2"]
+                select(OfficialCourseText.text).where(
+                    OfficialCourseText.course_version_id == first_version_ids["course-a-v2"],
+                    OfficialCourseText.field == OfficialTextField.CONTENT,
+                    OfficialCourseText.language == "en",
                 )
             )
             == unchanged_text_content
         )
         assert (
             session.scalar(
-                select(CourseText.content_en).where(
-                    CourseText.course_version_id == first_version_ids["course-a-z1"]
+                select(OfficialCourseText.text).where(
+                    OfficialCourseText.course_version_id == first_version_ids["course-a-z1"],
+                    OfficialCourseText.field == OfficialTextField.CONTENT,
+                    OfficialCourseText.language == "en",
                 )
             )
             == "Changed content"
         )
+
+
+def _reconciliation_course(
+    source_id: str, group_id: str, code: str, period_ids: list[str]
+) -> dict[str, Any]:
+    """Build one Sisu-shaped course record for the reconciliation fixture."""
+    return {
+        "id": source_id,
+        "groupId": group_id,
+        "code": code,
+        "name": {"fi": f"Nimi {code}", "en": f"Name {code}"},
+        "credits": {"min": 5, "max": None},
+        "curriculumPeriodIds": period_ids,
+        "documentState": "ACTIVE",
+        "validityPeriod": {"startDate": None, "endDate": None},
+        "metadata": {"revision": 1, "modificationOrdinal": 1},
+        "content": None,
+        "outcomes": None,
+        "prerequisites": None,
+        "additional": None,
+        "compulsoryFormalPrerequisites": None,
+        "recommendedFormalPrerequisites": None,
+        "substitutions": None,
+    }
+
+
+def _reconciliation_module(source_id: str, group_id: str, code: str) -> dict[str, Any]:
+    """Build one Sisu-shaped module record for the reconciliation fixture."""
+    return {
+        "id": source_id,
+        "groupId": group_id,
+        "type": "StudyModule",
+        "code": code,
+        "name": {"fi": f"Moduuli {code}", "en": f"Module {code}"},
+        "targetCredits": {"min": 20, "max": None},
+        "curriculumPeriodIds": ["period-2026"],
+        "documentState": "ACTIVE",
+        "validityPeriod": {"startDate": None, "endDate": None},
+        "metadata": {"revision": 1, "modificationOrdinal": 1},
+        "rule": None,
+    }
+
+
+def test_completed_import_reconciles_only_covered_period_listings(
+    database: tuple[object, object], tmp_path: Path
+) -> None:
+    """A complete import replaces covered listings and keeps uncovered history and stored rows."""
+    _, factory = database
+    capture_repository = CaptureRepository(factory)
+    normalization_repository = NormalizationRepository(factory, university=UNIVERSITIES["example"])
+    kept_course = _reconciliation_course(
+        "recon-course-v1", "recon-course", "RECON.1", ["period-2020", "period-2026"]
+    )
+    dropped_course = _reconciliation_course(
+        "recon-dropped-v1", "recon-dropped", "RECON.2", ["period-2026"]
+    )
+    first_store = build_completed_fixture_store(
+        tmp_path,
+        capture_repository,
+        courses_body=json.dumps(
+            [kept_course, dropped_course], sort_keys=True, separators=(",", ":")
+        ).encode(),
+        modules_body=json.dumps(
+            [_reconciliation_module("recon-module-v1", "recon-module", "RECON.M")],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode(),
+    )
+    normalize_curriculum(
+        first_store,
+        normalization_repository,
+        current_academic_year_start=2026,
+        activity_window_years=3,
+    )
+
+    dropped_from_coverage = _reconciliation_course(
+        "recon-course-v1", "recon-course", "RECON.1", ["period-2020"]
+    )
+    second_store = build_completed_fixture_store(
+        tmp_path,
+        capture_repository,
+        courses_body=json.dumps(
+            [dropped_from_coverage], sort_keys=True, separators=(",", ":")
+        ).encode(),
+        modules_body=b"[]",
+    )
+    normalize_curriculum(
+        second_store,
+        normalization_repository,
+        current_academic_year_start=2026,
+        activity_window_years=3,
+    )
+
+    with factory.begin() as session:
+        memberships = session.execute(
+            select(CourseVersion.source_version_id, CurriculumPeriod.id)
+            .join(
+                CourseVersionCurriculumPeriod,
+                CourseVersionCurriculumPeriod.course_version_id == CourseVersion.id,
+            )
+            .join(
+                CurriculumPeriod,
+                CurriculumPeriod.id == CourseVersionCurriculumPeriod.curriculum_period_id,
+            )
+            .order_by(CourseVersion.source_version_id, CurriculumPeriod.id)
+        ).all()
+        assert memberships == [("recon-course-v1", "period-2020")]
+        module_memberships = session.execute(
+            select(ModuleVersion.source_version_id, CurriculumPeriod.id)
+            .join(
+                ModuleVersionCurriculumPeriod,
+                ModuleVersionCurriculumPeriod.module_version_id == ModuleVersion.id,
+            )
+            .join(
+                CurriculumPeriod,
+                CurriculumPeriod.id == ModuleVersionCurriculumPeriod.curriculum_period_id,
+            )
+        ).all()
+        assert module_memberships == []
+        dropped = session.scalar(select(Course).where(Course.group_id == "recon-dropped"))
+        assert dropped is not None
+        assert dropped.is_active is False
+        assert (
+            session.scalar(
+                select(CourseVersion.id).where(
+                    CourseVersion.source_version_id == "recon-dropped-v1"
+                )
+            )
+            is not None
+        )
+        module = session.scalar(
+            select(ModuleVersion).where(ModuleVersion.source_version_id == "recon-module-v1")
+        )
+        assert module is not None
+
+
+def test_official_cells_follow_order_only_for_written_payloads(
+    database: tuple[object, object], tmp_path: Path
+) -> None:
+    """Configured order and duplicate suppression apply only to payloads that are first written or
+    changed at the source.
+    """
+    _, factory = database
+    hanken = UNIVERSITIES["hanken"]
+    capture_repository = CaptureRepository(factory)
+    normalization_repository = NormalizationRepository(factory, university=hanken)
+    course = {
+        "id": "dup-course-v1",
+        "groupId": "dup-course",
+        "code": "DUP.1",
+        "name": {"sv": "Sama", "fi": "Sama", "en": "English", "de": "Deutsch"},
+        "credits": {"min": 5, "max": 5},
+        "curriculumPeriodIds": ["period-2026"],
+        "documentState": "ACTIVE",
+        "validityPeriod": {"startDate": None, "endDate": None},
+        "metadata": {"revision": 1, "modificationOrdinal": 1},
+        "content": {"sv": "Svensk", "fi": "Suomi", "de": "Deutsch"},
+        "outcomes": None,
+        "prerequisites": None,
+        "additional": None,
+        "compulsoryFormalPrerequisites": None,
+        "recommendedFormalPrerequisites": None,
+        "substitutions": None,
+    }
+    module = {
+        "id": "dup-module-v1",
+        "groupId": "dup-module",
+        "type": "StudyModule",
+        "code": "DUP.M",
+        "name": {"sv": "Mod", "fi": "Mod", "en": "Modul", "de": "Deutsch"},
+        "targetCredits": {"min": 5, "max": 5},
+        "curriculumPeriodIds": ["period-2026"],
+        "documentState": "ACTIVE",
+        "validityPeriod": {"startDate": None, "endDate": None},
+        "metadata": {"revision": 1, "modificationOrdinal": 1},
+        "rule": None,
+    }
+
+    def bodies(course_record: dict[str, Any], module_record: dict[str, Any]) -> tuple[bytes, bytes]:
+        return (
+            json.dumps([course_record], ensure_ascii=False).encode(),
+            json.dumps([module_record], ensure_ascii=False).encode(),
+        )
+
+    def course_cells() -> dict[tuple[str, str], str]:
+        with factory.begin() as session:
+            return {
+                (field.value, language): text
+                for field, language, text in session.execute(
+                    select(
+                        OfficialCourseText.field,
+                        OfficialCourseText.language,
+                        OfficialCourseText.text,
+                    )
+                    .join(CourseVersion, CourseVersion.id == OfficialCourseText.course_version_id)
+                    .where(CourseVersion.source_version_id == "dup-course-v1")
+                ).all()
+            }
+
+    def module_cells() -> dict[str, str]:
+        with factory.begin() as session:
+            return {
+                language: text
+                for language, text in session.execute(
+                    select(OfficialModuleText.language, OfficialModuleText.text)
+                    .join(
+                        ModuleVersion,
+                        ModuleVersion.id == OfficialModuleText.module_version_id,
+                    )
+                    .where(ModuleVersion.source_version_id == "dup-module-v1")
+                ).all()
+            }
+
+    course_body, module_body = bodies(course, module)
+    first_store = build_completed_fixture_store(
+        tmp_path,
+        capture_repository,
+        courses_body=course_body,
+        modules_body=module_body,
+    )
+    normalize_curriculum(
+        first_store,
+        normalization_repository,
+        current_academic_year_start=2026,
+        activity_window_years=3,
+    )
+    assert course_cells() == {
+        ("name", "sv"): "Sama",
+        ("name", "en"): "English",
+        ("content", "sv"): "Svensk",
+        ("content", "fi"): "Suomi",
+    }
+    assert module_cells() == {"sv": "Mod", "en": "Modul"}
+
+    # A retained migrated duplicate is not repaired by a hash-equal completed reimport.
+    with factory.begin() as session:
+        course_version_id = session.scalar(
+            select(CourseVersion.id).where(CourseVersion.source_version_id == "dup-course-v1")
+        )
+        module_version_id = session.scalar(
+            select(ModuleVersion.id).where(ModuleVersion.source_version_id == "dup-module-v1")
+        )
+        assert course_version_id is not None and module_version_id is not None
+        session.add(
+            OfficialCourseText(
+                course_version_id=course_version_id,
+                field=OfficialTextField.NAME,
+                language="fi",
+                text="Sama",
+            )
+        )
+        session.add(
+            OfficialModuleText(
+                module_version_id=module_version_id,
+                field="name",
+                language="fi",
+                text="Mod",
+            )
+        )
+    equal_store = build_completed_fixture_store(
+        tmp_path,
+        capture_repository,
+        courses_body=course_body,
+        modules_body=module_body,
+    )
+    normalize_curriculum(
+        equal_store,
+        normalization_repository,
+        current_academic_year_start=2026,
+        activity_window_years=3,
+    )
+    assert course_cells()[("name", "fi")] == "Sama"
+    assert module_cells()["fi"] == "Mod"
+
+    # A genuine source change deletes the retained duplicate and applies the write policy again.
+    changed_course = {**course, "code": "DUP.1-CHANGED"}
+    changed_module = {**module, "code": "DUP.M-CHANGED"}
+    changed_store = build_completed_fixture_store(
+        tmp_path,
+        capture_repository,
+        courses_body=bodies(changed_course, changed_module)[0],
+        modules_body=bodies(changed_course, changed_module)[1],
+    )
+    normalize_curriculum(
+        changed_store,
+        normalization_repository,
+        current_academic_year_start=2026,
+        activity_window_years=3,
+    )
+    assert course_cells() == {
+        ("name", "sv"): "Sama",
+        ("name", "en"): "English",
+        ("content", "sv"): "Svensk",
+        ("content", "fi"): "Suomi",
+    }
+    assert module_cells() == {"sv": "Mod", "en": "Modul"}

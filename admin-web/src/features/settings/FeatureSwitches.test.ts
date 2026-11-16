@@ -21,6 +21,7 @@ const report: ConfigurationFileReport = {
   values: {
     WEB_INFERENCE_ENABLED: false,
     WEB_EMBEDDINGS_ENABLED: true,
+    WEB_PREREQUISITES_ENABLED: true,
   },
 };
 

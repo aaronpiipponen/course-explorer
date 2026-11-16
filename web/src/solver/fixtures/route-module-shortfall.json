@@ -2583,7 +2583,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-zero-v1",
           "name_fi": null,
-          "sisu_module_id": "module-zero-v1"
+          "source_version_id": "module-zero-v1"
         }
       ],
       "pieces": [
@@ -2870,7 +2870,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-zero-v1",
           "name_fi": null,
-          "sisu_module_id": "module-zero-v1"
+          "source_version_id": "module-zero-v1"
         }
       ],
       "pieces": [

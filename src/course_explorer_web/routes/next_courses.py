@@ -1,6 +1,6 @@
 """POST adapter for read-only next-course discovery."""
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, HTTPException, Response
 
 from course_explorer.next_courses import commands
 from course_explorer.search.lookup import DisplayLanguage
@@ -32,9 +32,14 @@ class NextCoursesRequest(BoundedRequest):
 
 @router.post("/api/next-courses")
 def next_courses(request: NextCoursesRequest) -> Response:
-    """Forward every supplied value under this site's inference policy. Return the report."""
+    """Forward every supplied value under this site's inference policy. Return the report.
+
+    The read is refused with ``403`` when the site's prerequisites switch is off.
+    """
     bundle = preloaded_serving_settings()
     settings = bundle.web
+    if not settings.prerequisites_enabled:
+        raise HTTPException(status_code=403, detail="Feature disabled")
     serving = bundle.dataset
     cache = serving_caches(serving)
     values = request.model_dump()
@@ -43,6 +48,7 @@ def next_courses(request: NextCoursesRequest) -> Response:
         **values,
         database_settings=serving.settings,
         report_cache=cache.next_course_reports,
+        search_settings=bundle.search,
         projection=preloaded_lookup_projection(),
         session_factory=cache.database.factory(),
     )

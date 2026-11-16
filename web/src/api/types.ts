@@ -10,7 +10,7 @@ export type CourseSummary = {
   name_fi: string | null;
   name_en: string | null;
   code: string;
-  credits_min: string;
+  credits_min: string | null;
   credits_max: string | null;
   is_active: boolean;
   official_url: string;
@@ -27,7 +27,7 @@ export type ComparisonRequest = { course_a: string; course_b: string };
 /** Official module identity and display summary. */
 export type ModuleSummary = {
   group_id: string;
-  sisu_module_id: string;
+  source_version_id: string;
   module_type: string;
   code: string | null;
   name_fi: string | null;
@@ -395,12 +395,15 @@ export type PrerequisitePath = {
   blocked_excluded_group_ids: readonly string[];
   blocked_excluded_node_keys: readonly string[];
   problems: readonly PathProblem[];
+  /** Whether the result counts a course with no official minimum at the assumed credit value. */
+  uses_assumed_credits: boolean;
 };
 /**
  * The graph read's native report: its solver structure, permitted display and drawing allowance.
- * `dataset_identity` names the serving dataset the read resolved and `max_compact_nodes` is the
- * configured solver allocation limit the browser worker applies. An explicit Find calculates the
- * route from `solver` in a browser worker.
+ * `dataset_identity` names the serving dataset the read resolved, `max_compact_nodes` is the
+ * configured solver allocation limit the browser worker applies, and `assumed_course_credits` is
+ * the configured credit value a course with no official minimum contributes. An explicit Find
+ * calculates the route from `solver` in a browser worker.
  */
 export type PrerequisiteGraphReport = {
   drawing: {
@@ -413,6 +416,7 @@ export type PrerequisiteGraphReport = {
   };
   dataset_identity: string;
   max_compact_nodes: number;
+  assumed_course_credits: string;
   solver: SolverStructure;
   display: GraphDisplay | null;
 };
@@ -495,6 +499,8 @@ export type NextCoursesReport = {
   include_inferred: boolean;
   active_only: boolean;
   results: readonly NextCourseResult[];
+  /** Whether the report counts a course with no official minimum at the assumed credit value. */
+  uses_assumed_credits: boolean;
 };
 /** One similarity recommendation for a course basis. */
 export type SimilarityRecommendation = {
@@ -510,11 +516,22 @@ export type RecommendationsReport = {
   similarity_results: readonly SimilarityRecommendation[];
 };
 
-/** The site's two served feature switches and the identity of the dataset it serves. */
+/**
+ * The site's three served feature switches, the identity of the dataset it serves, its display
+ * label, the configured university's names, its curriculum source attribution, the configured
+ * assumed course credit value and the configured study-plan import script and formats.
+ */
 export type WebFeatures = {
   embeddings_enabled: boolean;
   inference_enabled: boolean;
+  prerequisites_enabled: boolean;
   dataset_identity: string;
+  display_label: string;
+  university_names: { en: string; fi: string };
+  source_attribution: { en: string; fi: string };
+  assumed_course_credits: string;
+  study_plan_script: string | null;
+  study_plan_formats: readonly string[];
 };
 /** Display language values used by API requests and reports. */
 export type { DisplayLanguage };

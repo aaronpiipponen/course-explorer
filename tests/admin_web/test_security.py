@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from course_explorer.instance import UNIVERSITIES
 from course_explorer_admin_web.security import SESSION_COOKIE_NAME
 from tests.admin_web import _support
 
@@ -526,6 +527,7 @@ def test_admin_login_issues_protected_server_session(
     assert report["authenticated"] is True
     assert report["username"] == _support.OPERATOR_NAME
     assert report["app_url"] == _support.APP_URL
+    assert report["display_label"] == UNIVERSITIES["example"].display_label
     assert report["csrf_token"] != initial_csrf
     assert response.headers["cache-control"] == "no-store"
     assert client.get("/unknown").status_code == 404

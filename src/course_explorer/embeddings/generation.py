@@ -20,8 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from course_explorer.config import EmbeddingRuntimeSettings
 from course_explorer.embeddings.provider import EmbeddingProvider
 from course_explorer.enums import (
+    LanguageCode,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
     TranslationMethod,
 )
@@ -47,10 +47,10 @@ class CourseEmbeddingChunkInput(_EmbeddingModel):
     """One desired teaching-text chunk with its complete provenance/work key."""
 
     group_id: str
-    sisu_course_unit_id: str
+    source_version_id: str
     representative_source_hash: str
     field: TeachingTextField
-    language: TeachingTextLanguage
+    language: LanguageCode
     chunk_index: int = Field(ge=0)
     text_origin: TeachingTextOrigin
     text: str
@@ -95,7 +95,7 @@ class CourseEmbeddingCoverageCount(_EmbeddingModel):
     """Lifecycle counts for one field/language/origin cell over a scoped chunk set."""
 
     field: TeachingTextField
-    language: TeachingTextLanguage
+    language: LanguageCode
     origin: TeachingTextOrigin
     pending_count: int = Field(ge=0)
     completed_count: int = Field(ge=0)
@@ -209,7 +209,7 @@ def build_course_embedding_chunks(
                 chunks.append(
                     CourseEmbeddingChunkInput(
                         group_id=course.group_id,
-                        sisu_course_unit_id=course.sisu_course_unit_id,
+                        source_version_id=course.source_version_id,
                         representative_source_hash=course.representative_source_hash,
                         field=cell.field,
                         language=cell.language,

@@ -10,18 +10,42 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine
+from sqlalchemy import Engine, select
 
 from course_explorer.constants import COURSE_EMBEDDING_DIMENSION
+from course_explorer.db.models import (
+    Course,
+    CourseVersion,
+    CurriculumPeriod,
+    Module,
+    ModuleRuleNode,
+    ModuleVersion,
+    ModuleVersionCurriculumPeriod,
+    OfficialModuleText,
+    OfficialPrerequisiteOption,
+    OfficialPrerequisiteOptionMember,
+    SourceSnapshot,
+)
+from course_explorer.db.session import session_scope
 from course_explorer.embeddings.centroids import CourseCentroid
 from course_explorer.embeddings.read import TeachingEmbeddingChunk
 from course_explorer.embeddings.shared_store import SharedServingStore
-from course_explorer.enums import TeachingTextField, TeachingTextLanguage, TeachingTextOrigin
+from course_explorer.enums import (
+    ModuleRuleType,
+    ModuleType,
+    PrerequisiteMemberType,
+    PrerequisiteRequirementKind,
+    SourceObjectType,
+    TeachingTextField,
+    TeachingTextOrigin,
+)
 from course_explorer.ingestion.normalization import normalize_curriculum
 from course_explorer.ingestion.normalization_repository import NormalizationRepository
 from course_explorer.ingestion.repository import CaptureRepository
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.next_courses import commands as command_module
 from course_explorer.next_courses.service import NextCourseMode
+from course_explorer.prerequisite import native_handle
 from course_explorer.prerequisite.domain import (
     CourseRequirement,
     EquivalenceGroupMember,
@@ -36,8 +60,8 @@ from course_explorer.prerequisite.equivalence_repository import InferredEquivale
 from course_explorer.prerequisite.repository import InferredPrerequisiteRepository
 from course_explorer.recommendations import commands as recommendations_commands
 from course_explorer.recommendations.commands import RecommendationsReport
+from tests.inference._scheduling_support import seed_courses
 from tests.ingestion._normalization_repository_support import (
-    GUIDE_URL,
     build_completed_fixture_store,
     fixture_bytes,
 )
@@ -182,7 +206,6 @@ def _courses_body() -> bytes:
                 "course-next-inactive",
                 "CS.NX",
                 periods=("period-2020",),
-                prerequisites=(_course_option("course-group-a"),),
             ),
             # A stale stored version references the basis course while the current representative
             # does not. The reverse read overselects it, but the compiler must drop it.
@@ -217,16 +240,38 @@ def discovery_catalogue(
     )
     normalize_curriculum(
         store,
-        NormalizationRepository(factory),
+        NormalizationRepository(factory, university=UNIVERSITIES["example"]),
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
 
     inferred_repository = InferredPrerequisiteRepository(factory)
     inferred_repository.publish(
         InferredSetPublication(
             target_group_id="course-next-inferred",
+            activity_as_of_academic_year_start=2026,
+            activity_window_years=3,
+            producer_kind="test",
+            producer_name="test-fixture",
+            producer_version="1",
+            input_hash=INPUT_HASH,
+            coverage_state="complete",
+            coverage=InferredSetCoverage(
+                eligible_source_count=1, processed_source_count=1, accepted_source_count=1
+            ),
+            expression=CourseRequirement(
+                type="course",
+                origin=PrerequisiteOrigin.INFERRED,
+                inferred_category=InferredPrerequisiteCategory.REQUIRED,
+                course_group_id="course-group-a",
+                inference=_metadata(),
+            ),
+            generated_at=GENERATED_AT,
+        )
+    )
+    inferred_repository.publish(
+        InferredSetPublication(
+            target_group_id="course-next-inactive",
             activity_as_of_academic_year_start=2026,
             activity_window_years=3,
             producer_kind="test",
@@ -341,7 +386,7 @@ def test_real_at_least_one_command_preserves_coverage_order(discovery_catalogue:
 def test_real_next_course_all_scope_includes_inactive_candidate(
     discovery_catalogue: object,
 ) -> None:
-    """All-courses includes and labels the inactive candidate."""
+    """All-courses qualifies an inactive candidate through its retained inferred relationship."""
     report = command_module.run_next_courses_command(
         completed_courses=BASIS,
         display_language="en",
@@ -353,6 +398,8 @@ def test_real_next_course_all_scope_includes_inactive_candidate(
         result for result in report.results if result.course.group_id == "course-next-inactive"
     )
     assert inactive.course.is_active is False
+    assert inactive.required_coverage == 1.0
+    assert inactive.depends_on_inferred is True
 
 
 def test_real_next_course_command_rejects_partial_substitution(discovery_catalogue: object) -> None:
@@ -392,7 +439,7 @@ def test_recommendations_exclude_same_input_real_next_courses(
         centroids=(
             CourseCentroid(
                 group_id="dummy",
-                sisu_course_unit_id="dummy",
+                source_version_id="dummy",
                 representative_source_hash="dummy",
                 chunk_count=1,
                 centroid=tuple([0.0] * COURSE_EMBEDDING_DIMENSION),
@@ -403,12 +450,12 @@ def test_recommendations_exclude_same_input_real_next_courses(
                 chunk_id=uuid4(),
                 group_id="dummy",
                 field=TeachingTextField.CONTENT,
-                language=TeachingTextLanguage.EN,
+                language="en",
                 chunk_index=0,
                 text_origin=TeachingTextOrigin.OFFICIAL,
                 character_count=1,
                 embedding=[0.0] * COURSE_EMBEDDING_DIMENSION,
-                sisu_course_unit_id="dummy",
+                source_version_id="dummy",
                 representative_source_hash="dummy",
             ),
         ),
@@ -428,3 +475,161 @@ def test_recommendations_exclude_same_input_real_next_courses(
         result.course.group_id for result in recommendation_report.similarity_results
     }
     assert recommendation_report.similarity_results == ()
+
+
+def test_next_courses_uses_assumed_credits_for_credit_bounds(
+    database: tuple[Engine, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown-credit basis course satisfies one official credit rule under the supplied cost."""
+    _, factory = database
+    seed_courses(
+        factory,
+        [("unknown-base", "UB.1", True), ("next-assumed", "NA.1", True)],
+    )
+    with session_scope(factory) as session:
+        base_course = session.scalar(select(Course).where(Course.group_id == "unknown-base"))
+        next_course = session.scalar(select(Course).where(Course.group_id == "next-assumed"))
+        assert base_course is not None and next_course is not None
+        base_version = session.scalar(
+            select(CourseVersion).where(CourseVersion.course_id == base_course.id)
+        )
+        next_version = session.scalar(
+            select(CourseVersion).where(CourseVersion.course_id == next_course.id)
+        )
+        assert base_version is not None and next_version is not None
+        base_version.credits_min = None
+        run_id = session.scalar(select(SourceSnapshot.ingestion_run_id).limit(1))
+        period_id = session.scalar(
+            select(CurriculumPeriod.id).order_by(CurriculumPeriod.id).limit(1)
+        )
+        assert run_id is not None and period_id is not None
+        module = Module(group_id="assumed-module")
+        session.add(module)
+        session.flush()
+        module_snapshot = SourceSnapshot(
+            ingestion_run_id=run_id,
+            object_type=SourceObjectType.MODULE,
+            source_object_id="assumed-module-v1",
+            source_group_id="assumed-module",
+            response_path="modules/assumed-module",
+            response_item_index=0,
+            source_hash="c" * 64,
+        )
+        session.add(module_snapshot)
+        session.flush()
+        module_version = ModuleVersion(
+            module_id=module.id,
+            source_version_id="assumed-module-v1",
+            module_type=ModuleType.STUDY_MODULE,
+            code="AM.1",
+            document_state="ACTIVE",
+            source_snapshot_id=module_snapshot.id,
+        )
+        session.add(module_version)
+        session.flush()
+        session.add_all(
+            (
+                OfficialModuleText(
+                    module_version_id=module_version.id,
+                    field="name",
+                    language="fi",
+                    text="Oletusmoduuli",
+                ),
+                OfficialModuleText(
+                    module_version_id=module_version.id,
+                    field="name",
+                    language="en",
+                    text="Assumed module",
+                ),
+            )
+        )
+        session.add(
+            ModuleVersionCurriculumPeriod(
+                module_version_id=module_version.id,
+                curriculum_period_id=period_id,
+            )
+        )
+        root = ModuleRuleNode(
+            module_version_id=module_version.id,
+            parent_node_id=None,
+            sibling_position=0,
+            node_type=ModuleRuleType.CREDITS_RULE,
+            credits_min=Decimal("7"),
+            credits_max=Decimal("7"),
+        )
+        session.add(root)
+        session.flush()
+        session.add(
+            ModuleRuleNode(
+                module_version_id=module_version.id,
+                parent_node_id=root.id,
+                sibling_position=0,
+                node_type=ModuleRuleType.COURSE_UNIT_RULE,
+                referenced_group_id="unknown-base",
+            )
+        )
+        option = OfficialPrerequisiteOption(
+            target_course_version_id=next_version.id,
+            option_index=0,
+            requirement_kind=PrerequisiteRequirementKind.COMPULSORY,
+        )
+        session.add(option)
+        session.flush()
+        session.add(
+            OfficialPrerequisiteOptionMember(
+                prerequisite_option_id=option.id,
+                member_index=0,
+                member_type=PrerequisiteMemberType.MODULE,
+                referenced_group_id="assumed-module",
+            )
+        )
+
+    assumed = search_settings().model_copy(update={"assumed_course_credits": Decimal("7")})
+    report = command_module.run_next_courses_command(
+        selected_courses=("unknown-base",),
+        completed_courses=("unknown-base",),
+        basis="completed",
+        mode="all",
+        display_language="en",
+        search_settings=assumed,
+    )
+
+    assert [result.course.group_id for result in report.results] == ["next-assumed"]
+    assert report.uses_assumed_credits is True
+    with factory() as session:
+        stored = session.scalar(
+            select(CourseVersion).where(CourseVersion.source_version_id == "sisu-unknown-base")
+        )
+        assert stored is not None and stored.credits_min is None
+
+    with session_scope(factory) as session:
+        module = session.scalar(select(Module).where(Module.group_id == "assumed-module"))
+        assert module is not None
+        module_version = session.scalar(
+            select(ModuleVersion).where(ModuleVersion.module_id == module.id)
+        )
+        assert module_version is not None
+        root = session.scalar(
+            select(ModuleRuleNode).where(
+                ModuleRuleNode.module_version_id == module_version.id,
+                ModuleRuleNode.parent_node_id.is_(None),
+            )
+        )
+        assert root is not None
+        root.node_type = ModuleRuleType.COMPOSITE_RULE
+        root.all_mandatory = True
+        root.credits_min = None
+        root.credits_max = None
+
+    native_handle.reset_worker_handle()
+    all_mandatory_report = command_module.run_next_courses_command(
+        selected_courses=("unknown-base",),
+        completed_courses=("unknown-base",),
+        basis="completed",
+        mode="all",
+        display_language="en",
+        search_settings=assumed,
+    )
+
+    assert [result.course.group_id for result in all_mandatory_report.results] == ["next-assumed"]
+    assert all_mandatory_report.uses_assumed_credits is False

@@ -9,8 +9,12 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from pydantic import AnyHttpUrl, TypeAdapter
+
 from course_explorer.ingestion.manifest import RawCaptureStore
 from course_explorer.ingestion.repository import CapturePersistence
+from course_explorer.ingestion.sisu_capture import SisuCapture
+from course_explorer.ingestion.sisu_normalization import SisuParser
 from course_explorer.ingestion.source import (
     CapturedResponse,
     CurriculumPeriodRef,
@@ -18,8 +22,17 @@ from course_explorer.ingestion.source import (
     SourceResponse,
     SourceVersionRef,
 )
+from course_explorer.instance import UNIVERSITIES
 
 FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "kori" / "capture"
+SISU_PARSER = SisuParser(
+    TypeAdapter(AnyHttpUrl).validate_python(UNIVERSITIES["example"].course_guide_base_url)
+)
+
+
+def sisu_capture(source: FixtureSource) -> SisuCapture:
+    """Wrap one fixture source in the Sisu capture driver used at the capture boundary."""
+    return SisuCapture(source)
 
 
 def fixture(name: str) -> bytes:
@@ -194,6 +207,7 @@ def new_store(tmp_path: Path) -> RawCaptureStore:
         tmp_path / "raw",
         run_id=uuid4(),
         started_at=datetime(2026, 9, 10, 12, 0, 0, tzinfo=UTC),
+        parser=SISU_PARSER,
     )
 
 

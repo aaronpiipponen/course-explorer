@@ -58,7 +58,7 @@ struct Rule {
 };
 
 struct Version {
-    std::string sisu;
+    std::string source_version_id;
     int32_t validity_start = 0;
     int32_t validity_end = 0;
     std::vector<int32_t> periods;
@@ -78,7 +78,7 @@ struct Version {
 };
 
 struct CourseRep {
-    std::string sisu;
+    std::string source_version_id;
     std::string code;
     std::string name_fi;
     std::string name_en;

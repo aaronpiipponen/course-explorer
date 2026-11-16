@@ -89,7 +89,7 @@ describe("structure edits", () => {
     const versions = { "module-a": "module-a-v1" };
     const module = {
       group_id: "module-a",
-      sisu_module_id: "module-a-v1",
+      source_version_id: "module-a-v1",
       module_type: "StudyModule" as const,
       code: "MA",
       name_fi: "Module A",
@@ -97,7 +97,7 @@ describe("structure edits", () => {
     };
     const emptyModule = {
       group_id: "module-b",
-      sisu_module_id: "module-b-v1",
+      source_version_id: "module-b-v1",
       module_type: "StudyModule" as const,
       code: "MB",
       name_fi: "Module B",
@@ -154,7 +154,7 @@ describe("structure edits", () => {
       root: {
         module: {
           group_id: "root",
-          sisu_module_id: "root-v1",
+          source_version_id: "root-v1",
           module_type: "DegreeProgramme",
           code: "ROOT",
           name_fi: "Root",
@@ -347,7 +347,20 @@ describe("structure edits", () => {
                   value: {
                     embeddings_enabled: false,
                     inference_enabled: false,
+                    prerequisites_enabled: true,
                     dataset_identity: identity,
+                    display_label: "example-uni",
+                    university_names: {
+                      en: "Example University",
+                      fi: "Esimerkkiyliopisto",
+                    },
+                    source_attribution: {
+                      en: "Source attribution",
+                      fi: "Lähdemerkintä",
+                    },
+                    assumed_course_credits: "5",
+                    study_plan_script: null,
+                    study_plan_formats: [],
                   },
                 },
                 createElement(

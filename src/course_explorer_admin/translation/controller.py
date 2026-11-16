@@ -19,8 +19,14 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from course_explorer.administration import load_private_model
-from course_explorer.config import load_administrative_dataset_settings
+from course_explorer.config import (
+    load_administrative_dataset_settings,
+    load_instance_settings,
+    load_translation_settings,
+)
 from course_explorer.datasets import DatasetId
+from course_explorer.hashing import json_sha256
+from course_explorer.instance import language_policy_overrides
 from course_explorer.teaching_text.service import TranslationImportReport
 from course_explorer.validation import (
     require_error_type,
@@ -44,21 +50,35 @@ class TranslationControllerPolicy(_ControllerModel):
     """Immutable canonical worker policy for one shared-dataset translation session.
 
     The canonical session identity lives in the neutral ``WorkerDatasetSession`` and the derived
-    database name in the administrative settings. This policy carries only the translation-owned
-    model provenance. Database name and course limit come from the neutral session and
+    database name in the administrative settings. This policy carries the translation-owned
+    configuration fingerprint. Database name and course limit come from the neutral session and
     administrative settings.
     """
 
-    schema_version: Literal[2]
+    schema_version: Literal[3]
     session_id: DatasetId
-    translation_model: str
+    configuration_sha256: str
 
-    @field_validator("translation_model")
+    @field_validator("configuration_sha256")
     @classmethod
-    def validate_translation_model(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("translation model must not be blank")
-        return value
+    def validate_configuration_sha256(cls, value: str) -> str:
+        return require_sha256(value, "hash")
+
+
+def translation_configuration_sha256() -> str:
+    """Hash the translation session's model and nondefault language-policy compatibility.
+
+    The model provenance is the base payload. Only the configured official languages and
+    translation priority that differ from the Finnish/English baseline are added, so a default
+    language policy leaves the stage identity equal to one built without an override. No work, text
+    or hash of a stored row participates.
+    """
+    payload: dict[str, object] = {"model": load_translation_settings().provenance_model}
+    overrides = language_policy_overrides(load_instance_settings().university)
+    for key in ("official_languages", "translation_priority"):
+        if key in overrides:
+            payload[key] = overrides[key]
+    return json_sha256(payload, ensure_ascii=True)
 
 
 class TranslationControllerWorkerState(_ControllerModel):

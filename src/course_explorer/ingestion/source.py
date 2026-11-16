@@ -2,7 +2,18 @@
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar
+
+if TYPE_CHECKING:
+    from course_explorer.enums import SourceObjectType
+    from course_explorer.ingestion.capture import CaptureBoundary
+    from course_explorer.ingestion.manifest import RawCaptureStore, ReplayedSourceObject
+    from course_explorer.ingestion.normalization import (
+        NormalizedCourseVersion,
+        NormalizedModuleVersion,
+        SnapshotProvenance,
+    )
+    from course_explorer.ingestion.repository import CapturePersistence
 
 KoriModuleType = Literal["DegreeProgramme", "StudyModule"]
 
@@ -20,7 +31,7 @@ T = TypeVar("T")
 
 
 @dataclass(frozen=True)
-class SourceResponse(Generic[T]):  # noqa: UP046 - contract uses explicit Generic[T] form
+class SourceResponse(Generic[T]):  # noqa: UP046 (contract uses explicit Generic[T] form)
     """A validated source value paired with its exact HTTP response evidence."""
 
     captured: CapturedResponse
@@ -29,7 +40,7 @@ class SourceResponse(Generic[T]):  # noqa: UP046 - contract uses explicit Generi
 
 @dataclass(frozen=True)
 class CurriculumPeriodRef:
-    """A source curriculum-period ID and its parsed academic-year start."""
+    """A selected source curriculum-period ID and its parsed academic-year start."""
 
     id: str
     academic_year_start: int
@@ -44,7 +55,30 @@ class SourceVersionRef:
     curriculum_period_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class SourcePeriod:
+    """One published source period over its academic-year interval.
+
+    ``academic_year_end`` is exclusive, so one academic year spans
+    ``academic_year_start`` to ``academic_year_start + 1``.
+    """
+
+    id: str
+    academic_year_start: int
+    academic_year_end: int
+
+
 SourceObject = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DecodedSourceObject:
+    """One source object decoded from authoritative response bytes with its identity and hash."""
+
+    source_object_id: str
+    source_group_id: str
+    source_hash: str
+    value: SourceObject
 
 
 class KoriRequestError(RuntimeError):
@@ -55,8 +89,8 @@ class KoriContractError(ValueError):
     """A public Kori response violates the source contract."""
 
 
-class CurriculumSource(Protocol):
-    """Stable source seam consumed by the capture and normalization services."""
+class SisuSource(Protocol):
+    """Stable Sisu source seam consumed by the shared capture driver."""
 
     def get_curriculum_periods(self) -> SourceResponse[tuple[CurriculumPeriodRef, ...]]: ...
 
@@ -91,3 +125,41 @@ class CurriculumSource(Protocol):
     def iter_module_group_versions(
         self, group_ids: Sequence[str]
     ) -> Iterator[SourceResponse[tuple[SourceObject, ...]]]: ...
+
+
+class CurriculumParser(Protocol):
+    """Family-owned decoding of captured bytes into neutral normalized records."""
+
+    def decode_objects(
+        self,
+        response: CapturedResponse,
+        object_type: SourceObjectType,
+        *,
+        store: RawCaptureStore | None = None,
+    ) -> tuple[DecodedSourceObject, ...]:
+        """Decode one stored response into its ordered records.
+
+        A family whose response does not carry its own period reads the already recorded
+        discovery evidence through ``store``. A family that carries its period ignores the
+        argument. A family that needs it raises one clear contract error when it is absent.
+        """
+        ...
+
+    def read_periods(self, store: RawCaptureStore) -> tuple[SourcePeriod, ...]: ...
+
+    def parse_object(
+        self, replayed: ReplayedSourceObject
+    ) -> NormalizedCourseVersion | NormalizedModuleVersion | SnapshotProvenance: ...
+
+
+class CurriculumSource(Protocol):
+    """Neutral source seam that records family discovery and fetching into shared checkpoints."""
+
+    def capture_pending(
+        self,
+        store: RawCaptureStore,
+        repository: CapturePersistence,
+        *,
+        checkpoint_response_count: int,
+        on_boundary: CaptureBoundary | None,
+    ) -> bool: ...

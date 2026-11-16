@@ -258,7 +258,7 @@ def test_course_resolver_matches_canonical_id_before_exact_code_and_fails_loudly
     assert records[0] is records[3]
     assert records[1] is records[2]
     assert records[1].summary.code == "COMP.CS.100"
-    assert records[0].sisu_course_unit_id == "source-beta"
+    assert records[0].source_version_id == "source-beta"
     assert curriculum.calls == []
     mixed_requested = {
         group_id
@@ -350,7 +350,9 @@ def test_catalogue_command_selects_strict_module_candidates(
     def _context(_settings: DatabaseSettings, **_kwargs):
         yield object()
 
-    monkeypatch.setattr(catalogue_module, "CurriculumRepository", lambda _factory: curriculum)
+    monkeypatch.setattr(
+        catalogue_module, "CurriculumRepository", lambda _factory, **_kwargs: curriculum
+    )
     monkeypatch.setattr(catalogue_module, "_database_context", _context)
     monkeypatch.setattr(
         catalogue_module, "load_database_settings", lambda: settings_factory(DatabaseSettings)
@@ -366,7 +368,7 @@ def test_catalogue_command_selects_strict_module_candidates(
     # The report lists every eligible candidate of one canonical group with its exact identity and
     # name, so both versions appear.
     assert [
-        (candidate.sisu_module_id, candidate.code, candidate.name_fi)
+        (candidate.source_version_id, candidate.code, candidate.name_fi)
         for candidate in report.modules[0].candidates
     ] == [
         ("ambiguous-v1", "AMB.1", "Yhteinen kuvaus"),
@@ -375,7 +377,7 @@ def test_catalogue_command_selects_strict_module_candidates(
     assert report.modules[0].candidates[0].curriculum_periods == period_2026
     assert report.modules[0].candidates[0].validity_start is None
     assert report.modules[1].candidates[0].module_type is ModuleType.DEGREE_PROGRAMME
-    assert report.modules[1].candidates[0].sisu_module_id == "degree-v1"
+    assert report.modules[1].candidates[0].source_version_id == "degree-v1"
     # A version tied only to another academic year is absent, while a membership-free version
     # inside its own validity bounds is eligible.
     assert [candidate.code for candidate in report.modules[2].candidates] == ["VAL.1"]

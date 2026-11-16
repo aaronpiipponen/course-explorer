@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from course_explorer.enums import (
-    TeachingTextLanguage,
     TranslationMethod,
 )
 from course_explorer.http_retry import RequestNotStarted
@@ -134,11 +133,11 @@ def test_worker_records_sanitized_terminal_failure_and_resumes_without_losing_su
     record = json.loads(sidecar.read_text(encoding="utf-8"))
     assert record["error_type"] == "TranslationContractError"
     assert record["error_message"] == "TranslationContractError"
-    assert record["sisu_course_unit_id"] == "course-a-v1"
+    assert record["source_version_id"] == "course-a-v1"
     assert record["field"] == "content"
     assert record["language"] == "en"
     assert set(record) == {
-        "sisu_course_unit_id",
+        "source_version_id",
         "field",
         "language",
         "error_type",
@@ -148,19 +147,19 @@ def test_worker_records_sanitized_terminal_failure_and_resumes_without_losing_su
 
     # The one published success is import-compatible and retains exact official provenance.
     entries = load_output(output)
-    assert [
-        (entry.sisu_course_unit_id, entry.field.value, entry.language.value) for entry in entries
-    ] == [("course-a-v1", "name", "en")]
+    assert [(entry.source_version_id, entry.field.value, entry.language) for entry in entries] == [
+        ("course-a-v1", "name", "en")
+    ]
     entry = entries[0]
-    assert entry.source_language is TeachingTextLanguage.FI
+    assert entry.source_language == "fi"
     assert entry.source_text == "Nimi"
     assert entry.text == "Name"
     assert entry.translation_method is TranslationMethod.MODEL
     assert entry.translation_model == PROVENANCE
     assert entry.generated_at == GENERATED_AT
     assert provider.calls == [
-        ("Nimi", TeachingTextLanguage.FI, TeachingTextLanguage.EN),
-        ("Sisältö", TeachingTextLanguage.FI, TeachingTextLanguage.EN),
+        ("Nimi", "fi", "en"),
+        ("Sisältö", "fi", "en"),
     ]
 
     resume = TranslationWorkerService(
@@ -207,7 +206,7 @@ def test_worker_control_callback_stops_before_next_provider_call(tmp_path: Path)
     )
     report = service.run(output_path=output, before_pending_item=gate)
 
-    assert provider.calls == [("Nimi", TeachingTextLanguage.FI, TeachingTextLanguage.EN)]
+    assert provider.calls == [("Nimi", "fi", "en")]
     assert gate_calls == [0, 1]
     assert [entry.text for entry in load_output(output)] == ["Name"]
     assert (

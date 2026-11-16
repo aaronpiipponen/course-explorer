@@ -25,12 +25,14 @@ from course_explorer.config import (
     load_inference_rerank_settings,
     load_inference_selection_settings,
     load_inference_settings,
+    load_instance_settings,
 )
 from course_explorer.datasets import DatasetId, DatasetSha256
 from course_explorer.hashing import canonical_json_sha256
 from course_explorer.inference.diagnostics import InferenceCoverageSummary
 from course_explorer.inference.job import InferenceJobProgress
 from course_explorer.inference.prompts import load_prompt_pack
+from course_explorer.instance import inference_language_policy_overrides
 from course_explorer_admin.remote import (
     WorkerControllerStatus,
     WorkerDatasetSession,
@@ -249,13 +251,21 @@ def inference_configuration_sha256() -> str:
     """Hash the retained-session configuration fingerprint for one inference PC window.
 
     This is retained-session compatibility. It excludes the catalogue and embedding-state identities
-    owned by the product scheduling cycle hash.
+    owned by the product scheduling cycle hash. The context payload omits the raw optional target and
+    pool field keys. A nondefault language policy adds only the configured values that differ from the
+    Finnish/English baseline, and a nondefault prompt field policy adds the selection only when it
+    differs from the teaching-field baseline, so a default policy leaves the payload bytes equal to
+    one built without an override.
     """
     generation = load_inference_settings()
-    mapping = {
+    context = load_inference_context_settings()
+    context_payload = context.model_dump(mode="json")
+    context_payload.pop("inference_target_fields", None)
+    context_payload.pop("inference_pool_fields", None)
+    mapping: dict[str, object] = {
         "generation": generation.model_dump(mode="json"),
         "embedding": load_embedding_runtime_settings().model_dump(mode="json"),
-        "context": load_inference_context_settings().model_dump(mode="json"),
+        "context": context_payload,
         "selection": load_inference_selection_settings().model_dump(mode="json"),
         "rerank": load_inference_rerank_settings().model_dump(mode="json"),
         "rerank_input": load_inference_rerank_input_settings().model_dump(mode="json"),
@@ -263,6 +273,13 @@ def inference_configuration_sha256() -> str:
             generation.inference_prompt_version
         ).content_sha256,
     }
+    university = load_instance_settings().university
+    language_policy = inference_language_policy_overrides(university)
+    if language_policy:
+        mapping["language_policy"] = language_policy
+    prompt_fields = context.prompt_field_policy(university)
+    if prompt_fields:
+        mapping["prompt_fields"] = prompt_fields
     return canonical_json_sha256(mapping)
 
 

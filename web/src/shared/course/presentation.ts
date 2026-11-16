@@ -29,6 +29,9 @@ export function courseCredits(
   course: Pick<CourseSummary, "credits_min" | "credits_max">,
   language: DisplayLanguage,
 ): string {
+  if (course.credits_min === null) {
+    return uiText(language, "Credits unknown");
+  }
   const low = Number(course.credits_min);
   const high = course.credits_max === null ? null : Number(course.credits_max);
   const value = high === null || low === high ? `${low}` : `${low}–${high}`;

@@ -13,7 +13,6 @@ from sqlalchemy.exc import IntegrityError
 from course_explorer.db.models import (
     Course,
     CourseEmbeddingChunk,
-    CourseText,
     CourseVersion,
     CourseVersionCurriculumPeriod,
     CurriculumPeriod,
@@ -23,6 +22,8 @@ from course_explorer.db.models import (
     Module,
     ModuleRuleNode,
     ModuleVersion,
+    OfficialCourseText,
+    OfficialModuleText,
     OfficialPrerequisiteOption,
     OfficialPrerequisiteOptionMember,
     OfficialSubstitutionOption,
@@ -37,11 +38,11 @@ from course_explorer.enums import (
     IngestionRunStatus,
     ModuleRuleType,
     ModuleType,
+    OfficialTextField,
     PrerequisiteMemberType,
     PrerequisiteRequirementKind,
     SourceObjectType,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
     TranslationMethod,
 )
@@ -117,9 +118,8 @@ def integrity_records(database: tuple[Engine, object]) -> dict[str, uuid.UUID | 
             CourseVersion(
                 id=course_version_id,
                 course_id=course_id,
-                sisu_course_unit_id="course-version-2026",
+                source_version_id="course-version-2026",
                 code="TEST.100",
-                name_en="Test Course",
                 credits_min=5,
                 credits_max=5,
                 official_url="https://example.test/course",
@@ -133,7 +133,22 @@ def integrity_records(database: tuple[Engine, object]) -> dict[str, uuid.UUID | 
                 course_version_id=course_version_id, curriculum_period_id=period_id
             )
         )
-        session.add(CourseText(course_version_id=course_version_id, content_en="Course content"))
+        session.add(
+            OfficialCourseText(
+                course_version_id=course_version_id,
+                field=OfficialTextField.NAME,
+                language="en",
+                text="Test Course",
+            )
+        )
+        session.add(
+            OfficialCourseText(
+                course_version_id=course_version_id,
+                field=OfficialTextField.CONTENT,
+                language="en",
+                text="Course content",
+            )
+        )
         session.add(
             OfficialPrerequisiteOption(
                 id=prerequisite_option_id,
@@ -184,13 +199,20 @@ def integrity_records(database: tuple[Engine, object]) -> dict[str, uuid.UUID | 
                 ModuleVersion(
                     id=version_id,
                     module_id=module_id,
-                    sisu_module_id=f"module-version-{index}",
+                    source_version_id=f"module-version-{index}",
                     module_type=ModuleType.STUDY_MODULE,
-                    name_en=f"Test Module {index}",
                     target_credits_min=5,
                     target_credits_max=10,
                     document_state="ACTIVE",
                     source_snapshot_id=snapshot_id,
+                )
+            )
+            session.add(
+                OfficialModuleText(
+                    module_version_id=version_id,
+                    field="name",
+                    language="en",
+                    text=f"Test Module {index}",
                 )
             )
         session.flush()
@@ -240,9 +262,9 @@ def derived_text_row(course_version_id: uuid.UUID, **overrides: object) -> Deriv
     values: dict[str, object] = {
         "course_version_id": course_version_id,
         "field": TeachingTextField.CONTENT,
-        "language": TeachingTextLanguage.EN,
+        "language": "en",
         "text": "Matrices",
-        "source_language": TeachingTextLanguage.FI,
+        "source_language": "fi",
         "source_text_hash": "a" * 64,
         "translation_method": TranslationMethod.MANUAL,
         "translation_model": None,
@@ -297,14 +319,21 @@ def two_course_versions(database: tuple[Engine, object]) -> tuple[object, dict[s
                 CourseVersion(
                     id=version_ids[index],
                     course_id=course_ids[index],
-                    sisu_course_unit_id=f"derived-course-v{index}",
+                    source_version_id=f"derived-course-v{index}",
                     code=f"DERIVED.{index}",
-                    name_en="Derived Course",
                     credits_min=5,
                     credits_max=5,
                     official_url="https://example.test/derived",
                     document_state="ACTIVE",
                     source_snapshot_id=snapshot_ids[index],
+                )
+            )
+            session.add(
+                OfficialCourseText(
+                    course_version_id=version_ids[index],
+                    field=OfficialTextField.NAME,
+                    language="en",
+                    text="Derived Course",
                 )
             )
     return factory, {
@@ -320,7 +349,7 @@ def embedding_chunk_row(course_version_id: uuid.UUID, **overrides: object) -> Co
     values: dict[str, object] = {
         "course_version_id": course_version_id,
         "field": TeachingTextField.CONTENT,
-        "language": TeachingTextLanguage.EN,
+        "language": "en",
         "chunk_index": 0,
         "text_origin": TeachingTextOrigin.OFFICIAL,
         "text": "Matrices",

@@ -171,7 +171,12 @@ StageOptions = Annotated[
 
 
 class IngestionProgress(_LifecycleModel):
-    """Observation of one ingestion session's durable capture/verification position."""
+    """Observation of one ingestion session's durable capture/verification position.
+
+    ``dropped_period_membership_count`` counts the source curriculum-period memberships that
+    normalization dropped because their period ID is absent from the capture's published periods,
+    summed over course and module versions.
+    """
 
     kind: Literal["ingestion"]
     stage: _IngestionStage
@@ -182,6 +187,7 @@ class IngestionProgress(_LifecycleModel):
     verified_response_count: int = Field(ge=0)
     verification_total: int | None = Field(default=None, ge=0)
     normalized: bool
+    dropped_period_membership_count: int = Field(default=0, ge=0)
 
     @field_validator("manifest_path")
     @classmethod
@@ -317,7 +323,10 @@ class LifecycleState(_LifecycleModel):
 
 
 class LifecycleStatus(_LifecycleModel):
-    """Text-free operator status. Idle carries retained progress but no session identity."""
+    """Text-free operator status. Idle carries retained progress but no session identity.
+
+    A start that supersedes an idle session names the superseded session identity.
+    """
 
     stage: StageName
     lifecycle: Literal[
@@ -331,6 +340,7 @@ class LifecycleStatus(_LifecycleModel):
         "failed",
     ]
     session_id: str | None = None
+    superseded_session_id: str | None = None
     revision: str | None = None
     options: StageOptions | None = None
     progress: StageProgress | None = None
@@ -375,6 +385,10 @@ class Stage(Protocol):
     def require_prepared(self) -> None: ...
 
     def require_database(self) -> None: ...
+
+    def reserve(self, session_id: str, *, runner: mechanics.ProcessRunner) -> None: ...
+
+    def unreserve(self, session_id: str, *, runner: mechanics.ProcessRunner) -> None: ...
 
     def run(self, context: LifecycleContext) -> bool: ...
 
@@ -731,10 +745,12 @@ def require_retained_ingestion_manifest(path_text: str, expected_sha256: str | N
         raise ValueError("retained ingestion manifest bytes do not match recorded evidence")
 
 
-def _require_compatible(stage: Stage, session: LifecycleSession, state: LifecycleState) -> None:
+def _require_compatible(
+    stage: Stage, session: LifecycleSession, state: LifecycleState, *, hint: str = ""
+) -> None:
     """One coarse compatibility pair: the receipt identity and the retained ingestion hash."""
     if session.identity_sha256 != stage.identity_sha256(session.options):
-        raise ValueError("retained lifecycle work configuration does not match this device")
+        raise ValueError("retained lifecycle work configuration does not match this device" + hint)
     progress = state.progress
     if isinstance(progress, IngestionProgress) and progress.manifest_path is not None:
         require_retained_ingestion_manifest(progress.manifest_path, progress.manifest_sha256)
@@ -878,6 +894,51 @@ def _run_start(
     return read_lifecycle_status(stage, root, clock=clock)
 
 
+def _run_reserved_start(
+    stage: Stage,
+    root: Path,
+    session: LifecycleSession,
+    state: LifecycleState,
+    runner: mechanics.ProcessRunner,
+    settings: LocalLifecycleSettings,
+    *,
+    clock: Callable[[], datetime],
+    sleep: Callable[[float], None],
+    expected_state: LifecycleState | None,
+    fresh: bool = False,
+    superseded: tuple[LifecycleSession, LifecycleState] | None = None,
+) -> LifecycleStatus:
+    """Reserve the session's stage reservations, move any superseded session, and start.
+
+    A refusal happens before any session directory or state is written. ``superseded`` names the
+    idle session and state that move aside under the action lock after the reservation is taken, so
+    a refused reservation leaves the retained receipt and state in place. A failed start keeps the
+    reservation when the current state still names this session, because the stop path releases it,
+    and otherwise releases it before re-raising.
+    """
+    stage.reserve(session.session_id, runner=runner)
+    try:
+        if superseded is not None:
+            _supersede_idle_session(stage, root, session=superseded[0], state=superseded[1])
+        return _run_start(
+            stage,
+            root,
+            session,
+            state,
+            runner,
+            settings,
+            clock=clock,
+            sleep=sleep,
+            expected_state=expected_state,
+            fresh=fresh,
+        )
+    except Exception:
+        current = read_lifecycle_state(root)
+        if current is None or current.session_id != session.session_id:
+            stage.unreserve(session.session_id, runner=runner)
+        raise
+
+
 def _create_fresh_session(
     stage: Stage,
     root: Path,
@@ -888,6 +949,8 @@ def _create_fresh_session(
     session_id_factory: Callable[[], str],
     sleep: Callable[[float], None],
     expected_state: LifecycleState | None,
+    superseded_session_id: str | None = None,
+    superseded: tuple[LifecycleSession, LifecycleState] | None = None,
 ) -> LifecycleStatus:
     options = stage.select_options()
     identity = stage.identity_sha256(options)
@@ -914,7 +977,7 @@ def _create_fresh_session(
         running_since=None,
         error_type=None,
     )
-    return _run_start(
+    status = _run_reserved_start(
         stage,
         root,
         session,
@@ -925,7 +988,11 @@ def _create_fresh_session(
         sleep=sleep,
         expected_state=expected_state,
         fresh=True,
+        superseded=superseded,
     )
+    if superseded_session_id is None:
+        return status
+    return status.model_copy(update={"superseded_session_id": superseded_session_id})
 
 
 def _resume_retained(
@@ -939,7 +1006,7 @@ def _resume_retained(
     clock: Callable[[], datetime],
     sleep: Callable[[float], None],
 ) -> LifecycleStatus:
-    return _run_start(
+    return _run_reserved_start(
         stage,
         root,
         session,
@@ -950,6 +1017,30 @@ def _resume_retained(
         sleep=sleep,
         expected_state=state,
     )
+
+
+def _supersede_idle_session(
+    stage: Stage,
+    root: Path,
+    *,
+    session: LifecycleSession,
+    state: LifecycleState,
+) -> None:
+    """Move one idle session's receipt and state under the stage controller directory.
+
+    The session directory moves to ``<stage controller dir>/superseded-<session_id>/session``
+    and the state file to ``superseded-<session_id>/state.json``. The caller runs this after it
+    takes the fresh session's reservations and before the fresh start, so a refused reservation
+    leaves the retained session untouched. The current state must still be ``state`` under the
+    lock, and the caller passes ``expected_state=None`` to the fresh start afterwards.
+    """
+    with mechanics.exclusive_action_lock(root, controller_name=stage.name, blocking=True):
+        if read_lifecycle_state(root) != state:
+            raise RuntimeError("lifecycle supersede state changed")
+        destination = root.parent / f"superseded-{session.session_id}"
+        destination.mkdir(mode=0o700)
+        _state_path(root).replace(destination / "state.json")
+        session_directory(root, session.session_id).replace(destination / "session")
 
 
 def _start_action(
@@ -976,6 +1067,7 @@ def _start_action(
         )
     session = _read_session(root, state.session_id)
     if _process_live(state):
+        stage.reserve(session.session_id, runner=runner)
         return _status_from_state(stage, state, session, clock=clock)
     if state.lifecycle == "completed":
         return _status_from_state(stage, state, session, clock=clock)
@@ -989,6 +1081,21 @@ def _start_action(
             session_id_factory=session_id_factory,
             sleep=sleep,
             expected_state=state,
+        )
+    if state.lifecycle == "idle" and session.identity_sha256 != stage.identity_sha256(
+        session.options
+    ):
+        return _create_fresh_session(
+            stage,
+            root,
+            runner,
+            settings,
+            clock=clock,
+            session_id_factory=session_id_factory,
+            sleep=sleep,
+            expected_state=None,
+            superseded_session_id=session.session_id,
+            superseded=(session, state),
         )
     _require_compatible(stage, session, state)
     return _resume_retained(stage, root, session, state, runner, settings, clock=clock, sleep=sleep)
@@ -1089,6 +1196,7 @@ def _stop_action(
     # outside the catch, so only a real stop path records a stop failure.
     if state.lifecycle == "idle":
         session = _read_session(root, state.session_id)
+        stage.unreserve(session.session_id, runner=runner)
         return _status_from_state(stage, state, session, clock=clock)
     failure_step: FailureStep = "session"
     context: LifecycleContext | None = None
@@ -1111,6 +1219,7 @@ def _stop_action(
         directory = session_directory(root, session.session_id)
         (directory / "runner.out").unlink(missing_ok=True)
         (directory / "runner.err").unlink(missing_ok=True)
+        stage.unreserve(session.session_id, runner=runner)
         failure_step = "idle"
         work_complete = final.lifecycle == "completed"
         with mechanics.exclusive_action_lock(root, controller_name=stage.name, blocking=True):
@@ -1195,7 +1304,7 @@ def run_lifecycle_command(
                 # A non-retaining stage finalizes and returns at stop, so an idle state has no
                 # resumable worker session left. Resume is refused like an absent state.
                 raise ValueError("no retained lifecycle session to resume")
-        _require_compatible(stage, session, state)
+        _require_compatible(stage, session, state, hint="; stop the session and use start")
         return _resume_retained(
             stage, root, session, state, process_runner, settings, clock=clock, sleep=sleep
         )

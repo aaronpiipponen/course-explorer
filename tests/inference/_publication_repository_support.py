@@ -22,12 +22,14 @@ from course_explorer.db.models import (
     CourseVersionCurriculumPeriod,
     CurriculumPeriod,
     IngestionRun,
+    OfficialCourseText,
     SourceSnapshot,
 )
 from course_explorer.db.session import session_scope
 from course_explorer.enums import (
     InferenceWorkStatus,
     IngestionRunStatus,
+    OfficialTextField,
     SourceObjectType,
 )
 from course_explorer.inference.context import (
@@ -55,6 +57,7 @@ from course_explorer.inference.proposals import (
     proposal_identity_sha256,
 )
 from course_explorer.inference.publication import CurrentInferenceCohort
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.prerequisite.domain import (
     CourseRequirement,
     InferenceEvidenceKind,
@@ -113,10 +116,8 @@ def _seed_course(factory: object, group_id: str, code: str, *, is_active: bool =
         session.flush()
         version = CourseVersion(
             course_id=course.id,
-            sisu_course_unit_id=f"sisu-{group_id}",
+            source_version_id=f"sisu-{group_id}",
             code=code,
-            name_fi=f"Nimi {code}",
-            name_en=f"Name {code}",
             credits_min=5,
             credits_max=None,
             official_url=f"https://example.test/courses/{code}",
@@ -126,6 +127,22 @@ def _seed_course(factory: object, group_id: str, code: str, *, is_active: bool =
         )
         session.add(version)
         session.flush()
+        session.add_all(
+            (
+                OfficialCourseText(
+                    course_version_id=version.id,
+                    field=OfficialTextField.NAME,
+                    language="fi",
+                    text=f"Nimi {code}",
+                ),
+                OfficialCourseText(
+                    course_version_id=version.id,
+                    field=OfficialTextField.NAME,
+                    language="en",
+                    text=f"Name {code}",
+                ),
+            )
+        )
         session.add(
             CourseVersionCurriculumPeriod(
                 course_version_id=version.id, curriculum_period_id=period_id
@@ -274,7 +291,9 @@ def _build_proposal(
     official_hash: str | None = None,
 ) -> TargetProposal:
     """Persist one accepted proposal whose supplied factories bind the real proposal reference."""
-    target = CurriculumRepository(factory).get_courses((target_group_id,))
+    target = CurriculumRepository(factory, university=UNIVERSITIES["example"]).get_courses(
+        (target_group_id,)
+    )
     assert len(target) == 1 and target[0].representative is not None
     resolved_hash = official_snapshot_sha256(target[0]) if official_hash is None else official_hash
     identity = proposal_identity_sha256(work, attempt, resolved_hash, proposal_version)

@@ -11,6 +11,7 @@ This page maps the modules that carry one worker session over the transport boun
 | `src/course_explorer_admin/remote.py` | The worker session, control, and status DTOs, the worker-side prepare/export/cleanup helpers, and the worker dataset CLI |
 | `src/course_explorer_admin/worker_session.py` | The shared worker-side lifecycle shell, its subcommands, and the identity, quiescence, and cleanup guards |
 | `src/course_explorer_admin/remote_stages.py` | The server-side translation and inference adapters over the lifecycle core |
+| `src/course_explorer_admin/machine_locks.py` | The machine-wide checkout, server and worker reservations and their files |
 | `src/course_explorer_admin/snapshots.py` | The dump and restore command mechanics and the embedding-data rule |
 | `src/course_explorer_admin/datasets.py` | Receipt and role-pointer writes, enrollment, role migration, copy, return retention, and rotation |
 | `src/course_explorer/datasets.py` | The dataset DTOs, pointer resolution, the schema-head check, and the verification read |
@@ -20,6 +21,18 @@ This page maps the modules that carry one worker session over the transport boun
 | `src/course_explorer_admin/runtime.py` | The owned model runtime shared by the two worker stages |
 
 The behavior these owners implement is described in [Worker sessions](/docs/operations/worker-sessions.md) and [Datasets](/docs/operations/datasets.md).
+
+## The reservation helper
+
+`course_explorer_admin.machine_locks` is the one owner of the machine-wide reservations and the worker-side helper that reaches them. Its files live in the shared directory's `locks` directory, and a remote stage invokes the module on the worker for the worker reservation:
+
+```bash
+uv run python -m course_explorer_admin.machine_locks read worker INSTANCE_KEY OPERATION SESSION_ID
+uv run python -m course_explorer_admin.machine_locks acquire worker INSTANCE_KEY OPERATION SESSION_ID
+uv run python -m course_explorer_admin.machine_locks release worker INSTANCE_KEY OPERATION SESSION_ID
+```
+
+`INSTANCE_KEY` must name a configured university key. Any other value is refused before the shared root is read. The module reads the shared root through `load_shared_storage_settings` on the host that runs it. The session id argument is optional. `read` prints the held owner record when one exists and nothing otherwise, and `acquire` and `release` print nothing. The worker-side read renders the held owner in the operator message, and the acquire is the atomic check. [Worker sessions](/docs/operations/worker-sessions.md#the-worker-reservation) states when the reservation is held.
 
 ## The transport abstraction
 
@@ -97,7 +110,11 @@ uv run --no-sync --offline --no-python-downloads python -m course_explorer_admin
 
 `src/course_explorer/datasets.py` owns the DTOs and the read-only checks. `DatasetReceipt.validate_kind_identity` enforces the initial, returned and copied receipt shapes, `DatasetPointer` is the strict pointer, `DatabaseSnapshot` binds a dump digest to a session and a verification, and `DatasetVerification` carries the migration head, the table row counts, the catalogue summary, and the coverage reads. One public dataset read applies the state-tree guard once and passes the checked root down, so one listing does not walk the tree once per pointer and receipt. `read_dataset_role(state_root, role)` reads one role and decides bootstrap, `resolve_dataset_role(state_root, role)` raises the role guidance, `resolve_selected_dataset(state_root)` delegates to that resolver, `read_dataset_receipt(state_root, dataset_id)` reads one confined receipt after the state guard, `dataset_state_refusal(state_root)` reports a redirected state tree, `require_selected_dataset_root(state_root)` refuses one, `require_database_schema(connection)` compares the current migration head and raises `DatabaseSchemaMismatchError`, and `read_dataset_verification(settings)` opens one disposable engine for the verification read.
 
-`src/course_explorer_admin/datasets.py` owns every write. `admin_state_path(settings)` returns the repository-relative state root, `admin_state_root(settings)` resolves it and refuses the backups boundary, `initialize_selected_dataset(*, runner)` enrolls the initial dataset, `ensure_selected_dataset(*, runner)` applies the example-database exception for deploy, `migrate_dataset(role, *, runner)` applies the head with the Working idle guard, `copy_to_working(source_dataset_id, *, runner)` creates a verified copy and publishes Working, `retain_returned_dataset(session, snapshot, dump, *, runner)` restores, verifies, writes the returned receipt, publishes Working, and rotates, `require_returned_dataset_receipt(receipt, session, *, server_database)` is the receipt predicate, `read_optional_dataset_receipt(root, dataset_id)` tells an absent receipt from a malformed one, `require_droppable_database(database_name)` refuses a protected name, `_retain_dump(source, destination)` copies a dump into its confined path, `_walk_chain(receipts, start)` validates one chain through the action's receipt index, and `_rotate_locked(settings, root, runner)` drops the databases outside both role pairs.
+`src/course_explorer_admin/datasets.py` owns every write. `admin_state_path(settings)` returns the repository-relative state root, `admin_state_root(settings)` resolves it and refuses the backups boundary, `initialize_selected_dataset(*, runner)` enrolls the initial dataset, `ensure_selected_dataset(*, runner)` applies the example-database exception for deploy, `migrate_dataset(role, *, runner)` applies the head to the named role's database, where a Working migration takes the checkout reservation under the `migrate_working` operation and requires every stage idle and a Selected migration does neither, `copy_to_working(source_dataset_id, *, runner)` creates a verified copy and publishes Working, and `retain_returned_dataset(session, snapshot, dump, *, runner)` restores, verifies, writes the returned receipt, publishes Working, and rotates.
+
+The receipt predicate and the path helpers sit beside those writes. `require_returned_dataset_receipt(receipt, session, *, server_database)` is the receipt predicate, `read_optional_dataset_receipt(root, dataset_id)` tells an absent receipt from a malformed one, `require_droppable_database(database_name)` refuses a protected name, `_retain_dump(source, destination)` copies a dump into its confined path, `_walk_chain(receipts, start)` validates one chain through the action's receipt index, and `_rotate_locked(settings, root, runner)` drops the databases outside both role pairs.
+
+`save_activity_configuration(file, key, value, *, settings_families)` saves one activity policy key and refreshes the stored activity of the Selected and Working databases, or of the configured database when no Selected pointer exists, with every stage idle under the datasets action lock. `run_administrative_config_set` routes `CURRENT_ACADEMIC_YEAR` and `ACTIVE_ACADEMIC_YEAR_WINDOW` of `config/curriculum.toml` to it, and every other key takes the file save alone.
 
 `src/course_explorer_admin/remote.py` owns the session-side dataset work. `create_worker_dataset_session(stage, *, session_id, course_limit=None, runner)` snapshots the Working dataset, `prepare_worker_database(session, *, runner)` restores the uploaded input dump and checks it against the snapshot digest, `export_worker_database(session, *, runner)` verifies and exports the return snapshot, `return_worker_database(session, *, transport, runner)` downloads and retains it, and `cleanup_returned_worker_database(session, receipt, *, runner)` drops the exact worker database after the recorded session, the receipt and the return snapshot agree on their session and database identity. `worker_dataset_session_directory(session_id)` and `remote_worker_session_directory(connection, session_id)` own the two session path forms.
 

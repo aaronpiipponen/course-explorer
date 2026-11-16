@@ -11,17 +11,17 @@ from sqlalchemy import func, select
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.db.models import (
     Course,
-    CourseText,
     CourseVersion,
     IngestionRun,
     ModuleRuleNode,
+    OfficialCourseText,
     SourceSnapshot,
 )
 from course_explorer.ingestion.normalization import normalize_curriculum
 from course_explorer.ingestion.normalization_repository import NormalizationRepository
 from course_explorer.ingestion.repository import CaptureRepository
+from course_explorer.instance import UNIVERSITIES
 from tests.ingestion._normalization_repository_support import (
-    GUIDE_URL,
     build_completed_fixture_store,
     fixture_bytes,
     normalized_database_digest,
@@ -38,14 +38,13 @@ def test_normalization_removes_a_normalized_version_when_code_becomes_null(
     """A coded sole version is excluded when its refreshed source code becomes explicitly null."""
     _, factory = database
     capture_repository = CaptureRepository(factory)
-    normalization_repository = NormalizationRepository(factory)
+    normalization_repository = NormalizationRepository(factory, university=UNIVERSITIES["example"])
     first_store = build_completed_fixture_store(tmp_path, capture_repository)
     normalize_curriculum(
         first_store,
         normalization_repository,
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
 
     refreshed_courses = json.loads(fixture_bytes("courses.json"))
@@ -62,7 +61,6 @@ def test_normalization_removes_a_normalized_version_when_code_becomes_null(
         normalization_repository,
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
     exclusion = second.excluded_null_code_course_versions[0]
     assert exclusion.source_object_id == "course-inactive-v1"
@@ -70,7 +68,7 @@ def test_normalization_removes_a_normalized_version_when_code_becomes_null(
         assert (
             session.scalar(
                 select(CourseVersion.id).where(
-                    CourseVersion.sisu_course_unit_id == exclusion.source_object_id
+                    CourseVersion.source_version_id == exclusion.source_object_id
                 )
             )
             is None
@@ -85,7 +83,7 @@ def test_normalization_removes_a_normalized_version_when_code_becomes_null(
                     SourceSnapshot.source_object_id == exclusion.source_object_id
                 )
             )
-            == 2
+            == 0
         )
         assert (
             session.scalar(
@@ -103,18 +101,17 @@ def test_normalization_removes_only_null_code_version_and_keeps_coded_sibling(
     """Removing one exact version retains its canonical coded sibling and representative."""
     _, factory = database
     capture_repository = CaptureRepository(factory)
-    normalization_repository = NormalizationRepository(factory)
+    normalization_repository = NormalizationRepository(factory, university=UNIVERSITIES["example"])
     first_store = build_completed_fixture_store(tmp_path, capture_repository)
     normalize_curriculum(
         first_store,
         normalization_repository,
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
     with factory.begin() as session:
         old_version_id = session.scalar(
-            select(CourseVersion.id).where(CourseVersion.sisu_course_unit_id == "course-a-z1")
+            select(CourseVersion.id).where(CourseVersion.source_version_id == "course-a-z1")
         )
         assert old_version_id is not None
 
@@ -130,7 +127,6 @@ def test_normalization_removes_only_null_code_version_and_keeps_coded_sibling(
         normalization_repository,
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
     assert [item.source_object_id for item in second.excluded_null_code_course_versions] == [
         "course-a-z1"
@@ -140,18 +136,22 @@ def test_normalization_removes_only_null_code_version_and_keeps_coded_sibling(
         assert course_a is not None
         assert (
             session.scalar(
-                select(CourseVersion.id).where(CourseVersion.sisu_course_unit_id == "course-a-z1")
+                select(CourseVersion.id).where(CourseVersion.source_version_id == "course-a-z1")
             )
             is None
         )
         assert (
             session.scalar(
-                select(CourseVersion.id).where(CourseVersion.sisu_course_unit_id == "course-a-v2")
+                select(CourseVersion.id).where(CourseVersion.source_version_id == "course-a-v2")
             )
             is not None
         )
         assert (
-            session.scalar(select(CourseText).where(CourseText.course_version_id == old_version_id))
+            session.scalar(
+                select(OfficialCourseText).where(
+                    OfficialCourseText.course_version_id == old_version_id
+                )
+            )
             is None
         )
         assert (
@@ -160,16 +160,16 @@ def test_normalization_removes_only_null_code_version_and_keeps_coded_sibling(
                     SourceSnapshot.source_object_id == "course-a-z1"
                 )
             )
-            == 2
+            == 0
         )
 
     course = next(
         item
-        for item in CurriculumRepository(factory).list_courses()
+        for item in CurriculumRepository(factory, university=UNIVERSITIES["example"]).list_courses()
         if item.group_id == "course-group-a"
     )
     assert course.representative is not None
-    assert course.representative.sisu_course_unit_id == "course-a-v2"
+    assert course.representative.source_version_id == "course-a-v2"
 
 
 def test_null_code_exclusion_rejects_a_canonical_identity_conflict(
@@ -178,14 +178,13 @@ def test_null_code_exclusion_rejects_a_canonical_identity_conflict(
     """A null refresh cannot relink an exact source version to another group."""
     _, factory = database
     capture_repository = CaptureRepository(factory)
-    normalization_repository = NormalizationRepository(factory)
+    normalization_repository = NormalizationRepository(factory, university=UNIVERSITIES["example"])
     first_store = build_completed_fixture_store(tmp_path, capture_repository)
     normalize_curriculum(
         first_store,
         normalization_repository,
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
     before = normalized_database_digest(factory)
 
@@ -210,7 +209,6 @@ def test_null_code_exclusion_rejects_a_canonical_identity_conflict(
             normalization_repository,
             current_academic_year_start=2026,
             activity_window_years=3,
-            course_guide_base_url=GUIDE_URL,
         )
     assert normalized_database_digest(factory) == before
 
@@ -221,14 +219,13 @@ def test_normalization_identity_conflict_rolls_back(
     """A canonical identity conflict aborts the complete batch without partial rows."""
     _, factory = database
     capture_repository = CaptureRepository(factory)
-    normalization_repository = NormalizationRepository(factory)
+    normalization_repository = NormalizationRepository(factory, university=UNIVERSITIES["example"])
     first_store = build_completed_fixture_store(tmp_path, capture_repository)
     normalize_curriculum(
         first_store,
         normalization_repository,
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
     before = normalized_database_digest(factory)
     conflict_courses = json.loads(fixture_bytes("courses.json"))
@@ -245,7 +242,6 @@ def test_normalization_identity_conflict_rolls_back(
             normalization_repository,
             current_academic_year_start=2026,
             activity_window_years=3,
-            course_guide_base_url=GUIDE_URL,
         )
     assert normalized_database_digest(factory) == before
     with factory.begin() as session:
@@ -261,25 +257,25 @@ def test_normalization_identity_conflict_rolls_back(
 def test_normalization_excludes_null_code_course_and_reconciles_raw_provenance(
     database: tuple[object, object], tmp_path: Path
 ) -> None:
-    """Null-code exclusion keeps raw provenance, closure, and normalized rows consistent."""
+    """Null-code exclusion keeps raw capture evidence without an unused database snapshot."""
     _, factory = database
     courses = json.loads(fixture_bytes("courses.json"))
     next(course for course in courses if course["id"] == "course-inactive-v1")["code"] = None
     courses_body = json.dumps(courses, sort_keys=True, separators=(",", ":")).encode()
     capture_repository = CaptureRepository(factory)
     store = build_completed_fixture_store(tmp_path, capture_repository, courses_body=courses_body)
-    normalization_repository = NormalizationRepository(factory)
+    normalization_repository = NormalizationRepository(factory, university=UNIVERSITIES["example"])
 
     report = normalize_curriculum(
         store,
         normalization_repository,
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
     exclusions = report.excluded_null_code_course_versions
     assert len(exclusions) == 1
     exclusion = exclusions[0]
+    assert (store.run_root / exclusion.response_path).is_file()
     with factory.begin() as session:
         snapshot = session.scalar(
             select(SourceSnapshot).where(
@@ -288,15 +284,11 @@ def test_normalization_excludes_null_code_course_and_reconciles_raw_provenance(
                 SourceSnapshot.response_item_index == exclusion.response_item_index,
             )
         )
-        assert snapshot is not None
-        assert exclusion.object_type is snapshot.object_type
-        assert exclusion.source_object_id == snapshot.source_object_id
-        assert exclusion.source_group_id == snapshot.source_group_id
-        assert exclusion.source_hash == snapshot.source_hash
+        assert snapshot is None
         assert (
             session.scalar(
                 select(CourseVersion.id).where(
-                    CourseVersion.sisu_course_unit_id == exclusion.source_object_id
+                    CourseVersion.source_version_id == exclusion.source_object_id
                 )
             )
             is None

@@ -54,6 +54,7 @@ from course_explorer.config import (
     load_inference_rerank_settings,
     load_inference_selection_settings,
     load_inference_settings,
+    load_instance_settings,
 )
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.embeddings.generation import build_course_embedding_chunks
@@ -104,6 +105,7 @@ from course_explorer.inference.scheduling import (
 )
 from course_explorer.inference.scheduling_repository import InferenceSchedulingRepository
 from course_explorer.inference.target_pass import TargetWorkIdentity
+from course_explorer.instance import inference_language_policy_overrides
 from course_explorer.teaching_text.repository import DerivedTranslationRepository
 from course_explorer.teaching_text.service import TeachingTextService
 from course_explorer.validation import require_aware as _require_aware
@@ -259,18 +261,26 @@ def run_inference_job(
     rerank_settings = load_inference_rerank_settings()
     rerank_input = load_inference_rerank_input_settings()
     prompt_pack = load_prompt_pack(settings.inference_prompt_version)
+    university = load_instance_settings().university
 
-    curriculum = CurriculumRepository(factory)
-    translations = DerivedTranslationRepository(factory)
-    teaching_text = TeachingTextService(curriculum, translations)
+    curriculum = CurriculumRepository(factory, university=university)
+    translations = DerivedTranslationRepository(factory, university=university)
+    teaching_text = TeachingTextService(curriculum, translations, university=university)
     candidate_repository = InferenceCandidateRepository(factory)
-    embedding_repository = CourseEmbeddingRepository(factory)
+    embedding_repository = CourseEmbeddingRepository(factory, university=university)
     evidence = InferenceEvidenceRepository(factory)
     repository = InferenceSchedulingRepository(factory)
 
     cycle: ProcessingCycleRecord | None = None
     try:
-        catalogue = prepare_operational_catalogue(curriculum, teaching_text, embedding_settings)
+        catalogue = prepare_operational_catalogue(
+            curriculum,
+            teaching_text,
+            embedding_settings,
+            university=university,
+            target_fields=context_settings.resolved_target_fields(university),
+            pool_fields=context_settings.resolved_pool_fields(university),
+        )
         desired_chunks = build_course_embedding_chunks(
             catalogue.teaching_text_catalogue, embedding_settings
         )
@@ -291,6 +301,7 @@ def run_inference_job(
             catalogue.represented_courses,
             embedding_configuration_hash=catalogue.embedding_configuration_sha256,
         )
+        language_policy = inference_language_policy_overrides(university)
         cycle_input = processing_cycle_input_sha256(
             catalogue.catalogue_identity_sha256,
             embedding_state,
@@ -298,6 +309,8 @@ def run_inference_job(
             context_settings=context_settings,
             rerank_input=rerank_input,
             rerank_settings=rerank_settings,
+            language_policy=language_policy,
+            prompt_fields=context_settings.prompt_field_policy(university),
         )
 
         # The whole-catalogue marker read decides genuine empty-store seeding only. Reconciliation's
@@ -869,7 +882,7 @@ def run_inference_job(
             if not before_unit():
                 return yield_current()
             cohort = repository.read_publication_cohort()
-            publish_current_cohort(factory, cohort, settings, selection)
+            publish_current_cohort(factory, cohort, settings, selection, university=university)
             repository.prune_retained_state()
             notify()
             if failed_target_ids:
@@ -899,7 +912,7 @@ def run_inference_job(
         for action in (runtime.stop_rerank, runtime.stop):
             try:
                 action()
-            except Exception as exc:  # noqa: BLE001 - cleanup failure must be surfaced
+            except Exception as exc:  # noqa: BLE001 (cleanup failure must be surfaced)
                 cleanup_errors.append(exc)
         if cleanup_errors:
             active = sys.exc_info()[1]

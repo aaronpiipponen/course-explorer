@@ -40,7 +40,7 @@ export function CourseMenu({
   /** Whether the card is drawn inside Structure of studies, where a move needs no prompt. */
   structureSurface?: boolean;
 }) {
-  const { embeddings_enabled } = useWebFeatures();
+  const { embeddings_enabled, prerequisites_enabled } = useWebFeatures();
   const { store, value: inComparison } = useProfileSelector((state) =>
     state.compare.slots.includes(course.group_id),
   );
@@ -276,7 +276,9 @@ export function CourseMenu({
                 {courseName(course, language)}
               </span>
             </DropdownMenu.Label>
-            <DropdownMenu.Separator />
+            {(embeddings_enabled || prerequisites_enabled) && (
+              <DropdownMenu.Separator />
+            )}
             {embeddings_enabled && (
               <DropdownMenu.Item
                 disabled={inComparison}
@@ -291,15 +293,17 @@ export function CourseMenu({
                 <span aria-hidden="true">⇄</span>
               </DropdownMenu.Item>
             )}
-            <DropdownMenu.Item
-              onSelect={() => {
-                runAction(() => openPrerequisites(store, course.group_id));
-                onOpenChange(false);
-              }}
-            >
-              {t("Open prerequisite graph")}
-              <span aria-hidden="true">→</span>
-            </DropdownMenu.Item>
+            {prerequisites_enabled && (
+              <DropdownMenu.Item
+                onSelect={() => {
+                  runAction(() => openPrerequisites(store, course.group_id));
+                  onOpenChange(false);
+                }}
+              >
+                {t("Open prerequisite graph")}
+                <span aria-hidden="true">→</span>
+              </DropdownMenu.Item>
+            )}
             <DropdownMenu.Separator />
             {!selected ? (
               <DropdownMenu.Item onSelect={addToUnplaced}>
@@ -342,7 +346,7 @@ export function CourseMenu({
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                {t("Open in Sisu")}
+                {t("Open in study guide")}
                 <span aria-hidden="true">↗</span>
               </a>
             </DropdownMenu.Item>

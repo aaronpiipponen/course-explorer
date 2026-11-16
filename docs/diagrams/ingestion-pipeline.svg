@@ -16,7 +16,7 @@
 
   <rect x="40" y="48" width="268" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
   <text x="174" y="74" text-anchor="middle" font-size="16" fill="#ececf2">Public curriculum source</text>
-  <text x="174" y="96" text-anchor="middle" font-size="14" fill="#a3a4b8">Anonymous public JSON</text>
+  <text x="174" y="96" text-anchor="middle" font-size="14" fill="#a3a4b8">Read without credentials</text>
 
   <rect x="346" y="48" width="268" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b"
         stroke-width="1.5" stroke-dasharray="5 4"/>

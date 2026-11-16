@@ -25,7 +25,10 @@ from uuid import UUID
 from sqlalchemy import and_, case, delete, func, or_, select, tuple_, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from course_explorer.curriculum import CatalogueCourse, CatalogueTeachingCourse
+from course_explorer.curriculum import (
+    CatalogueCourse,
+    CatalogueTeachingCourse,
+)
 from course_explorer.db.models import (
     Course,
     InferenceCourseProcessing,
@@ -132,7 +135,7 @@ class InferenceSchedulingRepository:
         """Reconcile processing markers over one full canonical catalogue in one transaction.
 
         New markers start FALSE. A changed teaching-text-only hash resets FALSE. An inactive course
-        that has become active without an accepted completed proposal resets FALSE once. Existing
+        that has become active resets FALSE once unless an operator disposition is set. Existing
         accepted pointers are never cleared, ``was_active`` is always refreshed, and a seeded pointer
         marks processed TRUE only when its saved text-only descriptor hash equals the current
         exact hash. The operator disposition decision and the lifetime generation counter are never
@@ -162,7 +165,7 @@ class InferenceSchedulingRepository:
                 if effective.get(group_id) is None
                 else processing_text_sha256(
                     tuple(
-                        (cell.field.value, cell.language.value, cell.text)
+                        (cell.field.value, cell.language, cell.text)
                         for cell in effective[group_id].texts
                     )
                 )
@@ -207,8 +210,8 @@ class InferenceSchedulingRepository:
                     session.add(row)
                 else:
                     reset = row.teaching_text_sha256 != current_hash
-                    if not row.was_active and course.is_active and row.accepted_proposal_id is None:
-                        # One-time inactive-to-active reset for a course with no completed result.
+                    if not row.was_active and course.is_active and row.disposition is None:
+                        # One-time inactive-to-active reset, whether or not a result is retained.
                         reset = True
                     row.teaching_text_sha256 = current_hash
                     row.was_active = course.is_active
@@ -226,6 +229,25 @@ class InferenceSchedulingRepository:
                 )
             session.flush()
         return tuple(sorted(records, key=lambda record: record.group_id))
+
+    @staticmethod
+    def reset_reactivated_processing(session: Session, course_ids: Collection[UUID]) -> None:
+        """Reset existing reactivated markers to not processed under the caller's transaction.
+
+        Only a non-null operator disposition suppresses the reset. Accepted proposal pointers and
+        results stay unchanged, and a course without a marker gains none.
+        """
+        identifiers = tuple(dict.fromkeys(course_ids))
+        if not identifiers:
+            return
+        session.execute(
+            update(InferenceCourseProcessing)
+            .where(
+                InferenceCourseProcessing.course_id.in_(identifiers),
+                InferenceCourseProcessing.disposition.is_(None),
+            )
+            .values(processed=False)
+        )
 
     def read_processing(self) -> tuple[CourseProcessingRecord, ...]:
         """Return one group/hash/flag/pointer projection over every marker, sorted by group ID."""
@@ -261,9 +283,12 @@ class InferenceSchedulingRepository:
         Every active canonical course is eligible. The accepted pointers are the exact retained
         proposals selected by the shared owner (marker-done targets are excluded from selection), and
         the marker-done identities are supplied separately as the explicit
-        complete-without-output cohort. Each selected pointer is validated against its foreign-key
-        target ownership in one scoped projection without fetching any JSON payload or hydrating an
-        ORM row. A bad pointer fails loudly rather than disappearing or reporting zero.
+        complete-without-output cohort. Accepted pointers of inactive canonical targets are supplied
+        as the retained inactive map, so their published results stay materialized without becoming
+        eligible or generation targets. One combined pointer projection is read once, validated
+        against its foreign-key target ownership in one scoped projection, and partitioned by
+        membership in the active identity set. No JSON payload is fetched and no ORM row is hydrated.
+        A bad pointer fails loudly rather than disappearing or reporting zero.
         """
         with self._factory() as session:
             active_ids = tuple(
@@ -273,14 +298,26 @@ class InferenceSchedulingRepository:
                     .order_by(Course.group_id)
                 )
             )
-            selected = self._selected_proposal_ids(session)
-            self._validate_selected_pointers(session, selected)
+            active_id_set = set(active_ids)
+            all_selected = self._selected_proposal_ids(session, active_only=False)
+            self._validate_selected_pointers(session, all_selected)
+            accepted = {
+                group_id: proposal_id
+                for group_id, proposal_id in all_selected.items()
+                if group_id in active_id_set
+            }
+            retained_inactive = {
+                group_id: proposal_id
+                for group_id, proposal_id in all_selected.items()
+                if group_id not in active_id_set
+            }
             return CurrentInferenceCohort(
                 eligible_target_group_ids=active_ids,
-                accepted_proposal_ids=selected,
+                accepted_proposal_ids=accepted,
                 completed_without_output_target_group_ids=self._active_marker_group_ids(
                     session, "done"
                 ),
+                retained_inactive_proposal_ids=retained_inactive,
             )
 
     def read_coverage(self) -> InferenceCoverageSummary:
@@ -372,36 +409,46 @@ class InferenceSchedulingRepository:
         )
 
     @staticmethod
-    def _selected_proposal_ids(session: Session) -> dict[str, UUID]:
-        """Return the shared active-target accepted-pointer projection.
+    def _selected_proposal_ids(session: Session, *, active_only: bool = True) -> dict[str, UUID]:
+        """Return the shared accepted-pointer projection, scoped by target activity on request.
 
-        With ANY processing markers present, only each active course's nonnull marker pointer is
-        authority: a missing marker or pointer is uncovered and never falls back to raw/history/final
-        output. A marker-done target is excluded here so its retained predecessor is not selected for
-        generation/publication coverage, while its marker pointer is retained for ordinary reuse. With NO markers at all (bootstrap), each active genuine INFERENCE/COMPLETE
-        final set is joined to the unique retained proposal whose identity hash and target match. A
-        broken or ambiguous final pointer fails loudly rather than quietly reporting zero.
+        With ANY processing markers present, only each course's nonnull marker pointer is authority:
+        a missing marker or pointer is uncovered and never falls back to raw/history/final output. A
+        marker-done target is excluded here so its retained predecessor is not selected for
+        generation/publication coverage, while its marker pointer is retained for ordinary reuse. With
+        NO markers at all (bootstrap), each genuine INFERENCE/COMPLETE final set is joined to the
+        unique retained proposal whose identity hash and target match. A broken or ambiguous final
+        pointer fails loudly rather than quietly reporting zero. ``active_only=False`` includes
+        inactive canonical targets for retained-result publication.
         """
         marker_count = int(
             session.scalar(select(func.count()).select_from(InferenceCourseProcessing))
         )
         if marker_count:
+            conditions = [
+                InferenceCourseProcessing.accepted_proposal_id.is_not(None),
+                or_(
+                    InferenceCourseProcessing.disposition.is_(None),
+                    InferenceCourseProcessing.disposition != "done",
+                ),
+            ]
+            if active_only:
+                conditions.append(Course.is_active.is_(True))
             rows = session.execute(
                 select(Course.group_id, InferenceCourseProcessing.accepted_proposal_id)
                 .join(
                     InferenceCourseProcessing,
                     InferenceCourseProcessing.course_id == Course.id,
                 )
-                .where(
-                    Course.is_active.is_(True),
-                    InferenceCourseProcessing.accepted_proposal_id.is_not(None),
-                    or_(
-                        InferenceCourseProcessing.disposition.is_(None),
-                        InferenceCourseProcessing.disposition != "done",
-                    ),
-                )
+                .where(*conditions)
             ).all()
             return {group_id: proposal_id for group_id, proposal_id in rows}
+        conditions = [
+            InferredPrerequisiteSet.producer_kind == InferredProducerKind.INFERENCE,
+            InferredPrerequisiteSet.coverage_state == InferredCoverageState.COMPLETE,
+        ]
+        if active_only:
+            conditions.append(Course.is_active.is_(True))
         rows = session.execute(
             select(
                 Course.group_id,
@@ -416,11 +463,7 @@ class InferenceSchedulingRepository:
                     InferenceProposal.target_course_id == Course.id,
                 ),
             )
-            .where(
-                Course.is_active.is_(True),
-                InferredPrerequisiteSet.producer_kind == InferredProducerKind.INFERENCE,
-                InferredPrerequisiteSet.coverage_state == InferredCoverageState.COMPLETE,
-            )
+            .where(*conditions)
         ).all()
         selected: dict[str, UUID] = {}
         grouped: dict[str, list[UUID | None]] = {}
@@ -508,14 +551,16 @@ class InferenceSchedulingRepository:
             raise ValueError("a selected proposal has no target ownership")
 
     def _current_equivalence_group_count(self, session: Session) -> int:
-        """Count inference-owned groups whose at-least-two members are all active."""
-        active_counts = (
+        """Count inference-owned groups with at least two canonical members.
+
+        Activity scope is applied by the reading view, so a group whose member becomes inactive is
+        still a retained current group.
+        """
+        member_counts = (
             select(
                 InferredEquivalenceGroupMember.equivalence_group_id.label("group_id"),
                 func.count().label("total"),
-                func.sum(case((Course.is_active.is_(True), 1), else_=0)).label("active"),
             )
-            .join(Course, Course.id == InferredEquivalenceGroupMember.course_id, isouter=True)
             .group_by(InferredEquivalenceGroupMember.equivalence_group_id)
             .subquery()
         )
@@ -523,11 +568,10 @@ class InferenceSchedulingRepository:
             session.scalar(
                 select(func.count())
                 .select_from(InferredEquivalenceGroup)
-                .join(active_counts, active_counts.c.group_id == InferredEquivalenceGroup.id)
+                .join(member_counts, member_counts.c.group_id == InferredEquivalenceGroup.id)
                 .where(
                     InferredEquivalenceGroup.producer_kind == InferredProducerKind.INFERENCE,
-                    active_counts.c.total >= 2,
-                    active_counts.c.active == active_counts.c.total,
+                    member_counts.c.total >= 2,
                 )
             )
         )

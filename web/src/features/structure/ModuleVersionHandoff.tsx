@@ -61,7 +61,7 @@ export function ModuleVersionHandoff({
               const target = { group_id: shown.group_id, ...candidate };
               return (
                 <button
-                  key={candidate.sisu_module_id}
+                  key={candidate.source_version_id}
                   type="button"
                   className="dialog-option module-version-option"
                   disabled={disabled}

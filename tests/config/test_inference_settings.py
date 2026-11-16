@@ -88,6 +88,16 @@ def test_inference_settings_require_two_key_mix_contract(
     assert changed.local_runtime_identity(first) != settings.local_runtime_identity(first)
     assert InferenceRerankSettings().rerank_runtime_identity == rerank.rerank_runtime_identity
 
+    set_inference_environment(
+        monkeypatch,
+        INFERENCE_PRIMARY_ARTIFACT_FILE="Qwen3-1.7B-Q8_0.gguf",
+        INFERENCE_PRIMARY_ARTIFACT_PATH="models/qwen3-1.7b/Qwen3-1.7B-Q8_0.gguf",
+        INFERENCE_PRIMARY_ARTIFACT_QUANT="Q8_0",
+    )
+    small = InferenceSettings()
+    assert ";quant=Q8_0" in small.primary_model_identity
+    assert "Qwen3-1.7B-Q8_0.gguf" in small.primary_model_identity
+
     set_translation_environment(monkeypatch)
     assert TranslationSettings().provenance_model == (
         "google/translategemma-12b-it@d1b225e1caa17f1ddc7e62065d8637d0923f34e2"

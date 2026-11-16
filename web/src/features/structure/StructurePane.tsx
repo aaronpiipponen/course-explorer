@@ -68,15 +68,15 @@ import { useStructureEditor } from "./useStructureEditor";
 import { useNotice } from "../../shared/useNotice";
 import { usePhoneTabsOnClose } from "../../shared/usePhoneTabsOnClose";
 import { HelpLink, HelpTip, type HelpSection } from "../../shared/HelpTip";
-import { SisuImportNotice } from "./SisuImportNotice";
+import { ImportNotice } from "../imports/ImportNotice";
 import { forgetUnplacedReveal, settleUnplacedReveal } from "./reveal";
 import { ProfileTransfer } from "../profiles/ProfileTransfer";
+import { placePendingImport } from "../imports/placement";
 import {
-  resolveSisuImport,
-  captureModuleIds,
-  sisuImportBlocked,
-  type SisuImportIssue,
-} from "./sisu";
+  pendingImportModuleIds,
+  pendingImportBlocked,
+  type ImportIssue,
+} from "../imports/plan";
 import type { DisplayLanguage } from "../../state/types";
 
 type PickerMode = { kind: "add" } | { kind: "replace"; groupId: string };
@@ -148,18 +148,18 @@ export function StructurePane() {
   const { value: completedCourseIds } = useProfileSelector(
     (state) => state.completedCourseIds,
   );
-  const { value: pendingSisuImport } = useProfileSelector(
-    (state) => state.pendingSisuImport,
+  const { value: pendingPlanImport } = useProfileSelector(
+    (state) => state.pendingPlanImport,
   );
-  const pending = pendingSisuImport !== null;
-  // A restored profile can hold a waiting capture beside saved edits, which placement leaves alone.
+  const pending = pendingPlanImport !== null;
+  // A restored profile can hold a waiting plan beside saved edits, which placement leaves alone.
   const { value: importBlocked } = useProfileSelector((state) =>
-    sisuImportBlocked(state),
+    pendingImportBlocked(state),
   );
-  // A capture can hold a module the official rule does not name, which needs its own report.
+  // A plan can hold a module the official rule does not name, which needs its own report.
   const capturedModuleIds = useMemo(
-    () => (pendingSisuImport ? captureModuleIds(pendingSisuImport) : []),
-    [pendingSisuImport],
+    () => (pendingPlanImport ? pendingImportModuleIds(pendingPlanImport) : []),
+    [pendingPlanImport],
   );
   const { language, t } = useWording();
   const notice = useNotice();
@@ -227,9 +227,9 @@ export function StructurePane() {
   }, [placed.loading]);
   const [resolutionError, setResolutionError] = useState<Error | null>(null);
   const [importIssues, setImportIssues] = useState<
-    readonly SisuImportIssue[] | null
+    readonly ImportIssue[] | null
   >(null);
-  // Only the first load shows a skeleton tree. A pending capture holds the tree until placement.
+  // Only the first load shows a skeleton tree. A pending plan holds the tree until placement.
   const contentLoading = pending || (!loadedOnce && placed.loading);
   const contentError = placed.error ?? resolutionError;
   // A notice that links Unplaced studies can arrive before the tree or its content, so the
@@ -360,11 +360,11 @@ export function StructurePane() {
   );
   const versionSelectionRequired = selectionRequiredGroups.length > 0;
   /**
-   * Place one pending Sisu capture in a single write once its ordinary reads have settled, no
+   * Place one pending study plan in a single write once its ordinary reads have settled, no
    * required root or nested group needs an explicit version, and the profile holds no saved
-   * structure edit beside the capture.
+   * structure edit beside the plan.
    *
-   * The captured hierarchy is resolved from the callback's own state, so a language or completion
+   * The plan hierarchy is resolved from the callback's own state, so a language or completion
    * change another tab made while the reads waited is kept. A failure leaves the pending record
    * untouched and shows its error instead of retrying an unchanged read.
    */
@@ -375,11 +375,11 @@ export function StructurePane() {
     if (versionSelectionRequired) return;
     const profileId = store.getSnapshot().currentProfileId;
     if (store.refreshFromStorage().currentProfileId !== profileId) return;
-    let issues: readonly SisuImportIssue[] = [];
+    let issues: readonly ImportIssue[] = [];
     let applied = false;
     try {
       applyStructure(store, (state) => {
-        const result = resolveSisuImport(state, placed.content, {
+        const result = placePendingImport(state, placed.content, {
           courseIds: placed.unavailableCourseIds,
           moduleIds: placed.unavailableModuleIds,
         });
@@ -467,7 +467,7 @@ export function StructurePane() {
         moduleVersions,
         courseOrder,
         selected,
-        pendingSisuImport,
+        pendingPlanImport,
         selectionRequiredGroups,
         programmes.pending,
         editor.pendingModuleId,
@@ -482,7 +482,7 @@ export function StructurePane() {
       moduleVersions,
       courseOrder,
       selected,
-      pendingSisuImport,
+      pendingPlanImport,
       selectionRequiredGroups,
       programmes.pending,
       editor.pendingModuleId,
@@ -529,7 +529,7 @@ export function StructurePane() {
       (course) => course.group_id,
     );
     applyStructure(store, (state) => {
-      if (state.pendingSisuImport !== null) return null;
+      if (state.pendingPlanImport !== null) return null;
       const structure = state.structure;
       const latestKey = JSON.stringify([
         structure.programmeGroupIds,
@@ -644,7 +644,7 @@ export function StructurePane() {
           ...state.structure,
           moduleVersions: {
             ...state.structure.moduleVersions,
-            [groupId]: module.sisu_module_id,
+            [groupId]: module.source_version_id,
           },
         },
       }));
@@ -661,7 +661,7 @@ export function StructurePane() {
             snapshot.profiles[snapshot.currentProfileId].state.structure;
           const stored = current.moduleVersions[groupId];
           if (stored !== undefined) {
-            if (stored === module.sisu_module_id) {
+            if (stored === module.source_version_id) {
               closePicker();
               return;
             }
@@ -671,7 +671,7 @@ export function StructurePane() {
           // An equal hydrated version closes without installing a map entry, and missing content
           // raises `Programme is unavailable`.
           if (report === undefined) throw new Error("Programme is unavailable");
-          if (report.root.module.sisu_module_id !== module.sisu_module_id)
+          if (report.root.module.source_version_id !== module.source_version_id)
             throw new Error(VERSION_CONFLICT);
           closePicker();
           return;
@@ -687,7 +687,7 @@ export function StructurePane() {
             kind: "replace",
             groupId: target,
             replacementGroupId: groupId,
-            versionId: module.sisu_module_id,
+            versionId: module.source_version_id,
           })
           .then((preview) => {
             if (!preview) {
@@ -715,7 +715,7 @@ export function StructurePane() {
         .run({
           kind: "add",
           groupId,
-          versionId: module.sisu_module_id,
+          versionId: module.source_version_id,
         })
         .then((success) => {
           if (success) closePicker();
@@ -1034,7 +1034,7 @@ export function StructurePane() {
         )}
         <AnimatePresence>
           {importIssues && (
-            <SisuImportNotice
+            <ImportNotice
               issues={importIssues}
               onDismiss={() => setImportIssues(null)}
             />
@@ -1049,7 +1049,7 @@ export function StructurePane() {
         {importBlocked && (
           <p className="error-notice" role="status">
             {t(
-              "Sisu import paused to preserve saved edits. Your profile is unchanged.",
+              "The plan import paused to preserve saved edits. Your profile is unchanged.",
             )}
           </p>
         )}

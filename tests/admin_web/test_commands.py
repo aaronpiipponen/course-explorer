@@ -61,7 +61,7 @@ _ENTRY_FIELDS = {
 }
 
 # The canonical identities the target and dataset shapes carry. Neither may reach the log.
-_TARGET_ID = "tuni-canonical-0f3a91"
+_TARGET_ID = "canonical-0f3a91"
 _DATASET_ID = "b" * 32
 
 # One listed log session identity and the one listed configuration file the log and settings

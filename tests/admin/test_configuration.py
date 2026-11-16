@@ -192,6 +192,30 @@ def test_toml_configuration_save_preserves_file_contract(
             assert saved[name] == value
 
 
+def test_configuration_editor_validates_the_instance_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The editor saves the configured instance key and refuses one outside the university map."""
+    root = _editor_root(monkeypatch, tmp_path)
+    path = root / "config" / "web.toml"
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError):
+        editor.set_configuration_value("config/web.toml", "INSTANCE_KEY", json.dumps("unknown"))
+    assert path.read_bytes() == before
+
+    acknowledgment = editor.set_configuration_value(
+        "config/web.toml", "INSTANCE_KEY", json.dumps("aalto")
+    )
+    assert acknowledgment.model_dump() == {
+        "schema_version": 1,
+        "file": "config/web.toml",
+        "key": "INSTANCE_KEY",
+    }
+    saved = configuration.read_configuration_documents(root)["config/web.toml"]
+    assert saved["INSTANCE_KEY"] == "aalto"
+
+
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
 @pytest.mark.parametrize(
     ("key", "literal", "original_line", "saved_line"),
@@ -406,8 +430,8 @@ _REFUSED_CASES: dict[str, tuple[str, str, str]] = {
     "malformed-local-for-toml": ("config/web.toml", "WEB_PORT", json.dumps(18026)),
     "academic-year-order": (
         "config/curriculum.toml",
-        "KORI_FIRST_ACADEMIC_YEAR",
-        json.dumps("2027-2028"),
+        "CURRENT_ACADEMIC_YEAR",
+        json.dumps("2000-2001"),
     ),
     "score-line-order": (
         "config/admission.toml",
@@ -467,8 +491,9 @@ def test_configuration_write_refuses_invalid_or_unconfined_candidates(
     boolean for a port, a non-loopback host beside a valid local value and beside a valid process
     value, a non-loopback administration host beside a valid process value, a cached local value
     beside a changed file, a duplicated and a malformed local input, and a lowercase local alias
-    that must not mask an invalid subsystem-file candidate. Further cases are an academic-year
-    order, an invalid structured value, an App URL carrying a query or fragment marker or a remote
+    that must not mask an invalid subsystem-file candidate. Further cases are a current academic
+    year before the mapped first academic year, an invalid structured value, an App URL carrying a
+    query or fragment marker or a remote
     plain-HTTP address, a non-string environment value, an unowned absent environment key, an owned
     non-credential environment key, a lowercase owned environment value that its validator refuses,
     a differently cased duplicate environment binding, a duplicated environment assignment, a

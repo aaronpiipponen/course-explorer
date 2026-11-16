@@ -260,7 +260,7 @@ def test_compiler_expands_all_seven_module_rule_kinds_without_module_nodes(
         "module-all",
         "module-nested",
     }
-    assert modules["module-all"].sisu_module_id == "module-all-v1"
+    assert modules["module-all"].source_version_id == "module-all-v1"
     assert modules["module-all"].module_type is ModuleType.STUDY_MODULE
     assert modules["module-all"].name_en == "Module module-all-v1"
     assert module_display["module-all"].member_group_ids == (
@@ -269,7 +269,7 @@ def test_compiler_expands_all_seven_module_rule_kinds_without_module_nodes(
         "nested-only",
         "shared",
     )
-    assert modules["module-nested"].sisu_module_id == "module-nested-v1"
+    assert modules["module-nested"].source_version_id == "module-nested-v1"
 
     # Ignored free choice and all-mandatory bounds add no witness. Known numeric requirements are
     # met, so satisfaction holds and the route is exact at zero credits.
@@ -366,7 +366,7 @@ def test_module_version_selection_uses_root_year_and_reports_missing_or_ambiguou
     assert result.kind == "course"
     assert result.course_group_id == "selected-leaf"
     missing_modules = {module.group_id: module for module in missing_year.solver.modules}
-    assert missing_modules["module-select"].sisu_module_id == "module-select-v2027"
+    assert missing_modules["module-select"].source_version_id == "module-select-v2027"
     assert [part.kind for part in ignored_parts(missing_year.solver)] == ["module_version_fallback"]
     assert ignored_parts(missing_year.solver)[0].detail == (
         "requested year 2026; selected module-select-v2027"
@@ -405,7 +405,7 @@ def test_module_version_selection_uses_root_year_and_reports_missing_or_ambiguou
     selected_module = {module.group_id: module for module in selected.solver.modules}[
         "module-select"
     ]
-    assert selected_module.sisu_module_id == "module-select-v2026"
+    assert selected_module.source_version_id == "module-select-v2026"
     assert selected_module.module_type is ModuleType.STUDY_MODULE
     assert selected_module.name_en == "Module module-select-v2026"
     assert selected_module.code is None
@@ -459,7 +459,7 @@ def test_module_version_selection_uses_root_year_and_reports_missing_or_ambiguou
     ruleless_module = {module.group_id: module for module in ruleless_compilation.solver.modules}[
         "module-select"
     ]
-    assert ruleless_module.sisu_module_id == "module-select-vruleless"
+    assert ruleless_module.source_version_id == "module-select-vruleless"
     assert [node.module_group_id for node in module_nodes(ruleless_compilation.display)] == [
         "module-select"
     ]
@@ -476,7 +476,7 @@ def test_module_version_selection_uses_root_year_and_reports_missing_or_ambiguou
         curriculum_periods=(CatalogueCurriculumPeriod(id="period-2028", academic_year_start=2028),),
     )
     earlier_selected = compile_with_versions(earlier, later)
-    assert {module.sisu_module_id for module in earlier_selected.solver.modules} == {
+    assert {module.source_version_id for module in earlier_selected.solver.modules} == {
         "module-select-v2024"
     }
     later_only = module_version(
@@ -487,7 +487,7 @@ def test_module_version_selection_uses_root_year_and_reports_missing_or_ambiguou
         ),
     )
     later_only_selected = compile_with_versions(later_only, later)
-    assert {module.sisu_module_id for module in later_only_selected.solver.modules} == {
+    assert {module.source_version_id for module in later_only_selected.solver.modules} == {
         "module-select-v2027b"
     }
 
@@ -558,10 +558,10 @@ def test_module_version_selection_uses_root_year_and_reports_missing_or_ambiguou
     assert ignored_parts(alternative.solver)[0].referenced_group_ids == ("module-absent",)
 
 
-def test_module_rule_malformed_shapes_become_explicit_unresolved_nodes(
+def test_module_rule_supported_and_malformed_shapes_become_explicit_nodes(
     solver_bundle: None, native_graph
 ) -> None:
-    """Malformed source rule shapes and missing references yield explicit nodes."""
+    """Supported source rule shapes compile. A malformed one yields an explicit node."""
     year_period = (CatalogueCurriculumPeriod(id="period-2026", academic_year_start=2026),)
     root = catalogue_course(
         "root",
@@ -598,14 +598,18 @@ def test_module_rule_malformed_shapes_become_explicit_unresolved_nodes(
             RecordingEquivalenceGroupRead(),
         ).compile("root")
 
-    def inlined(rule: CatalogueModuleRule | None, **kwargs):
-        compilation = compile_rule(rule, **kwargs)
+    def inlined_from(compilation):
         root_use = compilation.solver.root_use_id
-        if root_use is None:
-            return None
+        assert root_use is not None
         if piece_of(compilation.solver, root_use).kind == "module_block":
             return piece_of(compilation.solver, child_uses(compilation.solver, root_use)[0])
         return piece_of(compilation.solver, root_use)
+
+    def inlined(rule: CatalogueModuleRule | None, **kwargs):
+        compilation = compile_rule(rule, **kwargs)
+        if compilation.solver.root_use_id is None:
+            return None
+        return inlined_from(compilation)
 
     # A blank all-mandatory composite is an unexpandable block: it contributes nothing and
     # is disclosed, never a vacuous true AND or a malformed node.
@@ -645,6 +649,73 @@ def test_module_rule_malformed_shapes_become_explicit_unresolved_nodes(
         )
     )
     assert self_credit.solver.root_use_id is None
+
+    # A stored maximum above the current child count is a source bound, not a malformed shape: the
+    # cardinality piece keeps it and the evaluator clamps it to the children the piece has.
+    guide_compilation = compile_rule(
+        module_rule(
+            ModuleRuleType.COMPOSITE_RULE,
+            require_min=0,
+            require_max=75,
+            children=(module_rule(ModuleRuleType.COURSE_UNIT_RULE, referenced_group_id="solo"),),
+        ),
+        courses=(catalogue_course("solo"),),
+    )
+    guide_shaped = inlined_from(guide_compilation)
+    assert guide_shaped.kind == "cardinality"
+    assert (guide_shaped.require_min, guide_shaped.require_max) == (0, 75)
+    assert len(guide_shaped.children) == 1
+
+    # A credit-bounded choice is one credits rule over one non-mandatory composite child.
+    legacy_compilation = compile_rule(
+        module_rule(
+            ModuleRuleType.CREDITS_RULE,
+            credits_min="10",
+            credits_max="15",
+            children=(
+                module_rule(
+                    ModuleRuleType.COMPOSITE_RULE,
+                    require_min=0,
+                    children=(
+                        module_rule(
+                            ModuleRuleType.COURSE_UNIT_RULE,
+                            referenced_group_id="credit-a",
+                        ),
+                        module_rule(
+                            ModuleRuleType.COURSE_UNIT_RULE,
+                            sibling_position=1,
+                            referenced_group_id="credit-b",
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        courses=(
+            catalogue_course("solo"),
+            catalogue_course("credit-a"),
+            catalogue_course("credit-b"),
+        ),
+    )
+    legacy_shaped = inlined_from(legacy_compilation)
+    assert legacy_shaped.kind == "credits"
+    assert (legacy_shaped.credits_min, legacy_shaped.credits_max) == (
+        Decimal("10"),
+        Decimal("15"),
+    )
+    assert len(legacy_shaped.children) == 1
+    credit_pool = next(
+        piece
+        for piece in legacy_compilation.solver.pieces
+        if piece.piece_id == legacy_shaped.children[0]
+    )
+    assert credit_pool.kind == "cardinality"
+    assert len(credit_pool.children) == 2
+
+    # Neither supported shape produces a malformed-rule node.
+    for compilation in (guide_compilation, legacy_compilation):
+        assert UnresolvedPrerequisiteReason.MALFORMED_RULE.value not in {
+            piece.reason for piece in compilation.solver.pieces
+        }
 
     # A malformed source range (a pick-N minimum above the child count) is an
     # explicit unresolved MALFORMED_RULE node. Only positions dropped from a valid source survive.

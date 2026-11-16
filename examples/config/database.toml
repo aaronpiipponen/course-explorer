@@ -1,5 +1,7 @@
-# Example PostgreSQL connection configuration, validated by
-# course_explorer.config.DatabaseSettings.
+# Example PostgreSQL connection components and administration paths.
+# `course_explorer.config.DatabaseSettings` owns the connection components and `ADMIN_STATE_ROOT`,
+# `SharedStorageSettings` owns `ADMIN_SHARED_ROOT`, and `AdministrativeDatasetSettings` also reads
+# `ADMIN_STATE_ROOT`.
 POSTGRES_DB = "course_explorer"
 # The example database name. A site whose POSTGRES_DB equals this value serves the example data
 # without an enrolled dataset.
@@ -8,3 +10,6 @@ POSTGRES_USER = "course_explorer"
 POSTGRES_HOST = "127.0.0.1"
 POSTGRES_PORT = 5433
 ADMIN_STATE_ROOT = "data/admin"
+# Machine-wide directory that the example setup workflow creates or adopts outside the checkout.
+# An absolute path, or one beginning with `~/`, which expands against the home directory.
+ADMIN_SHARED_ROOT = "~/.local/share/course-explorer"

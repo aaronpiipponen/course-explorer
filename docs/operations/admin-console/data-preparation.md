@@ -2,7 +2,7 @@
 
 The Data preparation tab holds the ingestion, translation and embedding stages with their controls, and the three reports that read Working first and fall back to Selected.
 
-![The Data preparation tab with the No Working dataset notice above the three idle stage panels and the catalogue summary, teaching-text coverage and embedding coverage reports, each naming the Selected dataset with a No Working dataset hint](/docs/screenshots/admin-console-data-preparation.png)
+![The Data preparation tab with the No Working dataset notice above the three idle stage panels and the catalogue summary, teaching-text coverage and embedding coverage reports, each showing the No dataset enrolled strip](/docs/screenshots/admin-console-data-preparation.png)
 
 ## The stage panels
 
@@ -45,6 +45,8 @@ Only **Stop** asks for confirmation. Its dialog names the stage, for example **S
 
 While an action runs, the four buttons of that panel are disabled. The panel then shows the status the action returned, and a failed action shows a failure message in the same panel. A successful stop of translation also returns the worker's finished copy as the Working dataset, and [Worker sessions](/docs/operations/worker-sessions.md#pause-stop-and-the-return) describes the return.
 
+A start on an idle ingestion or embedding session whose work is incomplete and whose work identity does not match this device supersedes that session. The panel then shows the fresh session's rows: its identity in **session**, the revision the start recorded, and its progress. The start report of the administration command names the superseded identity in `superseded_session_id`, and the [Operator menu](/docs/operations/operator-menu.md#the-stage-tools) states the move.
+
 ## The reports
 
 Below the stages are the **Catalogue summary**, **Teaching-text coverage** and **Embedding coverage** panels. Each reads its own command on the automatic interval, so its marker shows **auto** and the time since the last successful read. The read resolves Working first and falls back to Selected when Working is absent, and the panel names the role as a compact strip: **Working dataset**, a **Selected dataset** strip with a **No Working dataset** hint when it fell back, or **No dataset enrolled** with no report rows.
@@ -79,9 +81,9 @@ On a site that serves the embedding features, a dataset whose current embedding 
 
 A successful build message names the paths and counts of the set the site serves. An embeddings-on build names the hub-pair path, the two hub files with the chunk count behind each, the search group and block counts, the centroid count, the neighbour-row count and the projectable study-root count. An embeddings-off build names the catalogue artifact path and the projectable study-root count and states that the switch is off, so the build wrote no embedding artifacts. Both messages state that the web server reads the artifacts at start and ask for a restart, and [Operations](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) states that restart. The build starts at once and asks for no confirmation. It builds the Selected dataset, which is the configured database in bootstrap, and its hubs come from that dataset's stored vectors, so no second command is needed.
 
-![The Embedding coverage panel with the Selected dataset role strip and its No Working dataset hint, a row for each field, language and origin, a Total row and the Build serving artifacts button](/docs/screenshots/admin-console-embedding-coverage.png)
+![The Embedding coverage panel with its auto marker above the No dataset enrolled strip and no report rows or build control](/docs/screenshots/admin-console-embedding-coverage.png)
 
-The **Build serving artifacts** button sits below the coverage table.
+While a dataset is enrolled, the **Build serving artifacts** button sits below the coverage table.
 
 The supervisor opens the current artifact build once before it forks its workers. On a site that serves the embedding features that opened set holds the shared centroid and chunk stores of the configured embedding directory, and on a site with them off it holds the catalogue and the study fragments alone. A completed build reaches serving after the full supervisor restart that [Operations](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) states, and the artifact command restarts no unit. The [Operator menu](/docs/operations/operator-menu.md#building-the-serving-artifacts) describes the same build for the command line.
 

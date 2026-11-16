@@ -18,7 +18,6 @@ from course_explorer.curriculum import (
     CataloguePrerequisiteOption,
     CatalogueSubstitutionMember,
     CatalogueSubstitutionOption,
-    CatalogueTeachingText,
     CourseSummary,
 )
 from course_explorer.enums import (
@@ -26,6 +25,7 @@ from course_explorer.enums import (
     InferredProducerKind,
     ModuleRuleType,
     ModuleType,
+    OfficialTextField,
     PrerequisiteMemberType,
     PrerequisiteRequirementKind,
 )
@@ -65,17 +65,20 @@ def course_version(
 ) -> CatalogueCourseVersion:
     """Build one official course version with exactly the options under test."""
     return CatalogueCourseVersion(
-        sisu_course_unit_id=f"source-{code}",
+        source_version_id=f"source-{code}",
         source_hash="c" * 64,
         code=code or "TEST-100",
-        name_fi=f"Kurssi {code or 'TEST-100'}",
-        name_en=f"Course {code or 'TEST-100'}",
+        texts={
+            OfficialTextField.NAME: {
+                "fi": f"Kurssi {code or 'TEST-100'}",
+                "en": f"Course {code or 'TEST-100'}",
+            }
+        },
         credits_min=Decimal(credits_min),
         credits_max=None if credits_max is None else Decimal(credits_max),
         official_url=f"https://example.invalid/{code or 'TEST-100'}",
         document_state="ACTIVE",
         curriculum_period_ids=("2026-2027",),
-        teaching_text=CatalogueTeachingText(),
         prerequisite_options=prerequisite_options,
         substitution_options=substitution_options,
     )
@@ -188,7 +191,7 @@ def module_rule(
 
 
 def module_version(
-    sisu_module_id: str,
+    source_version_id: str,
     *,
     rule: CatalogueModuleRule | None = None,
     curriculum_periods: tuple[CatalogueCurriculumPeriod, ...] = (),
@@ -200,11 +203,11 @@ def module_version(
 ) -> CatalogueModuleVersion:
     """Build one exact official module version with explicit membership years."""
     return CatalogueModuleVersion(
-        sisu_module_id=sisu_module_id,
+        source_version_id=source_version_id,
         source_hash="d" * 64,
         module_type=module_type,
         code=None,
-        name_en=f"Module {sisu_module_id}",
+        names={"en": f"Module {source_version_id}"},
         document_state="ACTIVE",
         validity_start=validity_start,
         validity_end=validity_end,
@@ -219,7 +222,7 @@ def catalogue_module(
     group_id: str, versions: tuple[CatalogueModuleVersion, ...]
 ) -> CatalogueModule:
     """Build one canonical module DTO sorted by exact source ID like the read seam."""
-    ordered = tuple(sorted(versions, key=lambda version: version.sisu_module_id))
+    ordered = tuple(sorted(versions, key=lambda version: version.source_version_id))
     return CatalogueModule(group_id=group_id, versions=ordered)
 
 

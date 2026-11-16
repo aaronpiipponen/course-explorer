@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, select, tuple_
 from sqlalchemy.orm import Session, sessionmaker
 
+from course_explorer.config import load_instance_settings
 from course_explorer.db.models import (
     Course,
     CourseEmbeddingChunk,
@@ -34,23 +35,29 @@ from course_explorer.embeddings.generation import (
 from course_explorer.enums import (
     CourseEmbeddingStatus,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
     TranslationMethod,
 )
+from course_explorer.instance import UniversityMetadata
 
 # Readiness checks one bounded identity batch per statement: a single IN list over the whole
 # catalogue exceeds the driver's parameter ceiling and PostgreSQL's statement-complexity limit.
 _READINESS_BATCH_SIZE = 1000
 
-EmbeddingRowKey = tuple[UUID, TeachingTextField, TeachingTextLanguage, int]
+EmbeddingRowKey = tuple[UUID, TeachingTextField, str, int]
 
 
 class CourseEmbeddingRepository:
     """Reconcile desired chunks and record their current lifecycle state and vectors."""
 
-    def __init__(self, factory: sessionmaker[Session]) -> None:
+    def __init__(
+        self,
+        factory: sessionmaker[Session],
+        *,
+        university: UniversityMetadata | None = None,
+    ) -> None:
         self._factory = factory
+        self._university = load_instance_settings().university if university is None else university
 
     def reconcile(
         self,
@@ -60,12 +67,12 @@ class CourseEmbeddingRepository:
         """Reconcile desired chunks against scoped persisted rows in one transaction."""
         scope = tuple(canonical_group_ids)
         inputs = tuple(chunks)
-        _validate_reconciliation_inputs(scope, inputs)
+        _validate_reconciliation_inputs(scope, inputs, self._university.official_languages)
 
         with session_scope(self._factory) as session:
             course_rows = tuple(
                 session.execute(
-                    select(Course.group_id, CourseVersion.id, CourseVersion.sisu_course_unit_id)
+                    select(Course.group_id, CourseVersion.id, CourseVersion.source_version_id)
                     .join(CourseVersion, CourseVersion.course_id == Course.id)
                     .where(Course.group_id.in_(scope))
                 )
@@ -132,7 +139,7 @@ class CourseEmbeddingRepository:
                     key=lambda item: (
                         version_order[item.course_version_id],
                         item.field.value,
-                        item.language.value,
+                        item.language,
                         item.chunk_index,
                     ),
                 )
@@ -184,7 +191,9 @@ class CourseEmbeddingRepository:
         One aggregate `GROUP BY` counts rows in the database. No chunk entity is materialized,
         because a coverage number never needs the stored text or vector. `None` counts every
         canonical course for the full-catalogue diagnostic. An explicit collection scopes the
-        read to those courses, including an empty collection's all-zero report.
+        read to those courses, including an empty collection's all-zero report. The field/language
+        rows cover only the configured official languages, so a chunk in another language counts
+        toward the total chunk count only.
         """
         if canonical_group_ids is None:
             scope: tuple[str, ...] | None = None
@@ -213,18 +222,20 @@ class CourseEmbeddingRepository:
         )
         with self._factory() as session:
             buckets = tuple(session.execute(statement))
-        counts: dict[
-            tuple[TeachingTextField, TeachingTextLanguage, TeachingTextOrigin], dict[str, int]
-        ] = {
+        languages = self._university.official_languages
+        counts: dict[tuple[TeachingTextField, str, TeachingTextOrigin], dict[str, int]] = {
             (field, language, origin): {"pending": 0, "completed": 0, "failed": 0}
             for field in TeachingTextField
-            for language in TeachingTextLanguage
+            for language in languages
             for origin in TeachingTextOrigin
         }
         total_chunk_count = 0
         for field, language, origin, status, bucket_count in buckets:
-            counts[(field, language, origin)][status.value] += bucket_count
             total_chunk_count += bucket_count
+            cell = counts.get((field, language, origin))
+            if cell is None:
+                continue
+            cell[status.value] += bucket_count
         pending_count = sum(cell["pending"] for cell in counts.values())
         completed_count = sum(cell["completed"] for cell in counts.values())
         failed_count = sum(cell["failed"] for cell in counts.values())
@@ -243,14 +254,14 @@ class CourseEmbeddingRepository:
                     failed_count=counts[(field, language, origin)]["failed"],
                 )
                 for field in TeachingTextField
-                for language in TeachingTextLanguage
+                for language in languages
                 for origin in TeachingTextOrigin
             ),
         )
 
     def read_chunk_keys(
         self, row_ids: Sequence[UUID]
-    ) -> dict[UUID, tuple[str, TeachingTextField, TeachingTextLanguage, int]]:
+    ) -> dict[UUID, tuple[str, TeachingTextField, str, int]]:
         """Return each supplied row's projected identity key without hydrating chunk entities.
 
         The sole caller supplies IDs it reconciled in the same operation, so this read neither
@@ -289,11 +300,11 @@ class CourseEmbeddingRepository:
         failed desired work raises a safe ``ValueError`` saying the embedding stage is required.
         """
         items = tuple(chunks)
-        keys: set[tuple[str, str, TeachingTextField, TeachingTextLanguage, int]] = set()
+        keys: set[tuple[str, str, TeachingTextField, str, int]] = set()
         for chunk in items:
             key = (
                 chunk.group_id,
-                chunk.sisu_course_unit_id,
+                chunk.source_version_id,
                 chunk.field,
                 chunk.language,
                 chunk.chunk_index,
@@ -307,7 +318,7 @@ class CourseEmbeddingRepository:
         if not items:
             return
         identities = sorted(keys)
-        by_key: dict[tuple[str, str, TeachingTextField, TeachingTextLanguage, int], object] = {}
+        by_key: dict[tuple[str, str, TeachingTextField, str, int], object] = {}
         for start in range(0, len(identities), _READINESS_BATCH_SIZE):
             batch = identities[start : start + _READINESS_BATCH_SIZE]
             with self._factory() as session:
@@ -315,7 +326,7 @@ class CourseEmbeddingRepository:
                     session.execute(
                         select(
                             Course.group_id,
-                            CourseVersion.sisu_course_unit_id,
+                            CourseVersion.source_version_id,
                             CourseEmbeddingChunk.field,
                             CourseEmbeddingChunk.language,
                             CourseEmbeddingChunk.chunk_index,
@@ -341,7 +352,7 @@ class CourseEmbeddingRepository:
                         .where(
                             tuple_(
                                 Course.group_id,
-                                CourseVersion.sisu_course_unit_id,
+                                CourseVersion.source_version_id,
                                 CourseEmbeddingChunk.field,
                                 CourseEmbeddingChunk.language,
                                 CourseEmbeddingChunk.chunk_index,
@@ -353,7 +364,7 @@ class CourseEmbeddingRepository:
                 {
                     (
                         row.group_id,
-                        row.sisu_course_unit_id,
+                        row.source_version_id,
                         row.field,
                         row.language,
                         row.chunk_index,
@@ -365,7 +376,7 @@ class CourseEmbeddingRepository:
             row = by_key.get(
                 (
                     chunk.group_id,
-                    chunk.sisu_course_unit_id,
+                    chunk.source_version_id,
                     chunk.field,
                     chunk.language,
                     chunk.chunk_index,
@@ -379,22 +390,27 @@ class CourseEmbeddingRepository:
             ):
                 raise ValueError(
                     "embedding stage is required: "
-                    f"{chunk.group_id}/{chunk.field.value}/{chunk.language.value} "
+                    f"{chunk.group_id}/{chunk.field.value}/{chunk.language} "
                     f"chunk {chunk.chunk_index} has no current completed embedding"
                 )
 
 
 def _validate_reconciliation_inputs(
-    scope: tuple[str, ...], inputs: tuple[CourseEmbeddingChunkInput, ...]
+    scope: tuple[str, ...], inputs: tuple[CourseEmbeddingChunkInput, ...], languages: Sequence[str]
 ) -> None:
-    """Reject an ambiguous scope or an out-of-scope or duplicated desired chunk."""
+    """Reject an ambiguous scope, out-of-scope chunk, or unconfigured desired language."""
     if len(scope) != len(set(scope)):
         raise ValueError("canonical group IDs must be unique")
     if any(not group_id.strip() for group_id in scope):
         raise ValueError("canonical group IDs must not be blank")
+    configured = set(languages)
     scope_set = set(scope)
-    keys: set[tuple[str, TeachingTextField, TeachingTextLanguage, int]] = set()
+    keys: set[tuple[str, TeachingTextField, str, int]] = set()
     for chunk in inputs:
+        if chunk.language not in configured:
+            raise ValueError(
+                f"desired chunk language {chunk.language} is not configured for this instance"
+            )
         key = (chunk.group_id, chunk.field, chunk.language, chunk.chunk_index)
         if key in keys:
             raise ValueError(
@@ -413,11 +429,9 @@ def _desired_chunks(
     """Map each desired chunk to its persisted row key, preserving insertion order."""
     desired: dict[EmbeddingRowKey, CourseEmbeddingChunkInput] = {}
     for chunk in inputs:
-        version_id = groups_to_versions[chunk.group_id].get(chunk.sisu_course_unit_id)
+        version_id = groups_to_versions[chunk.group_id].get(chunk.source_version_id)
         if version_id is None:
-            raise ValueError(
-                f"{chunk.sisu_course_unit_id} does not belong to group {chunk.group_id}"
-            )
+            raise ValueError(f"{chunk.source_version_id} does not belong to group {chunk.group_id}")
         desired[(version_id, chunk.field, chunk.language, chunk.chunk_index)] = chunk
     return desired
 

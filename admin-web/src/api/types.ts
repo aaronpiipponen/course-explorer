@@ -13,6 +13,7 @@ export interface SessionReport {
   poll_seconds: number;
   app_url: string;
   repository_url: string;
+  display_label: string;
 }
 
 /** One container's run state, health and image. */
@@ -370,7 +371,9 @@ export interface InferenceAdministrativeSummary {
 /** One operator decision a target accepts. */
 export type TargetDisposition = "done" | "failed";
 
-/** The three decision tokens a target decision command admits, NOTHING included. */
+/**
+ * The three decision tokens a target decision command admits: `nothing`, `done` and `failed`.
+ */
 export type TargetDecisionToken = "nothing" | TargetDisposition;
 
 /** One target's current operator disposition. */

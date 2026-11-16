@@ -15,6 +15,7 @@ from course_explorer.search.service import (
 )
 from tests.support import (
     DIMENSION,
+    FIXTURE_DISPLAY_FALLBACK,
     HASH_A,
     HASH_B,
     course,
@@ -97,4 +98,4 @@ def service(
 
 
 def summary(course: CatalogueCourse) -> CourseSummary:
-    return course_summary(course)
+    return course_summary(course, display_fallback=FIXTURE_DISPLAY_FALLBACK)

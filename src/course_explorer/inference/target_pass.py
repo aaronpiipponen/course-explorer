@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict
 
 from course_explorer.administration import utc_now as _utc_now
 from course_explorer.config import InferenceSettings
-from course_explorer.enums import InferenceWorkStatus
+from course_explorer.enums import InferenceWorkStatus, OfficialTextField
 from course_explorer.hashing import canonical_json_sha256
 from course_explorer.http_retry import RequestNotStarted
 from course_explorer.inference.context import (
@@ -153,7 +153,7 @@ def _prompt_course_descriptor(course: InferencePacketCourse) -> dict[str, object
     """Render one label-free packet course into its request descriptor.
 
     The descriptor carries the group ID, the course code, the representative source digest, and one
-    entry per effective teaching cell with its field, language, text, and origin.
+    entry per selected prompt cell with its field, language, text, and origin.
     """
     return {
         "group_id": course.identity.group_id,
@@ -162,13 +162,32 @@ def _prompt_course_descriptor(course: InferencePacketCourse) -> dict[str, object
         "texts": [
             {
                 "field": cell.field.value,
-                "language": cell.language.value,
+                "language": cell.language,
                 "text": cell.text,
                 "origin": cell.origin.value,
             }
-            for cell in course.texts
+            for cell in course.prompt_texts
         ],
     }
+
+
+# Present when a target or candidate prompt cell carries free text rather than teaching content.
+_PROMPT_FIELD_GUIDANCE = (
+    "Some supplied fields hold official free-text descriptions. The prerequisite text field "
+    "states a course's entry requirements in free text, and the additional information field "
+    "carries other official notes. The official prerequisite structure is never supplied. "
+    "Treat every supplied field as evidence about the course."
+)
+
+
+def _prompt_has_free_text_field(packet: InferenceTargetPacket) -> bool:
+    """Return whether any target or candidate prompt cell is prerequisite or additional text."""
+    free_text_fields = (OfficialTextField.PREREQUISITE_TEXT, OfficialTextField.ADDITIONAL_INFO)
+    return any(
+        cell.field in free_text_fields
+        for course in (packet.target, *(candidate.course for candidate in packet.candidates))
+        for cell in course.prompt_texts
+    )
 
 
 def render_target_request(
@@ -178,9 +197,11 @@ def render_target_request(
 
     The pack supplies the system prompt and the curated worked examples. The system prompt combines
     the pack's system prompt with the worked examples as sorted UTF-8 JSON, excluding the target's
-    own curated answer. The user prompt is compact sorted UTF-8 JSON of the target and ordered
-    candidate descriptors. ``schema_version`` selects the strict result schema and its request
-    identity. Live callers pass the configured version and it has no default.
+    own curated answer. When a selected prompt cell is prerequisite text or additional information,
+    one guidance paragraph states that those fields are official free text and that the official
+    prerequisite structure is never supplied. The user prompt is compact sorted UTF-8 JSON of the
+    target and ordered candidate descriptors. ``schema_version`` selects the strict result schema and
+    its request identity. Live callers pass the configured version and it has no default.
     """
     if not packet.target.is_active:
         raise ValueError("the target pass requires an active target")
@@ -198,8 +219,13 @@ def render_target_request(
         separators=(",", ":"),
     )
     system_prompt = (
-        f"{pack.system_prompt}\n\nWorked examples (curated inference, not university facts):\n"
-        f"{examples_json}"
+        f"{pack.system_prompt}\n\n{_PROMPT_FIELD_GUIDANCE}\n\nWorked examples "
+        f"(curated inference, not university facts):\n{examples_json}"
+        if _prompt_has_free_text_field(packet)
+        else (
+            f"{pack.system_prompt}\n\nWorked examples "
+            f"(curated inference, not university facts):\n{examples_json}"
+        )
     )
     user_prompt = json.dumps(
         {
@@ -423,9 +449,7 @@ def run_target(
     descriptors = request_descriptors_from_packet(packet)
     facts = InferenceCompletionFacts(
         target_teaching_text_sha256=processing_text_sha256(
-            tuple(
-                (cell.field.value, cell.language.value, cell.text) for cell in packet.target.texts
-            )
+            tuple((cell.field.value, cell.language, cell.text) for cell in packet.target.texts)
         ),
         candidate_count=len(packet.candidates),
     )

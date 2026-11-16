@@ -35,7 +35,7 @@ class CourseCentroidRepository:
             [
                 CourseEmbeddingCentroid(
                     group_id=item.group_id,
-                    sisu_course_unit_id=item.sisu_course_unit_id,
+                    source_version_id=item.source_version_id,
                     representative_source_hash=item.representative_source_hash,
                     embedding_configuration_hash=embedding_configuration_hash,
                     chunk_count=item.chunk_count,

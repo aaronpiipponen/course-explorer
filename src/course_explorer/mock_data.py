@@ -1,20 +1,20 @@
 """One-shot import of the fictional example dataset and its bundled vectors.
 
-This is the offline adapter behind ``scripts/mock_data.py``. It represents the authored fixture
-bytes through the ``RawCaptureStore`` and registers them exactly like a completed capture, reuses
-the real normalization repository, parser, embedding reconciliation and worker readiness owners,
-and stores the fixture curriculum and its bundled vectors.
+This is the offline adapter behind ``scripts/mock_data.py``. It registers the authored neutral
+fixture records through the ``RawCaptureStore`` exactly like a completed capture, decodes them with
+the fixture's own parser, and stores the fixture curriculum and its bundled vectors through the
+shared normalization repository, embedding reconciliation and worker readiness owners.
 
-The fixture is authored fiction: it occupies the source layer of an entirely fictional dataset and
-is never presented as university data. The ``load-curriculum``, ``load``, ``write-artifacts`` and
-``write-bundle`` actions are the supported actions. Both the loader and the writer actions prepare
-the fixture through one shared helper and then apply the same projected fixture-identity guard at
-their entry: foreign or changed retained curriculum fails before any database provenance/normalized
-write and before any fixture-bundle or artifact output file is touched. The artifact writer then
-calls the one serving artifact builder, so the example and administrative paths share one artifact
-owner. The
-separate ``write-bundle`` action regenerates the tracked bundled-vector file as explicit fixture
-maintenance, so a deployment never rewrites the tracked bundle.
+The fixture is authored fiction: neutral common-model course and module records occupy the source
+layer of an entirely fictional dataset and are never presented as university data. The
+``load-curriculum``, ``load``, ``write-artifacts`` and ``write-bundle`` actions are the supported
+actions. Both the loader and the writer actions prepare the fixture through one shared helper and
+then apply the same projected fixture-identity guard at their entry: foreign or changed retained
+curriculum fails before any database provenance/normalized write and before any fixture-bundle or
+artifact output file is touched. The artifact writer then calls the one serving artifact builder, so
+the example and administrative paths share one artifact owner. The separate ``write-bundle`` action
+regenerates the tracked bundled-vector file as explicit fixture maintenance, so a deployment never
+rewrites the tracked bundle.
 """
 
 from __future__ import annotations
@@ -22,10 +22,12 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Sequence
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, field_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -55,24 +57,41 @@ from course_explorer.embeddings.hub_files import read_current_chunk_vectors
 from course_explorer.embeddings.repository import CourseEmbeddingRepository
 from course_explorer.enums import (
     IngestionRunStatus,
+    ModuleType,
+    OfficialTextField,
     SourceObjectType,
     TeachingTextField,
-    TeachingTextLanguage,
+    TeachingTextOrigin,
 )
+from course_explorer.example_data import EXAMPLE_SOURCE_ATTRIBUTION
 from course_explorer.hashing import json_sha256, parse_strict_json
 from course_explorer.ingestion.manifest import (
     CapturedResponseRecord,
     RawCaptureStore,
+    ReplayedSourceObject,
     discover_capture_manifests,
 )
 from course_explorer.ingestion.normalization import (
     NormalizationBatch,
     NormalizationReport,
+    NormalizedCourseVersion,
+    NormalizedModuleRule,
+    NormalizedModuleVersion,
+    NormalizedPrerequisiteOption,
+    NormalizedSubstitutionOption,
+    SnapshotProvenance,
     parse_capture,
 )
 from course_explorer.ingestion.normalization_repository import NormalizationRepository
 from course_explorer.ingestion.repository import CaptureRepository
-from course_explorer.ingestion.source import CapturedResponse, CurriculumPeriodRef
+from course_explorer.ingestion.source import (
+    CapturedResponse,
+    CurriculumParser,
+    CurriculumPeriodRef,
+    DecodedSourceObject,
+    SourcePeriod,
+)
+from course_explorer.instance import GuideSourceMetadata, PeppiPeriod, UniversityMetadata
 from course_explorer.serving_build import ServingArtifactsReport, build_serving_artifacts
 from course_explorer.teaching_text.repository import DerivedTranslationRepository
 from course_explorer.teaching_text.service import TeachingTextService
@@ -82,8 +101,44 @@ from course_explorer.validation import require_sha256
 # than a fetched response. They participate in the content-addressed request identity.
 _FIXTURE_REQUEST_PARAMS: tuple[tuple[str, str], ...] = (("fixture", "fictional"),)
 _BUNDLE_NAME = "embeddings.json"
-
-_ANY_HTTP_URL_ADAPTER = TypeAdapter(AnyHttpUrl)
+# The fixture's own two-language preparation policy, which builds its bundled chunk set and
+# vectors. It is not a site's instance, is never selected through the university map and is never
+# displayed. The fixture records also carry Swedish official cells, and the configured instance's
+# normalization policy decides which of those cells its database stores.
+_FIXTURE_UNIVERSITY = UniversityMetadata(
+    name_en="Example University",
+    name_fi="Esimerkkiyliopisto",
+    display_label="example-uni",
+    source_attribution_en=EXAMPLE_SOURCE_ATTRIBUTION["en"],
+    source_attribution_fi=EXAMPLE_SOURCE_ATTRIBUTION["fi"],
+    source_family="guide",
+    sisu=None,
+    peppi_legacy=None,
+    peppi_psg=None,
+    guide=GuideSourceMetadata(
+        guide_base_url="https://example.invalid/study-guide",
+        fetch_variant="plain_http",
+        periods=(PeppiPeriod(2026, 2027),),
+    ),
+    official_languages=("fi", "en"),
+    display_fallback={"fi": ("fi", "en"), "en": ("en", "fi")},
+    translation_priority={"fi": ("en",), "en": ("fi",)},
+    inference_languages=(
+        ("fi", TeachingTextOrigin.OFFICIAL),
+        ("en", TeachingTextOrigin.OFFICIAL),
+    ),
+    inference_target_fields=(
+        OfficialTextField.NAME,
+        OfficialTextField.CONTENT,
+        OfficialTextField.OUTCOMES,
+        OfficialTextField.PREREQUISITE_TEXT,
+    ),
+    inference_pool_fields=(
+        OfficialTextField.NAME,
+        OfficialTextField.CONTENT,
+        OfficialTextField.OUTCOMES,
+    ),
+)
 
 MockDataAction = Literal["load-curriculum", "load", "write-artifacts", "write-bundle"]
 
@@ -94,12 +149,65 @@ class _MockModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
+class _FixtureModel(BaseModel):
+    """Frozen, closed DTO base for the authored neutral fixture records."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class _FixturePeriod(_FixtureModel):
+    """One authored curriculum period over its academic-year interval."""
+
+    id: str = Field(min_length=1)
+    academic_year_start: int = Field(gt=0)
+    academic_year_end: int = Field(gt=0)
+
+
+class _FixtureCourse(_FixtureModel):
+    """One authored neutral course version with its official text cells and official options."""
+
+    id: str
+    group_id: str
+    code: str
+    texts: dict[OfficialTextField, dict[str, str | None]]
+    credits_min: Decimal | None
+    credits_max: Decimal | None
+    official_url: AnyHttpUrl
+    document_state: str | None
+    validity_start: date | None
+    validity_end: date | None
+    source_revision: int | None
+    source_modification_ordinal: int | None
+    curriculum_period_ids: tuple[str, ...]
+    prerequisite_options: tuple[NormalizedPrerequisiteOption, ...] = ()
+    substitution_options: tuple[NormalizedSubstitutionOption, ...] = ()
+
+
+class _FixtureModule(_FixtureModel):
+    """One authored neutral module version with its module type, names and rule tree."""
+
+    id: str
+    group_id: str
+    module_type: ModuleType
+    code: str | None
+    names: dict[str, str | None]
+    target_credits_min: Decimal | None
+    target_credits_max: Decimal | None
+    document_state: str | None
+    validity_start: date | None
+    validity_end: date | None
+    source_revision: int | None
+    source_modification_ordinal: int | None
+    curriculum_period_ids: tuple[str, ...]
+    rule: NormalizedModuleRule | None = None
+
+
 class _MockEmbeddingChunk(_MockModel):
     """One bundled fixture chunk vector keyed by its exact teaching-text chunk identity."""
 
     group_id: str
     field: TeachingTextField
-    language: TeachingTextLanguage
+    language: str
     chunk_index: int = Field(ge=0)
     embedding: tuple[float, ...]
 
@@ -157,28 +265,23 @@ def _require_object_list(value: object, name: str) -> tuple[dict[str, object], .
 
 def _fixture_response_inputs(
     fixture_dir: Path,
-) -> tuple[tuple[CapturedResponse, SourceObjectType | None, tuple[object, ...]], ...]:
-    """Build the three authored source-shaped envelope inputs in fixed representative order."""
+) -> tuple[tuple[CapturedResponse, SourceObjectType | None], ...]:
+    """Build the three authored neutral fixture envelopes in fixed representative order."""
     periods_body = (fixture_dir / "periods.json").read_bytes()
     courses_body = (fixture_dir / "courses.json").read_bytes()
     modules_body = (fixture_dir / "modules.json").read_bytes()
-    courses = _require_object_list(_read_fixture_json(fixture_dir, "courses.json"), "courses.json")
-    modules = _require_object_list(_read_fixture_json(fixture_dir, "modules.json"), "modules.json")
     return (
         (
-            CapturedResponse("/api/curriculum-periods", _FIXTURE_REQUEST_PARAMS, periods_body),
+            CapturedResponse("/fixture/periods", _FIXTURE_REQUEST_PARAMS, periods_body),
             None,
-            (),
         ),
         (
-            CapturedResponse("/api/course-units", _FIXTURE_REQUEST_PARAMS, courses_body),
+            CapturedResponse("/fixture/courses", _FIXTURE_REQUEST_PARAMS, courses_body),
             SourceObjectType.COURSE_UNIT,
-            tuple(courses),
         ),
         (
-            CapturedResponse("/api/modules", _FIXTURE_REQUEST_PARAMS, modules_body),
+            CapturedResponse("/fixture/modules", _FIXTURE_REQUEST_PARAMS, modules_body),
             SourceObjectType.MODULE,
-            tuple(modules),
         ),
     )
 
@@ -186,38 +289,32 @@ def _fixture_response_inputs(
 def _fixture_periods(fixture_dir: Path) -> tuple[CurriculumPeriodRef, ...]:
     """Return the fixture's explicit period selection with its authored academic-year starts."""
     values = _require_object_list(_read_fixture_json(fixture_dir, "periods.json"), "periods.json")
-    selected: list[CurriculumPeriodRef] = []
-    for value in values:
-        identifier = value.get("id")
-        active = value.get("activePeriod")
-        if not isinstance(identifier, str) or not isinstance(active, dict):
-            raise ValueError("mock fixture period must carry an id and an activePeriod object")
-        start_date = active.get("startDate")
-        if not isinstance(start_date, str) or len(start_date) < 4 or not start_date[:4].isdigit():
-            raise ValueError("mock fixture period must carry an explicit startDate year")
-        selected.append(CurriculumPeriodRef(id=identifier, academic_year_start=int(start_date[:4])))
+    selected = tuple(
+        CurriculumPeriodRef(id=period.id, academic_year_start=period.academic_year_start)
+        for period in (_FixturePeriod.model_validate(value) for value in values)
+    )
     if not selected:
         raise ValueError("mock fixture must select at least one curriculum period")
-    return tuple(selected)
+    return selected
 
 
-def _mock_store(raw_root: Path) -> RawCaptureStore:
+def _mock_store(raw_root: Path, parser: CurriculumParser) -> RawCaptureStore:
     """Reuse the sole retained mock import manifest or create the first one."""
-    manifests = discover_capture_manifests(raw_root)
+    manifests = discover_capture_manifests(raw_root, parser=parser)
     if len(manifests) > 1:
         raise ValueError("multiple mock import manifests are ambiguous")
     if manifests:
-        return RawCaptureStore.open(raw_root, manifests[0])
-    return RawCaptureStore.create(raw_root)
+        return RawCaptureStore.open(raw_root, manifests[0], parser=parser)
+    return RawCaptureStore.create(raw_root, parser=parser)
 
 
 def _require_reused_mock_inputs(
     store: RawCaptureStore,
-    inputs: tuple[tuple[CapturedResponse, SourceObjectType | None, tuple[object, ...]], ...],
+    inputs: tuple[tuple[CapturedResponse, SourceObjectType | None], ...],
 ) -> None:
     """Compare a retained completed capture's response bodies with the current fixture once."""
     expected = {
-        (captured.request_path, captured.request_params): captured.body for captured, _, _ in inputs
+        (captured.request_path, captured.request_params): captured.body for captured, _ in inputs
     }
     replayed = tuple(store.iter_responses())
     if len(replayed) != len(expected):
@@ -230,7 +327,7 @@ def _require_reused_mock_inputs(
 
 def _checkpoint_mock_capture(
     store: RawCaptureStore,
-    inputs: tuple[tuple[CapturedResponse, SourceObjectType | None, tuple[object, ...]], ...],
+    inputs: tuple[tuple[CapturedResponse, SourceObjectType | None], ...],
     periods: tuple[CurriculumPeriodRef, ...],
 ) -> tuple[CapturedResponseRecord, ...]:
     """Complete the fixture capture once, or verify and reuse the already completed one."""
@@ -245,57 +342,150 @@ def _checkpoint_mock_capture(
     return records
 
 
-def _fixture_batch(
-    store: RawCaptureStore, fixture_dir: Path, normalization: NormalizationSettings
-) -> NormalizationBatch:
-    """Parse the completed fixture capture, then bind each course to its authored fictional URL."""
-    batch = parse_capture(store, course_guide_base_url=normalization.course_guide_base_url)
-    urls: dict[str, str] = {}
-    for course in _require_object_list(
-        _read_fixture_json(fixture_dir, "courses.json"), "courses.json"
-    ):
-        identifier = course.get("id")
-        fictional_url = course.get("fictionalUrl")
-        if not isinstance(identifier, str) or not isinstance(fictional_url, str):
-            raise ValueError("mock fixture course must carry an id and a fictionalUrl")
-        urls[identifier] = str(_ANY_HTTP_URL_ADAPTER.validate_python(fictional_url))
-    missing = [
-        course.provenance.source_object_id
-        for course in batch.courses
-        if course.provenance.source_object_id not in urls
-    ]
-    if missing:
-        raise ValueError(f"mock fixture courses have no fictional URL: {sorted(missing)}")
-    return batch.model_copy(
-        update={
-            "courses": tuple(
-                course.model_copy(update={"official_url": urls[course.provenance.source_object_id]})
-                for course in batch.courses
-            )
-        }
+def _fixture_provenance(replayed: ReplayedSourceObject) -> SnapshotProvenance:
+    """Return one fixture record's capture provenance."""
+    return SnapshotProvenance(
+        object_type=replayed.record.object_type,
+        source_object_id=replayed.record.source_object_id,
+        source_group_id=replayed.record.source_group_id,
+        response_path=replayed.response_path,
+        response_item_index=replayed.record.response_item_index,
+        source_hash=replayed.record.source_hash,
     )
+
+
+class _FixtureParser:
+    """Decode the authored neutral fixture records into the shared normalized batch."""
+
+    def decode_objects(
+        self,
+        response: CapturedResponse,
+        object_type: SourceObjectType,
+        *,
+        store: RawCaptureStore | None = None,
+    ) -> tuple[DecodedSourceObject, ...]:
+        """Decode one fixture envelope's complete records with their identity and source hash.
+
+        A fixture envelope carries everything its decode needs, so the shared store evidence is
+        accepted and not read.
+        """
+        del store
+        if object_type not in (SourceObjectType.COURSE_UNIT, SourceObjectType.MODULE):
+            raise ValueError("fixture response must carry course or module records")
+        try:
+            values = json.loads(response.body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("fixture response body must be valid JSON") from exc
+        if not isinstance(values, list):
+            raise ValueError("fixture response body must be a JSON list")
+        decoded: list[DecodedSourceObject] = []
+        for value in values:
+            if not isinstance(value, dict):
+                raise ValueError("fixture record must be a JSON object")
+            identifier = value.get("id")
+            group_id = value.get("group_id")
+            if not isinstance(identifier, str) or not identifier.strip():
+                raise ValueError("fixture record id must be nonblank")
+            if not isinstance(group_id, str) or not group_id.strip():
+                raise ValueError("fixture record group_id must be nonblank")
+            decoded.append(
+                DecodedSourceObject(
+                    source_object_id=identifier,
+                    source_group_id=group_id,
+                    source_hash=json_sha256(value, ensure_ascii=False),
+                    value=value,
+                )
+            )
+        return tuple(decoded)
+
+    def read_periods(self, store: RawCaptureStore) -> tuple[SourcePeriod, ...]:
+        """Read every authored fixture period and require the manifest selection to match it."""
+        period_responses = tuple(store.iter_responses(request_path="/fixture/periods"))
+        if len(period_responses) != 1:
+            raise ValueError("capture must contain exactly one fixture periods response")
+        try:
+            values = json.loads(period_responses[0].body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("fixture periods response must be valid JSON") from exc
+        if not isinstance(values, list):
+            raise ValueError("fixture periods response must be a JSON list")
+        periods = tuple(_FixturePeriod.model_validate(value) for value in values)
+        if len({period.id for period in periods}) != len(periods):
+            raise ValueError("fixture periods response contains duplicate IDs")
+        if any(period.academic_year_end <= period.academic_year_start for period in periods):
+            raise ValueError("fixture period must span at least one academic year")
+        return tuple(
+            SourcePeriod(
+                id=period.id,
+                academic_year_start=period.academic_year_start,
+                academic_year_end=period.academic_year_end,
+            )
+            for period in periods
+        )
+
+    def parse_object(
+        self, replayed: ReplayedSourceObject
+    ) -> NormalizedCourseVersion | NormalizedModuleVersion | SnapshotProvenance:
+        """Validate and convert one authored fixture course or module record."""
+        if replayed.record.object_type is SourceObjectType.COURSE_UNIT:
+            course = _FixtureCourse.model_validate(replayed.value)
+            return NormalizedCourseVersion(
+                provenance=_fixture_provenance(replayed),
+                group_id=course.group_id,
+                code=course.code,
+                texts=course.texts,
+                credits_min=course.credits_min,
+                credits_max=course.credits_max,
+                official_url=str(course.official_url),
+                document_state=course.document_state,
+                validity_start=course.validity_start,
+                validity_end=course.validity_end,
+                source_revision=course.source_revision,
+                source_modification_ordinal=course.source_modification_ordinal,
+                curriculum_period_ids=course.curriculum_period_ids,
+                prerequisite_options=course.prerequisite_options,
+                substitution_options=course.substitution_options,
+            )
+        if replayed.record.object_type is SourceObjectType.MODULE:
+            module = _FixtureModule.model_validate(replayed.value)
+            return NormalizedModuleVersion(
+                provenance=_fixture_provenance(replayed),
+                group_id=module.group_id,
+                module_type=module.module_type,
+                code=module.code,
+                names=module.names,
+                target_credits_min=module.target_credits_min,
+                target_credits_max=module.target_credits_max,
+                document_state=module.document_state,
+                validity_start=module.validity_start,
+                validity_end=module.validity_end,
+                source_revision=module.source_revision,
+                source_modification_ordinal=module.source_modification_ordinal,
+                curriculum_period_ids=module.curriculum_period_ids,
+                rule=module.rule,
+            )
+        raise ValueError("unsupported fixture object type")
 
 
 def _prepare_mock_fixture(
     *,
     fixture_dir: Path,
     raw_root: Path,
-    normalization: NormalizationSettings,
 ) -> tuple[RawCaptureStore, tuple[CapturedResponseRecord, ...], NormalizationBatch]:
     """Prepare the authored fixture capture and parse it into a normalization batch.
 
     This is the one preparation path the loader and the artifact writer share: it builds the
     fixture response inputs and periods, selects or creates the sole retained capture, completes
     and reuses that capture, then parses it into a normalization batch. It writes no database row,
-    so each caller can apply the same projected
-    fixture-identity guard before its own database or output work.
+    so each caller can apply the same projected fixture-identity guard before its own database or
+    output work.
     """
+    parser = _FixtureParser()
     inputs = _fixture_response_inputs(fixture_dir)
     periods = _fixture_periods(fixture_dir)
-    store = _mock_store(raw_root)
+    store = _mock_store(raw_root, parser)
     records = _checkpoint_mock_capture(store, inputs, periods)
-    batch = _fixture_batch(store, fixture_dir, normalization)
-    return store, records, batch
+    return store, records, parse_capture(store)
 
 
 def _require_fixture_dataset(factory: sessionmaker[Session], expected: NormalizationBatch) -> None:
@@ -351,14 +541,12 @@ def load_mock_curriculum(
     normalization: NormalizationSettings,
 ) -> NormalizationReport:
     """Import the authored fictional fixture exactly like one completed capture run."""
-    store, records, batch = _prepare_mock_fixture(
-        fixture_dir=fixture_dir, raw_root=raw_root, normalization=normalization
-    )
+    store, records, batch = _prepare_mock_fixture(fixture_dir=fixture_dir, raw_root=raw_root)
     _require_fixture_dataset(factory, batch)
     capture = CaptureRepository(factory)
     capture.ensure_run(store.manifest, store.manifest_relative_path)
     capture.register_responses(store.manifest.run_id, records)
-    return NormalizationRepository(factory).apply(
+    return NormalizationRepository(factory, university=normalization.university).apply(
         batch,
         current_academic_year_start=normalization.current_academic_year_start,
         activity_window_years=normalization.active_academic_year_window,
@@ -423,7 +611,9 @@ def load_mock_embeddings(
 ) -> CourseEmbeddingCoverageReport:
     """Import the bundled fixture vectors through the one embedding reconciliation owner."""
     catalogue = TeachingTextService(
-        CurriculumRepository(factory), DerivedTranslationRepository(factory)
+        CurriculumRepository(factory, university=_FIXTURE_UNIVERSITY),
+        DerivedTranslationRepository(factory, university=_FIXTURE_UNIVERSITY),
+        university=_FIXTURE_UNIVERSITY,
     ).build_catalogue()
     scope = tuple(catalogue.canonical_group_ids)
     chunks = build_course_embedding_chunks(catalogue, embedding)
@@ -433,7 +623,7 @@ def load_mock_embeddings(
         (chunk.group_id, chunk.field, chunk.language, chunk.chunk_index): chunk.embedding
         for chunk in bundle.chunks
     }
-    repository = CourseEmbeddingRepository(factory)
+    repository = CourseEmbeddingRepository(factory, university=_FIXTURE_UNIVERSITY)
     reconciliation = repository.reconcile(scope, chunks)
     pending_ids = tuple(pending.row_id for pending in reconciliation.pending)
     if pending_ids:
@@ -463,16 +653,13 @@ def _prepare_writer_fixture(
     *,
     fixture_dir: Path,
     raw_root: Path,
-    normalization: NormalizationSettings,
 ) -> None:
     """Prepare the authored fixture capture and apply the projected fixture-identity guard.
 
     A foreign or changed retained dataset is refused before any artifact or bundle output file is
     touched, so both writer actions share one entry guard.
     """
-    _, _, batch = _prepare_mock_fixture(
-        fixture_dir=fixture_dir, raw_root=raw_root, normalization=normalization
-    )
+    _, _, batch = _prepare_mock_fixture(fixture_dir=fixture_dir, raw_root=raw_root)
     _require_fixture_dataset(factory, batch)
 
 
@@ -481,7 +668,6 @@ def write_mock_artifacts(
     *,
     fixture_dir: Path,
     raw_root: Path,
-    normalization: NormalizationSettings,
     embedding: EmbeddingRuntimeSettings | None,
     database_settings: DatabaseSettings | None = None,
 ) -> ServingArtifactsReport:
@@ -495,9 +681,7 @@ def write_mock_artifacts(
     The writer never rewrites the bundled fixture file. That file changes only through the separate
     ``write-bundle`` action.
     """
-    _prepare_writer_fixture(
-        factory, fixture_dir=fixture_dir, raw_root=raw_root, normalization=normalization
-    )
+    _prepare_writer_fixture(factory, fixture_dir=fixture_dir, raw_root=raw_root)
     return build_serving_artifacts(
         database_settings or load_raw_database_settings(),
         embedding=embedding,
@@ -509,7 +693,6 @@ def write_mock_bundle(
     *,
     fixture_dir: Path,
     raw_root: Path,
-    normalization: NormalizationSettings,
     embedding: EmbeddingRuntimeSettings,
 ) -> None:
     """Rewrite the bundled fixture vectors from the prepared fixture's stored vectors.
@@ -518,10 +701,8 @@ def write_mock_bundle(
     when the fixture's chunks or vectors change. The serving artifact build never writes it, so a
     deployment never rewrites the tracked bundle.
     """
-    _prepare_writer_fixture(
-        factory, fixture_dir=fixture_dir, raw_root=raw_root, normalization=normalization
-    )
-    current = read_current_chunk_vectors(factory, embedding)
+    _prepare_writer_fixture(factory, fixture_dir=fixture_dir, raw_root=raw_root)
+    current = read_current_chunk_vectors(factory, embedding, university=_FIXTURE_UNIVERSITY)
     _write_json(
         fixture_dir / _BUNDLE_NAME,
         {
@@ -530,7 +711,7 @@ def write_mock_bundle(
                 {
                     "group_id": chunk.group_id,
                     "field": chunk.field.value,
-                    "language": chunk.language.value,
+                    "language": chunk.language,
                     "chunk_index": chunk.chunk_index,
                     "embedding": list(vector),
                 }
@@ -546,23 +727,17 @@ def run_mock_data_command(
     """Run exactly one mock action against the configured database.
 
     A site whose state root resolves an enrolled dataset is refused before any engine is opened, and
-    the single Alembic head is required on the database this command opens. ``write-artifacts``
-    reads the site's embedding switch once here and passes that mode to the one artifact builder.
+    the single Alembic head is required on the database this command opens. The two loader actions
+    read the normalization policy of the configured instance, ``write-artifacts`` reads the site's
+    embedding switch once here and passes that mode to the one artifact builder, and the loader and
+    the bundle writer read the configured embedding family whether or not the site serves the
+    embedding features.
     """
     if action not in ("load-curriculum", "load", "write-artifacts", "write-bundle"):
         raise ValueError(f"unknown mock data action: {action}")
     database = load_raw_database_settings()
     if read_dataset_role(administration.repository_root() / database.admin_state_root, "selected"):
         raise ValueError("mock data import requires a bootstrap dataset state root")
-    normalization = load_normalization_settings()
-    if action in ("load", "write-bundle"):
-        # The import and bundle-maintenance actions prepare the fixture itself, so they read the
-        # configured embedding family whether or not the site serves the embedding features.
-        embedding = load_embedding_runtime_settings()
-    elif action == "write-artifacts":
-        embedding = embedding_configuration_for_site(load_web_settings())
-    else:
-        embedding = None
     with database_context(database) as factory:
         with factory() as session:
             require_database_schema(session.connection())
@@ -571,8 +746,7 @@ def run_mock_data_command(
                 factory,
                 fixture_dir=fixture_dir,
                 raw_root=raw_root,
-                normalization=normalization,
-                embedding=embedding,
+                embedding=embedding_configuration_for_site(load_web_settings()),
                 database_settings=database,
             )
         if action == "write-bundle":
@@ -580,13 +754,19 @@ def run_mock_data_command(
                 factory,
                 fixture_dir=fixture_dir,
                 raw_root=raw_root,
-                normalization=normalization,
-                embedding=embedding,
+                embedding=load_embedding_runtime_settings(),
             )
             return None
         report = load_mock_curriculum(
-            factory, fixture_dir=fixture_dir, raw_root=raw_root, normalization=normalization
+            factory,
+            fixture_dir=fixture_dir,
+            raw_root=raw_root,
+            normalization=load_normalization_settings(),
         )
         if action == "load":
-            return load_mock_embeddings(factory, fixture_dir=fixture_dir, embedding=embedding)
+            return load_mock_embeddings(
+                factory,
+                fixture_dir=fixture_dir,
+                embedding=load_embedding_runtime_settings(),
+            )
         return report

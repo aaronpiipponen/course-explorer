@@ -56,9 +56,11 @@ from tests.admin._lifecycle_support import (
 )
 from tests.datasets._support import INITIAL_ID, sample_receipt
 from tests.ingestion._capture_support import (
+    SISU_PARSER,
     FixtureSource,
     RecordingCapturePersistence,
     new_store,
+    sisu_capture,
 )
 from tests.support import settings_factory
 
@@ -113,11 +115,13 @@ def test_local_lifecycle_actions_checkpoint_pause_stop_and_resume_pending(
         session_id = session_id_from_state(root)
         wait_for_units(root, session_id, 1)
         assert len(runner.launches) == 1
+        assert stage.reservations == [("reserve", session_id)]
 
-        # A second live start returns the same status without another launch.
+        # A second live start returns the same status without another launch and re-reserves.
         live = run_lifecycle_command("start", stage=stage, root=root, runner=runner, sleep=sleep)
         assert live.session_id == session_id
         assert len(runner.launches) == 1
+        assert stage.reservations[-1] == ("reserve", session_id)
 
         # Status during work changes neither state bytes nor launches resources.
         stable = wait_for_stable_state(root)
@@ -126,24 +130,28 @@ def test_local_lifecycle_actions_checkpoint_pause_stop_and_resume_pending(
         assert (root / "state.json").read_bytes() == stable
         assert len(runner.launches) == 1
 
-        # Pause at the next committed unit boundary. The owned worker exits.
+        # Pause at the next committed unit boundary. The owned worker exits, and the
+        # reservations stay held.
         paused = run_lifecycle_command("pause", stage=stage, root=root, runner=runner, sleep=sleep)
         assert paused.lifecycle == "paused"
         assert paused.session_id == session_id
         assert runner.children[-1].wait(timeout=5) == 0
         files_at_pause = _unit_files(root, session_id)
         assert 1 <= len(files_at_pause) < 8
+        assert ("unreserve", session_id) not in stage.reservations
 
-        # Public resume re-arms the same session. Stop while coverage is partial.
+        # A resume re-arms the same session and its reservations.
         resumed = run_lifecycle_command(
             "resume", stage=stage, root=root, runner=runner, sleep=sleep
         )
         assert resumed.session_id == session_id
         assert len(runner.launches) == 2
+        assert stage.reservations[-1] == ("reserve", session_id)
         stopped_partial = run_lifecycle_command(
             "stop", stage=stage, root=root, runner=runner, sleep=sleep
         )
         assert stopped_partial.lifecycle == "idle"
+        assert stage.reservations[-1] == ("unreserve", session_id)
         partial_state = read_lifecycle_state(root)
         assert partial_state is not None and partial_state.work_complete is False
         partial_files = _unit_files(root, session_id)
@@ -163,20 +171,22 @@ def test_local_lifecycle_actions_checkpoint_pause_stop_and_resume_pending(
         # Stop finalizes to idle. A repeated idle stop is byte- and launch-identical.
         stopped = run_lifecycle_command("stop", stage=stage, root=root, runner=runner, sleep=sleep)
         assert stopped.lifecycle == "idle"
+        assert stage.reservations[-1] == ("unreserve", session_id)
         state_bytes = (root / "state.json").read_bytes()
         launches = len(runner.launches)
         again = run_lifecycle_command("stop", stage=stage, root=root, runner=runner, sleep=sleep)
         assert again.lifecycle == "idle"
+        assert stage.reservations[-1] == ("unreserve", session_id)
         assert (root / "state.json").read_bytes() == state_bytes
         assert len(runner.launches) == launches
     finally:
         runner.close()
 
 
-def test_local_lifecycle_interruption_preserves_checkpoint_and_refuses_incompatible_resume(
+def test_local_lifecycle_interruption_refuses_a_changed_identity_and_supersedes_an_idle_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Killing the owned child keeps checkpoints. An incompatible start refuses and stop works."""
+    """Killing the owned child keeps checkpoints. A start supersedes only an idle mismatch."""
     configure_environment(monkeypatch, repository_root=tmp_path / "repository")
     monkeypatch.setenv(UNITS_ALIAS, "8")
     monkeypatch.setenv(DELAY_ALIAS, "0.15")
@@ -212,6 +222,12 @@ def test_local_lifecycle_interruption_preserves_checkpoint_and_refuses_incompati
         assert (root / "state.json").read_bytes() == state_bytes
         assert _unit_files(root, session_id) == files_before
 
+        # A resume under the same changed identity refuses and names the start action.
+        with pytest.raises(ValueError, match="stop the session and use start"):
+            run_lifecycle_command("resume", stage=stage, root=root, runner=runner, sleep=sleep)
+        assert (root / "state.json").read_bytes() == state_bytes
+        assert _unit_files(root, session_id) == files_before
+
         # Stop preserves the receipt and checkpoints.
         stopped = run_lifecycle_command("stop", stage=stage, root=root, runner=runner, sleep=sleep)
         assert stopped.lifecycle == "idle"
@@ -226,6 +242,82 @@ def test_local_lifecycle_interruption_preserves_checkpoint_and_refuses_incompati
         resumed = _unit_files(root, session_id)
         for name, payload in files_before.items():
             assert resumed[name] == payload
+
+        # The completed session stops to idle, so the next start creates a fresh session.
+        run_lifecycle_command("stop", stage=stage, root=root, runner=runner, sleep=sleep)
+        run_lifecycle_command("start", stage=stage, root=root, runner=runner, sleep=sleep)
+        stale_session_id = session_id_from_state(root)
+        assert stale_session_id != session_id
+        wait_for_units(root, stale_session_id, 2)
+        stale = read_lifecycle_state(root)
+        assert stale is not None and stale.process is not None
+        os.kill(stale.process.pid, signal.SIGKILL)
+        runner.children[-1].wait()
+        stale_files = _unit_files(root, stale_session_id)
+        stale_stop = run_lifecycle_command(
+            "stop", stage=stage, root=root, runner=runner, sleep=sleep
+        )
+        assert stale_stop.lifecycle == "idle"
+        idle_incomplete = read_lifecycle_state(root)
+        assert idle_incomplete is not None and idle_incomplete.work_complete is False
+
+        # The idle session records another device identity, so a start supersedes it and keeps it.
+        monkeypatch.setenv(IDENTITY_ALIAS, "identity-b")
+        superseding = run_lifecycle_command(
+            "start", stage=stage, root=root, runner=runner, sleep=sleep
+        )
+        assert superseding.superseded_session_id == stale_session_id
+        assert not (root / stale_session_id).exists()
+        moved = root.parent / f"superseded-{stale_session_id}"
+        assert (moved / "state.json").is_file()
+        assert (moved / "session" / "session.json").is_file()
+        for name, payload in stale_files.items():
+            assert (moved / "session" / "units" / name).read_bytes() == payload
+        fresh_session_id = session_id_from_state(root)
+        assert fresh_session_id not in {session_id, stale_session_id}
+        wait_for_lifecycle(root, {"completed"})
+        assert unit_count(root, fresh_session_id) == 8
+    finally:
+        runner.close()
+
+
+def test_refused_supersede_reservation_leaves_the_retained_idle_session_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reservation is taken before the move, so a refusal leaves the idle receipt and state in place."""
+    configure_environment(monkeypatch, repository_root=tmp_path / "repository")
+    monkeypatch.setenv(UNITS_ALIAS, "4")
+    monkeypatch.setenv(DELAY_ALIAS, "0.15")
+    monkeypatch.setenv(IDENTITY_ALIAS, "identity-a")
+    root = tmp_path / "state"
+    runner = LocalLifecycleRunner(root=root, running={"db"})
+    stage = SupportStage("ingestion")
+    sleep = time.sleep
+    try:
+        run_lifecycle_command("start", stage=stage, root=root, runner=runner, sleep=sleep)
+        session_id = session_id_from_state(root)
+        wait_for_units(root, session_id, 1)
+        owned = read_lifecycle_state(root)
+        assert owned is not None and owned.process is not None
+        os.kill(owned.process.pid, signal.SIGKILL)
+        runner.children[-1].wait()
+        run_lifecycle_command("stop", stage=stage, root=root, runner=runner, sleep=sleep)
+        idle = read_lifecycle_state(root)
+        assert idle is not None and idle.lifecycle == "idle" and idle.work_complete is False
+        state_bytes = (root / "state.json").read_bytes()
+
+        monkeypatch.setenv(IDENTITY_ALIAS, "identity-b")
+
+        def refuse_reservation(session_id: str, *, runner) -> None:
+            raise RuntimeError("synthetic reservation refusal")
+
+        stage.reserve = refuse_reservation  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError):
+            run_lifecycle_command("start", stage=stage, root=root, runner=runner, sleep=sleep)
+
+        assert (root / "state.json").read_bytes() == state_bytes
+        assert (root / session_id / "session.json").is_file()
+        assert not list(root.parent.glob("superseded-*"))
     finally:
         runner.close()
 
@@ -437,11 +529,13 @@ def _configure_ingestion_raw_root(
         ({"KORI_MAX_ATTEMPTS": 5}, {}, {}, True),
         ({"KORI_RETRY_BACKOFF_SECONDS": 5.0}, {}, {}, True),
         ({"KORI_CONCURRENCY": 2}, {}, {}, True),
+        ({"KORI_REQUEST_INTERVAL_SECONDS": 0.8}, {}, {}, True),
         ({}, {}, {"CAPTURE_CHECKPOINT_RESPONSE_COUNT": 20}, True),
         ({}, {}, {"RAW_DATA_ROOT": Path("raw-other")}, True),
         ({"KORI_SEARCH_PAGE_SIZE": 50}, {}, {}, False),
         ({"KORI_BATCH_SIZE": 20}, {}, {}, False),
         ({"KORI_MAX_PARTITION_DEPTH": 4}, {}, {}, False),
+        ({"INSTANCE_KEY": "aalto"}, {}, {}, False),
         ({}, {"ACTIVE_ACADEMIC_YEAR_WINDOW": 4}, {}, False),
     ],
 )
@@ -452,10 +546,10 @@ def test_ingestion_identity_ignores_operational_tuning(
     same_identity: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The identity covers the stage, the configuration, the Working database and the options.
+    """The identity covers the configuration.
 
-    The configuration is the kori settings without their operational tuning values, plus the
-    normalization settings.
+    The configuration is the mapped source facts and the request shape without the operational
+    tuning values, plus the normalization policy.
     """
     base_kori = settings_factory(KoriSettings)
     base_normalization = settings_factory(NormalizationSettings)
@@ -483,6 +577,52 @@ def test_ingestion_identity_ignores_operational_tuning(
     baseline = identity(base_kori, base_normalization, base_capture)
     changed = identity(changed_kori, changed_normalization, changed_capture)
     assert (changed == baseline) is same_identity
+
+    # Two Peppi legacy entries hash their own source facts, and an operational tuning change
+    # leaves that payload unchanged.
+    oulu = identity(
+        settings_factory(KoriSettings, INSTANCE_KEY="oulu"),
+        settings_factory(NormalizationSettings, INSTANCE_KEY="oulu"),
+        base_capture,
+    )
+    turku = identity(
+        settings_factory(KoriSettings, INSTANCE_KEY="turku"),
+        settings_factory(NormalizationSettings, INSTANCE_KEY="turku"),
+        base_capture,
+    )
+    tuned_peppi = identity(
+        settings_factory(KoriSettings, INSTANCE_KEY="oulu", KORI_MAX_ATTEMPTS=5),
+        settings_factory(NormalizationSettings, INSTANCE_KEY="oulu"),
+        base_capture,
+    )
+    assert oulu != turku
+    assert tuned_peppi == oulu
+
+    # Two Peppi PSG entries hash their own source facts, and an operational tuning change leaves
+    # that payload unchanged.
+    centria = identity(
+        settings_factory(KoriSettings, INSTANCE_KEY="centria", CURRENT_ACADEMIC_YEAR="2027-2028"),
+        settings_factory(NormalizationSettings, INSTANCE_KEY="centria"),
+        base_capture,
+    )
+    hamk = identity(
+        settings_factory(KoriSettings, INSTANCE_KEY="hamk", CURRENT_ACADEMIC_YEAR="2027-2028"),
+        settings_factory(NormalizationSettings, INSTANCE_KEY="hamk"),
+        base_capture,
+    )
+    tuned_centria = identity(
+        settings_factory(
+            KoriSettings,
+            INSTANCE_KEY="centria",
+            CURRENT_ACADEMIC_YEAR="2027-2028",
+            KORI_MAX_ATTEMPTS=5,
+        ),
+        settings_factory(NormalizationSettings, INSTANCE_KEY="centria"),
+        base_capture,
+    )
+    assert centria != hamk
+    assert tuned_centria == centria
+    assert centria != oulu
 
 
 def test_ingestion_continuation_refuses_changed_retained_manifest(
@@ -529,7 +669,7 @@ def test_ingestion_checkpoints_reuse_published_manifest_identity(
 
     assert (
         capture_curriculum(
-            FixtureSource(),
+            sisu_capture(FixtureSource()),
             store,
             RecordingCapturePersistence(),
             checkpoint_response_count=100,
@@ -595,8 +735,8 @@ def test_ingestion_idle_stop_prunes_unretained_capture_directories(
     root = tmp_path / "state"
     runner = _configure_ingestion_raw_root(monkeypatch, root, Path("raw"))
 
-    first = RawCaptureStore.create(Path("raw"))
-    second = RawCaptureStore.create(Path("raw"))
+    first = RawCaptureStore.create(Path("raw"), parser=SISU_PARSER)
+    second = RawCaptureStore.create(Path("raw"), parser=SISU_PARSER)
     (first.run_root / "tiny.txt").write_text("first\n", encoding="utf-8")
     (second.run_root / "tiny.txt").write_text("second\n", encoding="utf-8")
 
@@ -641,7 +781,7 @@ def test_ingestion_stop_refuses_unsafe_raw_ownership(
         runner = _configure_ingestion_raw_root(monkeypatch, root, Path("data"))
     else:
         runner = _configure_ingestion_raw_root(monkeypatch, root, Path("raw"))
-        ordinary = RawCaptureStore.create(Path("raw"))
+        ordinary = RawCaptureStore.create(Path("raw"), parser=SISU_PARSER)
         (ordinary.run_root / "tiny.txt").write_text("ordinary\n", encoding="utf-8")
         outside = tmp_path / "outside"
         outside.mkdir()

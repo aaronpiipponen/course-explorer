@@ -7,7 +7,7 @@ import type {
   SolverSupportBinding,
   SolverUse,
 } from "../api/types";
-import { parseCredits } from "./credits";
+import { effectiveCourseCredits, parseCredits } from "./credits";
 
 /** One request-local lookup over a solver structure and its saved marks. */
 export type StructureIndex = {
@@ -54,13 +54,17 @@ export function withLiveInputs(
   };
 }
 
-/** Return each canonical course group ID's minimum credits in structure order. */
+/** Return each canonical course group ID's effective minimum credits in structure order. */
 export function creditsByGroupId(
   structure: SolverStructure,
+  assumedCourseCredits: string,
 ): Map<string, number> {
   const credits = new Map<string, number>();
   for (const course of structure.courses) {
-    credits.set(course.group_id, parseCredits(course.credits_min));
+    credits.set(
+      course.group_id,
+      effectiveCourseCredits(course, assumedCourseCredits),
+    );
   }
   return credits;
 }

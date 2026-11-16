@@ -1,5 +1,5 @@
-/** Sisu import: parsed capture hierarchy and PDF rows, the import profile, scoped placement and
-    named omissions. */
+/** Study-plan import: the Sisu and Peppi readers, the import profile, scoped placement, named
+    omissions and the PDF composition and resolution. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CourseSummary,
@@ -14,29 +14,33 @@ import {
   BROWSER_STORAGE_KEY,
 } from "../../state/store";
 import type { BrowserState } from "../../state/types";
-import { applyStructure } from "./actions";
+import { applyStructure } from "../structure/actions";
 import { READ_CACHE_CAPACITY, ReadCache } from "../../app/readCache";
-import { matchSisuPdfRows } from "./sisuPdfMatch";
 import {
   buildProgrammeForest,
   indexResolved,
   programmeKey,
   resolveStructure,
   type PlacedContent,
-} from "./model";
+} from "../structure/model";
 import {
-  prepareSisuProfile,
-  resolveSisuImport,
-  type SisuModule,
-  type SisuPlan,
-} from "./sisu";
+  prepareImportedProfile,
+  type ImportedModule,
+  type ImportedPlan,
+} from "./plan";
+import { placePendingImport } from "./placement";
+import { resolveExtractedPlan } from "./resolve";
+import { readSisuCapture, readSisuPage } from "./sisu";
+import { readPeppiCapture, readPeppiPage } from "./peppi";
+import { formatsForStudyPlan, scriptForStudyPlan } from "./formats";
 import {
   extractSisuPdfRows,
   type SisuPdfTextItem,
   type SisuPdfTextPage,
-} from "./sisuPdfRows";
+} from "./pdfRows";
+import { extractedPlanFromRows } from "./pdfPlan";
 
-vi.mock("./structureStorage", () => ({
+vi.mock("../structure/structureStorage", () => ({
   readPersistedStructures: vi.fn(async () => ({})),
   writePersistedStructures: vi.fn(async () => undefined),
 }));
@@ -74,7 +78,7 @@ const moduleSummary = (
   moduleType = "Module",
 ): ModuleSummary => ({
   group_id: id,
-  sisu_module_id: `sisu-${id}`,
+  source_version_id: `sisu-${id}`,
   module_type: moduleType,
   code,
   name_fi: null,
@@ -112,6 +116,15 @@ const moduleChild = (node: StructureModule, position: number): StructureRule =>
 const mandatory = (children: StructureRule[]): StructureRule =>
   baseRule({ all_mandatory: true, children });
 
+const fileOf = (text: string, name: string, type: string): File => {
+  const file = new File([text], name, { type });
+  Object.defineProperty(file, "text", {
+    configurable: true,
+    value: async () => text,
+  });
+  return file;
+};
+
 type MarkupModule = {
   name: string;
   status: string;
@@ -141,20 +154,7 @@ const courseBox = (code: string, name: string, completed: boolean): string =>
   </div>
   ${completed ? "<app-course-unit-attainment-notification></app-course-unit-attainment-notification>" : ""}
 </course-unit-box>`;
-const captureFile = (
-  markup: string,
-  lookups: {
-    modules: Record<string, string[]>;
-    courses: Record<string, { code: string; groupId: string }[]>;
-  },
-) =>
-  JSON.stringify({ type: "tuni-course-explorer/sisu/1", markup, ...lookups });
-const parseCapture = (text: string) => {
-  const imported = parseBrowserImport(text);
-  if (imported.type !== "tuni-course-explorer/sisu/1")
-    throw new Error("Expected a Sisu capture import");
-  return imported;
-};
+
 const currentState = (store: ReturnType<typeof createBrowserStore>) => {
   const snapshot = store.getSnapshot();
   return snapshot.profiles[snapshot.currentProfileId].state;
@@ -179,13 +179,11 @@ const contentOf = (
   };
 };
 
-describe("Sisu capture import", () => {
+describe("study-plan readers", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => vi.unstubAllGlobals());
 
-  it("imports a capture as a reloadable independent profile with pending choices", () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
+  it("reads each platform's capture and saved page and applies the format order and refusals", async () => {
     const markup = planModule({
       name: "Education in Computer Sciences",
       status: "otm-education-statuscell",
@@ -198,16 +196,8 @@ describe("Sisu capture import", () => {
           graduate: true,
           info: true,
           children: [
-            planModule({
-              name: "General studies",
-              status: "otm-general-statuscell",
-              grouping: true,
-              children: [
-                courseBox("CS.100", "Programming", true),
-                courseBox("CS.101", "Data structures", false),
-              ],
-            }),
-            courseBox("CS.200", "Algorithms", false),
+            courseBox("CS.100", "Programming", true),
+            courseBox("CS.101", "Data structures", false),
           ],
         }),
         planModule({
@@ -220,42 +210,141 @@ describe("Sisu capture import", () => {
         }),
       ],
     });
-    const capture = parseCapture(
-      captureFile(markup, {
-        modules: {
-          "otm-education-statuscell": [],
-          "otm-bachelor-statuscell": ["uta-bachelor"],
-          "otm-master-statuscell": ["uta-master"],
-          "otm-general-statuscell": [],
-        },
-        courses: {
-          "CS.100": [{ code: "CS.100", groupId: "uta-cs-100" }],
-          "CS.101": [{ code: "CS.101", groupId: "uta-cs-101" }],
-          "CS.200": [{ code: "cs-200", groupId: "uta-other" }],
-          "CS.900": [],
-        },
-      }),
+    const capture = {
+      type: "course-explorer/sisu/1",
+      markup,
+    };
+    const page = fileOf(
+      `<html><body>${markup}</body></html>`,
+      "rakenne.html",
+      "text/html",
     );
-    const store = createBrowserStore(localStorage);
-    store.importProfile(prepareSisuProfile(capture, "Sisu plan", "fi"));
-    const reloaded = currentState(createBrowserStore(localStorage));
-    expect(reloaded.language).toBe("fi");
-    // The education is a container, so only its two degrees become top-level programmes.
-    expect(reloaded.structure.programmeGroupIds).toEqual([
-      "uta-bachelor",
-      "uta-master",
+    const captured = readSisuCapture(capture);
+    const saved = await readSisuPage(page, new AbortController().signal);
+    expect(captured).toEqual(saved);
+    expect(captured.programmes.map((programme) => programme.name)).toEqual([
+      "Bachelor's Programme",
+      "Master's Programme",
     ]);
-    expect(reloaded.selectedCourseIds).toEqual(["uta-cs-100", "uta-cs-101"]);
-    expect(reloaded.completedCourseIds).toEqual(["uta-cs-100"]);
-    expect(reloaded.structure.courseOrder).toEqual([]);
-    expect(
-      reloaded.pendingSisuImport?.programmes.map((item) => item.name),
-    ).toEqual(["Bachelor's Programme", "Master's Programme"]);
-    expect(reloaded.pendingSisuImport?.programmes[0].children[0].groupId).toBe(
-      null,
+    expect(captured.programmes[0]).toMatchObject({
+      code: "TIEK",
+      sourceVersionId: "otm-bachelor",
+    });
+    expect(captured.programmes[0].children[0]).toMatchObject({
+      kind: "course",
+      code: "CS.100",
+      completed: true,
+    });
+
+    const structure = `<div id="structure">
+      <section class="panel lu-container">
+        <div class="panel-heading">
+          <h4 class="study-header">
+            <button onclick="openLearningUnitInfoModal('STUDY_MODULE', 'MOD-1', 1)">
+              <span class="lu-name">Module One</span>
+            </button>
+          </h4>
+        </div>
+        <div class="panel-body">
+          <table><tbody>
+            <tr class="lu-container">
+              <td class="table-cell-status"><span class="status-badge status-completed"></span></td>
+              <td class="table-cell-name">
+                <button onclick="openLearningUnitInfoModal('COURSE_UNIT', 'C-1', 1)">
+                  <span class="lu-name">Course One</span>
+                </button>
+              </td>
+            </tr>
+          </tbody></table>
+        </div>
+      </section>
+    </div>`;
+    const programme = "PROG-1, Programme One";
+    const peppiCapture = {
+      type: "course-explorer/peppi-hops/1",
+      programme,
+      markup: structure,
+    };
+    const peppiPage = fileOf(
+      `<html><body><div id="header-row-div"><h2>${programme}</h2></div>${structure}</body></html>`,
+      "tarkastelu.html",
+      "text/html",
     );
-    expect(fetchSpy).not.toHaveBeenCalled();
+    const peppiCaptured = readPeppiCapture(peppiCapture);
+    const peppiSaved = await readPeppiPage(
+      peppiPage,
+      new AbortController().signal,
+    );
+    expect(peppiCaptured).toEqual(peppiSaved);
+    expect(peppiCaptured.programmes[0]).toMatchObject({
+      code: "PROG-1",
+      name: "Programme One",
+    });
+    expect(peppiCaptured.programmes[0].children[0]).toMatchObject({
+      kind: "module",
+      code: "MOD-1",
+      name: "Module One",
+    });
+    expect(
+      (
+        peppiCaptured.programmes[0].children[0] as {
+          children: readonly { kind: string; completed: boolean }[];
+        }
+      ).children[0],
+    ).toMatchObject({ kind: "course", completed: true });
+
+    const codeOnly = "PROG-2";
+    const codeOnlyCaptured = readPeppiCapture({
+      type: "course-explorer/peppi-hops/1",
+      programme: codeOnly,
+      markup: structure,
+    });
+    const codeOnlySaved = await readPeppiPage(
+      fileOf(
+        `<html><body><div id="header-row-div"><h2>${codeOnly}</h2></div>${structure}</body></html>`,
+        "tarkastelu.html",
+        "text/html",
+      ),
+      new AbortController().signal,
+    );
+    expect(codeOnlyCaptured.programmes[0]).toMatchObject({
+      code: codeOnly,
+      name: codeOnly,
+    });
+    expect(codeOnlySaved.programmes[0]).toMatchObject({
+      code: codeOnly,
+      name: codeOnly,
+    });
+
+    expect(
+      formatsForStudyPlan(["peppi_capture", "peppi_page"]).map(
+        (format) => format.id,
+      ),
+    ).toEqual(["peppi_page", "peppi_capture"]);
+    expect(
+      formatsForStudyPlan(["sisu_capture", "sisu_page", "sisu_pdf"]).map(
+        (format) => format.id,
+      ),
+    ).toEqual(["sisu_page", "sisu_pdf", "sisu_capture"]);
+    expect(() => formatsForStudyPlan(["unknown"])).toThrow();
+    expect(() => scriptForStudyPlan("unknown")).toThrow();
+    await expect(
+      readSisuPage(
+        fileOf("<html><body></body></html>", "empty.html", "text/html"),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      readPeppiPage(
+        fileOf("<html><body></body></html>", "empty.html", "text/html"),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow();
   });
+});
+
+describe("study-plan placement", () => {
+  beforeEach(() => localStorage.clear());
 
   it("places captured choices in their programme scopes and clears pending atomically", () => {
     const inner = structureModule(
@@ -284,7 +373,6 @@ describe("Sisu capture import", () => {
         children: [baseRule({ node_type: "AnyModuleRule" })],
       }),
     );
-    // The elective is a free choice of the plan, so only its own report holds its content.
     const elective = structureModule(
       moduleSummary("elective", "ELECTIVE"),
       mandatory([
@@ -309,92 +397,121 @@ describe("Sisu capture import", () => {
         mandatory([
           courseChild("c-shared", "C-SHARED", 0),
           courseChild("c-b2", "C-B2", 1),
-          // Programme B also names the elective officially, without capturing it, so the
-          // placement programme A gave it must survive B's suppression.
           moduleChild(elective, 2),
         ]),
       ),
     );
-    const markup = [
-      planModule({
-        name: "Programme A",
-        status: "otm-a-statuscell",
-        code: "PROG-A",
-        graduate: true,
-        children: [
-          planModule({
-            name: "Module X",
-            status: "otm-x-statuscell",
-            code: "MOD-X",
-            children: [
-              courseBox("C-SHARED", "Shared course", true),
-              planModule({
-                name: "Inner module",
-                status: "otm-inner-capture-statuscell",
-                children: [courseBox("C-INNER", "Inner course", false)],
-              }),
-            ],
-          }),
-          planModule({
-            name: "Free slot",
-            status: "otm-free-statuscell",
-            code: "FREE-SLOT",
-            children: [
-              planModule({
-                name: "Elective",
-                status: "otm-elective-statuscell",
-                code: "ELECTIVE",
-                children: [courseBox("C-ELECTIVE", "Elective course", false)],
-              }),
-            ],
-          }),
-          courseBox("C-MAIN", "Main course", false),
-        ],
-      }),
-      planModule({
-        name: "Programme B",
-        status: "otm-b-statuscell",
-        code: "PROG-B",
-        graduate: true,
-        children: [courseBox("C-B2", "Second course", false)],
-      }),
-    ].join("");
-    const capture = parseCapture(
-      captureFile(markup, {
-        modules: {
-          "otm-a-statuscell": ["prog-a"],
-          "otm-x-statuscell": ["mod-x"],
-          "otm-inner-capture-statuscell": [],
-          "otm-free-statuscell": ["free-slot"],
-          "otm-elective-statuscell": ["elective"],
-          "otm-b-statuscell": ["prog-b"],
+    const plan: ImportedPlan = {
+      programmes: [
+        {
+          kind: "module",
+          groupId: "prog-a",
+          versionId: "v-prog-a",
+          code: "PROG-A",
+          name: "Programme A",
+          children: [
+            {
+              kind: "module",
+              groupId: "mod-x",
+              versionId: "v-mod-x",
+              code: "MOD-X",
+              name: "Module X",
+              children: [
+                {
+                  kind: "course",
+                  groupId: "c-shared",
+                  code: "C-SHARED",
+                  name: "Shared course",
+                  completed: true,
+                },
+                {
+                  kind: "module",
+                  groupId: "inner",
+                  versionId: "v-inner",
+                  code: null,
+                  name: "Inner module",
+                  children: [
+                    {
+                      kind: "course",
+                      groupId: "c-inner",
+                      code: "C-INNER",
+                      name: "Inner course",
+                      completed: false,
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              kind: "module",
+              groupId: "free-slot",
+              versionId: "v-free",
+              code: "FREE-SLOT",
+              name: "Free slot",
+              children: [
+                {
+                  kind: "module",
+                  groupId: "elective",
+                  versionId: "v-elective",
+                  code: "ELECTIVE",
+                  name: "Elective",
+                  children: [
+                    {
+                      kind: "course",
+                      groupId: "c-elective",
+                      code: "C-ELECTIVE",
+                      name: "Elective course",
+                      completed: false,
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              kind: "course",
+              groupId: "c-main",
+              code: "C-MAIN",
+              name: "Main course",
+              completed: false,
+            },
+          ],
         },
-        courses: {
-          "C-SHARED": [{ code: "C-SHARED", groupId: "c-shared" }],
-          "C-INNER": [{ code: "C-INNER", groupId: "c-inner" }],
-          "C-ELECTIVE": [{ code: "C-ELECTIVE", groupId: "c-elective" }],
-          "C-MAIN": [{ code: "C-MAIN", groupId: "c-main" }],
-          "C-B2": [{ code: "C-B2", groupId: "c-b2" }],
+        {
+          kind: "module",
+          groupId: "prog-b",
+          versionId: "v-prog-b",
+          code: "PROG-B",
+          name: "Programme B",
+          children: [
+            {
+              kind: "course",
+              groupId: "c-b2",
+              code: "C-B2",
+              name: "Second course",
+              completed: false,
+            },
+          ],
         },
-      }),
-    );
+      ],
+    };
     const content = contentOf([
       programmeA,
       programmeB,
       report(moduleX),
+      report(inner),
       report(freeSlot),
       report(elective),
     ]);
     const store = createBrowserStore(localStorage);
-    store.importProfile(prepareSisuProfile(capture, "Sisu plan", "en"));
+    store.importProfile(prepareImportedProfile(plan, "Sisu plan", "en"));
     applyStructure(
       store,
       (state) =>
-        resolveSisuImport(state, content, { courseIds: [], moduleIds: [] })
+        placePendingImport(state, content, { courseIds: [], moduleIds: [] })
           ?.change ?? null,
     );
     const reloaded = currentState(createBrowserStore(localStorage));
-    expect(reloaded.pendingSisuImport).toBeNull();
+    expect(reloaded.pendingPlanImport).toBeNull();
     expect(reloaded.structure.programmeGroupIds).toEqual(["prog-a", "prog-b"]);
     const forest = buildProgrammeForest([programmeA, programmeB]);
     const projection = resolveStructure(forest, reloaded.structure, content);
@@ -413,8 +530,6 @@ describe("Sisu capture import", () => {
     expect(rendered.courseAt.get("c-b2")?.node.key).toBe(
       programmeKey("prog-b"),
     );
-    // A captured module the programme's rule does not name joins its captured parent, and only
-    // the courses the capture holds render inside it.
     const slot = rendered.moduleAt.get("free-slot");
     const added = rendered.moduleAt.get("elective");
     expect(slot).toBeDefined();
@@ -424,7 +539,6 @@ describe("Sisu capture import", () => {
     );
     expect(rendered.courseAt.get("c-elective")?.node.key).toBe(added?.node.key);
     expect(rendered.courseAt.has("c-extra")).toBe(false);
-    // The uncoded capture module matched the official direct child of Module X by name.
     const innerNode = rendered.moduleAt.get("inner");
     const moduleXNode = rendered.moduleAt.get("mod-x");
     expect(innerNode?.node.key.startsWith(`${moduleXNode?.node.key}/`)).toBe(
@@ -444,56 +558,91 @@ describe("Sisu capture import", () => {
     expect(reloaded.selectedCourseIds).toContain("c-elective");
   });
 
-  it("reports unplaceable capture items while retaining representable courses loose", () => {
+  it("reports unplaceable plan items while retaining representable courses loose", () => {
+    const modWait = structureModule(
+      {
+        ...moduleSummary("mod-wait", "MOD-WAIT"),
+        name_en: "Official waiting module",
+      },
+      mandatory([]),
+    );
     const programmeC = report(
       structureModule(
         moduleSummary("prog-c", "PROG-C", "DegreeProgramme"),
-        mandatory([courseChild("c-official", "C-OFFICIAL", 0)]),
+        mandatory([
+          courseChild("c-official", "C-OFFICIAL", 0),
+          moduleChild(modWait, 1),
+        ]),
       ),
     );
-    const markup = planModule({
-      name: "Programme C",
-      status: "otm-c-statuscell",
-      code: "PROG-C",
-      graduate: true,
-      children: [
-        planModule({
-          name: "Unknown module",
-          status: "otm-unknown-statuscell",
-          grouping: true,
-          children: [courseBox("C-KEPT", "Kept course", true)],
-        }),
-        planModule({
-          name: "Removed module",
-          status: "otm-removed-statuscell",
-          code: "MOD-GONE",
-          children: [courseBox("C-ABSENT", "Absent course", false)],
-        }),
-        courseBox("C-NULL", "No identity", false),
+    const plan: ImportedPlan = {
+      programmes: [
+        {
+          kind: "module",
+          groupId: "prog-c",
+          versionId: "v-prog-c",
+          code: "PROG-C",
+          name: "Programme C",
+          children: [
+            {
+              kind: "module",
+              groupId: null,
+              versionId: null,
+              code: null,
+              name: "Unknown module",
+              children: [
+                {
+                  kind: "course",
+                  groupId: "c-kept",
+                  code: "C-KEPT",
+                  name: "Kept course",
+                  completed: true,
+                },
+              ],
+            },
+            {
+              kind: "module",
+              groupId: null,
+              versionId: null,
+              code: "MOD-WAIT",
+              name: "Extracted waiting module",
+              children: [],
+            },
+            {
+              kind: "module",
+              groupId: "mod-gone",
+              versionId: null,
+              code: "MOD-GONE",
+              name: "Removed module",
+              children: [
+                {
+                  kind: "course",
+                  groupId: "c-absent",
+                  code: "C-ABSENT",
+                  name: "Absent course",
+                  completed: false,
+                },
+              ],
+            },
+            {
+              kind: "course",
+              groupId: null,
+              code: "C-NULL",
+              name: "No identity",
+              completed: false,
+            },
+          ],
+        },
       ],
-    });
-    const capture = parseCapture(
-      captureFile(markup, {
-        modules: {
-          "otm-c-statuscell": ["prog-c"],
-          "otm-unknown-statuscell": [],
-          "otm-removed-statuscell": ["mod-gone"],
-        },
-        courses: {
-          "C-KEPT": [{ code: "C-KEPT", groupId: "c-kept" }],
-          "C-ABSENT": [{ code: "C-ABSENT", groupId: "c-absent" }],
-          "C-NULL": [],
-        },
-      }),
-    );
+    };
     const content = contentOf(
       [programmeC],
       [courseSummary("c-kept", "C-KEPT")],
     );
     const store = createBrowserStore(localStorage);
-    store.importProfile(prepareSisuProfile(capture, "Partial plan", "en"));
+    store.importProfile(prepareImportedProfile(plan, "Partial plan", "en"));
     const profileState = currentState(store);
-    const resolved = resolveSisuImport(profileState, content, {
+    const resolved = placePendingImport(profileState, content, {
       courseIds: ["c-absent"],
       moduleIds: ["mod-gone"],
     });
@@ -510,13 +659,13 @@ describe("Sisu capture import", () => {
     applyStructure(
       store,
       (state) =>
-        resolveSisuImport(state, content, {
+        placePendingImport(state, content, {
           courseIds: ["c-absent"],
           moduleIds: ["mod-gone"],
         })?.change ?? null,
     );
     const reloaded = currentState(createBrowserStore(localStorage));
-    expect(reloaded.pendingSisuImport).toBeNull();
+    expect(reloaded.pendingPlanImport).toBeNull();
     expect(reloaded.structure.programmeGroupIds).toEqual(["prog-c"]);
     expect(reloaded.completedCourseIds).toEqual(["c-kept"]);
     expect(reloaded.selectedCourseIds).toEqual(["c-kept"]);
@@ -529,16 +678,21 @@ describe("Sisu capture import", () => {
     expect(rendered.courseAt.get("c-kept")?.node.kind).toBe("unplaced");
     expect(rendered.courseAt.has("c-absent")).toBe(false);
     expect(rendered.courseAt.has("c-official")).toBe(false);
+    const placedWait = rendered.moduleAt.get("mod-wait");
+    expect(placedWait).toBeDefined();
+    expect(reloaded.structure.modulePlacements["mod-wait"]).toBe(
+      programmeKey("prog-c"),
+    );
   });
 
-  it("preserves restored edits and course sets when a Sisu capture is waiting", () => {
+  it("preserves restored edits and course sets when a plan is waiting", () => {
     const programme = report(
       structureModule(
         moduleSummary("prog-p", "PROG-P", "DegreeProgramme"),
         mandatory([courseChild("c-official", "C-OFFICIAL", 0)]),
       ),
     );
-    const capture: SisuPlan = {
+    const plan: ImportedPlan = {
       programmes: [
         {
           kind: "module",
@@ -550,8 +704,7 @@ describe("Sisu capture import", () => {
         },
       ],
     };
-    // The prepared capture owns the programme list, its version and its pending hierarchy alone.
-    const prepared = prepareSisuProfile(capture, "Restored plan", "fi");
+    const prepared = prepareImportedProfile(plan, "Restored plan", "fi");
     const state = prepared.state;
     state.selectedCourseIds = ["c-unplaced", "c-completed"];
     state.completedCourseIds = ["c-completed"];
@@ -568,17 +721,16 @@ describe("Sisu capture import", () => {
     };
     const imported = parseBrowserImport(
       JSON.stringify({
-        type: "tuni-course-explorer/state/3",
+        type: "course-explorer/state/3",
         data: JSON.stringify(envelope),
       }),
     );
-    if (imported.type !== "tuni-course-explorer/state/3")
+    if (imported.type !== "course-explorer/state/3")
       throw new Error("Expected a state import");
     const store = createBrowserStore(localStorage);
     store.restoreState(imported.state);
     const restored = store.getSnapshot();
     const raw = localStorage.getItem(BROWSER_STORAGE_KEY);
-    // Settled content makes the resolver reach its placement, so a lost edit is a real loss.
     const content = contentOf(
       [programme],
       [
@@ -592,7 +744,7 @@ describe("Sisu capture import", () => {
     applyStructure(
       store,
       (current) =>
-        resolveSisuImport(current, content, {
+        placePendingImport(current, content, {
           courseIds: [],
           moduleIds: [],
         })?.change ?? null,
@@ -602,10 +754,9 @@ describe("Sisu capture import", () => {
     const reloaded = createBrowserStore(localStorage);
     expect(reloaded.getSnapshot()).toEqual(restored);
     const reloadedState = currentState(reloaded);
-    expect(reloadedState.pendingSisuImport).toEqual(capture);
+    expect(reloadedState.pendingPlanImport).toEqual(plan);
     expect(reloadedState.selectedCourseIds).toContain("c-unplaced");
-    // A saved order alone is a held structure edit, so the waiting capture stays unplaced.
-    const ordered = prepareSisuProfile(capture, "Ordered plan", "fi").state;
+    const ordered = prepareImportedProfile(plan, "Ordered plan", "fi").state;
     ordered.structure.courseOrder = ["c-unplaced"];
     const orderedStore = createBrowserStore(localStorage);
     orderedStore.restoreState({
@@ -618,7 +769,7 @@ describe("Sisu capture import", () => {
     applyStructure(
       orderedStore,
       (current) =>
-        resolveSisuImport(current, content, {
+        placePendingImport(current, content, {
           courseIds: [],
           moduleIds: [],
         })?.change ?? null,
@@ -628,7 +779,7 @@ describe("Sisu capture import", () => {
   });
 });
 
-describe("Sisu PDF import", () => {
+describe("study-plan PDF import", () => {
   const textItem = (
     str: string,
     x: number,
@@ -738,7 +889,7 @@ describe("Sisu PDF import", () => {
       code: string,
       nameEn: string,
     ) => ({
-      sisu_module_id: sisuModuleId,
+      source_version_id: sisuModuleId,
       module_type: moduleType,
       code,
       name_fi: null,
@@ -899,10 +1050,17 @@ describe("Sisu PDF import", () => {
         completed: false,
         x: 120,
       },
+      {
+        kind: "module",
+        code: "MISSING",
+        name: "Missing programme",
+        completed: false,
+        x: 80,
+      },
     ] as const;
 
-    const result = await matchSisuPdfRows(
-      rows,
+    const result = await resolveExtractedPlan(
+      extractedPlanFromRows(rows),
       cache,
       new AbortController().signal,
     );
@@ -911,7 +1069,7 @@ describe("Sisu PDF import", () => {
     expect(prog.groupId).toBe("prog-1");
     expect(prog.versionId).toBe("v-prog");
     const matchedMod1 = prog.children.find(
-      (item): item is SisuModule =>
+      (item): item is ImportedModule =>
         item.kind === "module" && item.groupId === "mod-1",
     );
     expect(matchedMod1?.versionId).toBe("v-mod-1");
@@ -920,7 +1078,7 @@ describe("Sisu PDF import", () => {
     );
     expect(course).toMatchObject({ groupId: "c-1", completed: true });
     const ambiguousModule = matchedMod1?.children.find(
-      (item): item is SisuModule =>
+      (item): item is ImportedModule =>
         item.kind === "module" && item.name === "Same name",
     );
     expect(ambiguousModule).toMatchObject({
@@ -934,7 +1092,7 @@ describe("Sisu PDF import", () => {
       groupId: "c-group",
     });
     const multiModule = prog.children.find(
-      (item): item is SisuModule =>
+      (item): item is ImportedModule =>
         item.kind === "module" && item.groupId === "mod-multi",
     );
     expect(multiModule?.versionId).toBeNull();
@@ -949,6 +1107,17 @@ describe("Sisu PDF import", () => {
     expect(
       ambiguousIssue?.candidates?.map((candidate) => candidate.groupId).sort(),
     ).toEqual(["group-a", "group-b"]);
+    const unresolvedProgramme = result.plan.programmes[1];
+    expect(unresolvedProgramme).toMatchObject({
+      groupId: null,
+      code: "MISSING",
+      name: "Missing programme",
+    });
+    expect(result.issues).toContainEqual({
+      name: "Missing programme",
+      code: "MISSING",
+      reason: "no_official_match",
+    });
     const unknown = result.issues.find(
       (issue) => issue.name === "Unknown course",
     );
@@ -958,8 +1127,6 @@ describe("Sisu PDF import", () => {
     });
     expect(unknown?.candidates).toBeUndefined();
     expect([...new Set(requested.flatMap((ids) => [...ids]))].sort()).toEqual([
-      "mod-1",
-      "mod-multi",
       "prog-1",
     ]);
     expect(JSON.stringify(fetchSpy.mock.calls)).not.toContain("C-UNKNOWN");

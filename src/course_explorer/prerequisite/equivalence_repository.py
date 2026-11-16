@@ -4,9 +4,9 @@ This repository owns the `inferred_equivalence_groups`/`inferred_equivalence_gro
 trust boundary. It validates every publication against canonical membership, member activity
 context, and group-level inferred evidence, replaces one caller-identified group atomically,
 and is idempotent for identical semantic payloads. Reads are symmetric by every member and
-fail loudly on stale or malformed durable state. Per-member activity reconciliation republishes
-surviving groups and removes groups below two current members. It writes only the equivalence-group
-tables.
+fail loudly on stale or malformed durable state. Per-member reconciliation republishes
+surviving groups and removes groups below two current members. Activity alone removes nothing.
+It writes only the equivalence-group tables.
 """
 
 from __future__ import annotations
@@ -67,14 +67,14 @@ def _validate_group(
 ) -> None:
     """Enforce the equivalence-group trust boundary.
 
-    Shared by publication and read so one validator owns the boundary: every member must be an
-    active canonical course with a matching activity snapshot, and, for an inference producer,
-    the group-level metadata needs at least one evidence reference. Member shape, cardinality and
-    ordering are owned by the domain `_EquivalenceGroupFields` boundary. All rejections raise
-    `ValueError` naming the group. ``require_current_context=False`` relaxes only the
-    generation-context equality of active inference-owned members for the retained read path.
+    Shared by publication and read so one validator owns the boundary: every member must be a
+    canonical course with a matching activity snapshot when the producer is not inference, and, for
+    an inference producer, the group-level metadata needs at least one evidence reference. Member
+    shape, cardinality and ordering are owned by the domain `_EquivalenceGroupFields` boundary. All
+    rejections raise `ValueError` naming the group. ``require_current_context=False`` relaxes only
+    the generation-context equality of inference-owned members for the retained read path.
     Test-owned members require exact context equality, and publication always uses the
-    strict default.
+    strict default. Activity alone is not a rejection: an inactive member stays valid.
     """
     if producer_kind is InferredProducerKind.INFERENCE and not inference.evidence:
         raise ValueError(f"equivalence group {group_id} requires at least one evidence reference")
@@ -85,10 +85,6 @@ def _validate_group(
             raise ValueError(
                 f"equivalence group {group_id} member {member.course_group_id} "
                 "is not a canonical course"
-            )
-        if not course.is_active:
-            raise ValueError(
-                f"equivalence group {group_id} member {member.course_group_id} is inactive"
             )
         if enforce_context and (
             member.activity_as_of_academic_year_start != course.activity_as_of_academic_year_start
@@ -362,7 +358,11 @@ class InferredEquivalenceRepository(EquivalenceGroupRead, EquivalenceGroupPublis
             return result
 
     def reconcile_activity(self) -> EquivalenceActivityReconciliation:
-        """Remove stale members, republish survivors, and delete groups below two members."""
+        """Remove stale test members, republish survivors, and delete groups below two members.
+
+        Activity alone never removes a member: an inactive canonical member stays in its group. Only
+        a test-owned member whose stored context differs from the live course is stale.
+        """
         updated_group_ids: list[UUID] = []
         removed_group_ids: list[UUID] = []
         with session_scope(self._factory) as session:
@@ -557,12 +557,12 @@ class InferredEquivalenceRepository(EquivalenceGroupRead, EquivalenceGroupPublis
     ) -> bool:
         """Return whether a stored member matches its live canonical course context.
 
-        An active inference-owned member is current regardless of its stored generation context,
-        because the canonical activity rule already owns its eligibility and a calendar-only
+        An inference-owned member is current regardless of activity or stored generation context,
+        because the canonical activity rule and the reading view own scope, and a calendar-only
         rollover must retain it. A test-owned member requires exact context equality.
         """
         course = courses_by_id.get(member.course_id)
-        if course is None or not course.is_active:
+        if course is None:
             return False
         if producer_kind is InferredProducerKind.INFERENCE:
             return True

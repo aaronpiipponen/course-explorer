@@ -2,20 +2,23 @@
 
 This module owns the product-neutral contract for derived teaching text and the deterministic
 resolution of per-field, per-language effective text. Official source text always wins. A derived
-translation is usable only while its recorded source hash matches the current same-field
-official source text. Stale derived rows are reported, never silently used or deleted. Prerequisite
+translation is usable only when its target and source pair is accepted by the configured
+translation priority map and its recorded source hash matches the current same-field official source
+text. Rows excluded by the pair policy are stored but contribute no effective text, and accepted
+rows with a changed source are reported as stale, never silently used or deleted. Prerequisite
 and additional-information text never participate here.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from course_explorer.config import load_instance_settings
 from course_explorer.curriculum import (
     CatalogueCourse,
     CatalogueCourseVersion,
@@ -25,11 +28,13 @@ from course_explorer.curriculum import (
     CurriculumRead,
 )
 from course_explorer.enums import (
+    LanguageCode,
+    OfficialTextField,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
     TranslationMethod,
 )
+from course_explorer.instance import UniversityMetadata
 from course_explorer.validation import require_aware, require_sha256
 
 
@@ -57,11 +62,11 @@ class _DerivedTranslationModel(_TeachingTextModel):
     field validators apply to whichever concrete subclass declares the named field.
     """
 
-    @field_validator("sisu_course_unit_id", check_fields=False)
+    @field_validator("source_version_id", check_fields=False)
     @classmethod
     def reject_blank_id(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("sisu_course_unit_id must not be blank")
+            raise ValueError("source_version_id must not be blank")
         return value
 
     @field_validator("text", check_fields=False)
@@ -78,7 +83,7 @@ class _DerivedTranslationModel(_TeachingTextModel):
 
     @model_validator(mode="after")
     def validate_provenance_relations(self) -> Self:
-        if self.source_language is self.language:
+        if self.source_language == self.language:
             raise ValueError("source and target languages must differ")
         _method_model_consistent(self.translation_method, self.translation_model)
         return self
@@ -87,10 +92,10 @@ class _DerivedTranslationModel(_TeachingTextModel):
 class DerivedTranslationInput(_DerivedTranslationModel):
     """Operator- or worker-supplied derived translation awaiting persistence."""
 
-    sisu_course_unit_id: str
+    source_version_id: str
     field: TeachingTextField
-    language: TeachingTextLanguage
-    source_language: TeachingTextLanguage
+    language: LanguageCode
+    source_language: LanguageCode
     source_text: str
     text: str
     translation_method: TranslationMethod
@@ -108,10 +113,10 @@ class DerivedTranslationInput(_DerivedTranslationModel):
 class DerivedTranslation(_DerivedTranslationModel):
     """Persisted derived translation for one course unit, field and language."""
 
-    sisu_course_unit_id: str
+    source_version_id: str
     field: TeachingTextField
-    language: TeachingTextLanguage
-    source_language: TeachingTextLanguage
+    language: LanguageCode
+    source_language: LanguageCode
     source_text_hash: str
     text: str
     translation_method: TranslationMethod
@@ -124,16 +129,16 @@ class DerivedTranslation(_DerivedTranslationModel):
         return require_sha256(value, "hash values")
 
 
-TranslationKey = tuple[str, TeachingTextField, TeachingTextLanguage]
+TranslationKey = tuple[str, TeachingTextField, str]
 
 
 def translation_key(
-    sisu_course_unit_id: str,
+    source_version_id: str,
     field: TeachingTextField,
-    language: TeachingTextLanguage,
+    language: str,
 ) -> TranslationKey:
     """Return one derived translation identity key without normalizing its parts."""
-    return (sisu_course_unit_id, field, language)
+    return (source_version_id, field, language)
 
 
 def index_derived_translations(
@@ -143,12 +148,12 @@ def index_derived_translations(
     by_key: dict[TranslationKey, DerivedTranslation] = {}
     for translation in translations:
         key = translation_key(
-            translation.sisu_course_unit_id, translation.field, translation.language
+            translation.source_version_id, translation.field, translation.language
         )
         if key in by_key:
             raise ValueError(
                 "duplicate derived translation rows for "
-                f"{translation.sisu_course_unit_id}/{translation.field}/{translation.language}"
+                f"{translation.source_version_id}/{translation.field}/{translation.language}"
             )
         by_key[key] = translation
     return by_key
@@ -167,7 +172,7 @@ class EffectiveTeachingText(_TeachingTextModel):
     """One resolved effective field/language cell with its origin and provenance."""
 
     field: TeachingTextField
-    language: TeachingTextLanguage
+    language: LanguageCode
     text: str
     origin: TeachingTextOrigin
     text_hash: str
@@ -181,7 +186,7 @@ class EffectiveCourseTeachingText(_TeachingTextModel):
     """All effective cells for one canonical course's selected representative."""
 
     group_id: str
-    sisu_course_unit_id: str
+    source_version_id: str
     representative_source_hash: str
     is_active: bool
     texts: tuple[EffectiveTeachingText, ...]
@@ -191,10 +196,10 @@ class StaleDerivedText(_TeachingTextModel):
     """One retained derived row whose recorded source hash differs from official text."""
 
     group_id: str
-    sisu_course_unit_id: str
+    source_version_id: str
     field: TeachingTextField
-    language: TeachingTextLanguage
-    source_language: TeachingTextLanguage
+    language: LanguageCode
+    source_language: LanguageCode
     stored_source_text_hash: str
     current_source_text_hash: str | None
 
@@ -203,7 +208,7 @@ class TeachingTextCoverageCount(_TeachingTextModel):
     """Origin classification counts for one field/language cell over representatives."""
 
     field: TeachingTextField
-    language: TeachingTextLanguage
+    language: LanguageCode
     official_count: int = Field(ge=0)
     derived_count: int = Field(ge=0)
     stale_count: int = Field(ge=0)
@@ -235,7 +240,7 @@ class DerivedTranslationRead(Protocol):
     """Read boundary for persisted derived translations consumed by the effective service."""
 
     def list_for_course_versions(
-        self, sisu_course_unit_ids: Collection[str]
+        self, source_version_ids: Collection[str]
     ) -> tuple[DerivedTranslation, ...]: ...
 
 
@@ -249,23 +254,14 @@ def teaching_text_sha256(text: str) -> str:
 def official_teaching_text(
     version: CatalogueCourseVersion | CatalogueRepresentativeTeachingText,
     field: TeachingTextField,
-    language: TeachingTextLanguage,
+    language: str,
 ) -> str | None:
-    """Return one nonblank official name/content/outcomes value, ignoring other fields."""
-    if field is TeachingTextField.NAME:
-        value = version.name_fi if language is TeachingTextLanguage.FI else version.name_en
-    elif field is TeachingTextField.CONTENT:
-        value = (
-            version.teaching_text.content_fi
-            if language is TeachingTextLanguage.FI
-            else version.teaching_text.content_en
-        )
-    else:
-        value = (
-            version.teaching_text.outcomes_fi
-            if language is TeachingTextLanguage.FI
-            else version.teaching_text.outcomes_en
-        )
+    """Return one nonblank official name/content/outcomes value, ignoring other fields.
+
+    An absent field, absent language or blank value returns ``None``. This read never falls back to
+    another official or derived cell.
+    """
+    value = version.texts.get(OfficialTextField(field), {}).get(language)
     if value is None or not value.strip():
         return None
     return value
@@ -276,7 +272,8 @@ def _resolve_cell(
     translation: DerivedTranslation | None,
     *,
     field: TeachingTextField,
-    language: TeachingTextLanguage,
+    language: str,
+    translation_priority: Mapping[str, Sequence[str]],
 ) -> tuple[
     EffectiveTeachingText | None, Literal["official", "derived", "stale", "missing"], str | None
 ]:
@@ -284,8 +281,10 @@ def _resolve_cell(
 
     The third element is the current same-field official source text hash for a stale derived row
     (``None`` when that source is absent). Every non-stale classification returns ``None`` there.
-    Official text wins. A derived row is usable only while its recorded source hash matches
-    the current same-field official source text.
+    Official text wins. A stored row counts only when its target is mapped and its source is listed
+    for that target. An accepted row is usable only while its recorded source hash matches the
+    current same-field official source text. A row excluded by the pair policy is missing, not
+    stale.
     """
     official = official_teaching_text(version, field, language)
     if official is not None:
@@ -303,6 +302,8 @@ def _resolve_cell(
             None,
         )
     if translation is None:
+        return None, "missing", None
+    if translation.source_language not in translation_priority.get(language, ()):
         return None, "missing", None
     source = official_teaching_text(version, field, translation.source_language)
     current_hash = None if source is None else teaching_text_sha256(source)
@@ -329,22 +330,29 @@ def _resolve_representative_cells(
     group_id: str,
     representative: CatalogueRepresentativeTeachingText,
     derived_by_key: dict[TranslationKey, DerivedTranslation],
-    counts: dict[tuple[TeachingTextField, TeachingTextLanguage], dict[str, int]],
+    counts: dict[tuple[TeachingTextField, str], dict[str, int]],
     stale_texts: list[StaleDerivedText],
+    *,
+    languages: Sequence[str],
+    translation_priority: Mapping[str, Sequence[str]],
 ) -> tuple[EffectiveTeachingText, ...]:
-    """Resolve one represented input's six cells and accumulate its cell/stale counts.
+    """Resolve one represented input's configured cells and accumulate its cell/stale counts.
 
     Called only for represented entries. The caller derives name-only/unembeddable bookkeeping
     from the returned effective cells. ``_resolve_cell`` is the sole per-cell classifier.
     """
     cells: list[EffectiveTeachingText] = []
     for field in TeachingTextField:
-        for language in TeachingTextLanguage:
+        for language in languages:
             translation = derived_by_key.get(
-                translation_key(representative.sisu_course_unit_id, field, language)
+                translation_key(representative.source_version_id, field, language)
             )
             cell, classification, current_hash = _resolve_cell(
-                representative, translation, field=field, language=language
+                representative,
+                translation,
+                field=field,
+                language=language,
+                translation_priority=translation_priority,
             )
             counts[(field, language)][classification] += 1
             if cell is not None:
@@ -353,7 +361,7 @@ def _resolve_representative_cells(
                 stale_texts.append(
                     StaleDerivedText(
                         group_id=group_id,
-                        sisu_course_unit_id=representative.sisu_course_unit_id,
+                        source_version_id=representative.source_version_id,
                         field=field,
                         language=language,
                         source_language=translation.source_language,
@@ -367,19 +375,22 @@ def _resolve_representative_cells(
 def _resolve_teaching_inputs(
     inputs: Sequence[CatalogueTeachingTextInput],
     derived: Sequence[DerivedTranslation],
+    *,
+    languages: Sequence[str],
+    translation_priority: Mapping[str, Sequence[str]],
 ) -> tuple[dict[str, tuple[EffectiveTeachingText, ...]], TeachingTextCoverageReport]:
-    """Resolve every input's six cells once and accumulate the shared coverage report.
+    """Resolve every input's configured cells once and accumulate the shared coverage report.
 
-    This one accumulator owns the unique derived-key check, the six-cell origin counts, the stale
-    inventory, and the name-only/unembeddable/unrepresented bookkeeping for both the effective
+    This one accumulator owns the unique derived-key check, the configured-cell origin counts, the
+    stale inventory, and the name-only/unembeddable/unrepresented bookkeeping for both the effective
     catalogue and the projected coverage read. It never materializes a full ``CatalogueCourse``.
     """
     by_key = index_derived_translations(derived)
 
-    counts: dict[tuple[TeachingTextField, TeachingTextLanguage], dict[str, int]] = {
+    counts: dict[tuple[TeachingTextField, str], dict[str, int]] = {
         (field, language): {"official": 0, "derived": 0, "stale": 0, "missing": 0}
         for field in TeachingTextField
-        for language in TeachingTextLanguage
+        for language in languages
     }
     cells_by_group: dict[str, tuple[EffectiveTeachingText, ...]] = {}
     stale_texts: list[StaleDerivedText] = []
@@ -394,7 +405,13 @@ def _resolve_teaching_inputs(
             continue
         representative_count += 1
         cells = _resolve_representative_cells(
-            entry.group_id, representative, by_key, counts, stale_texts
+            entry.group_id,
+            representative,
+            by_key,
+            counts,
+            stale_texts,
+            languages=languages,
+            translation_priority=translation_priority,
         )
         cells_by_group[entry.group_id] = cells
         has_name = any(cell.field is TeachingTextField.NAME for cell in cells)
@@ -406,9 +423,9 @@ def _resolve_teaching_inputs(
     stale_texts.sort(
         key=lambda stale: (
             stale.group_id,
-            stale.sisu_course_unit_id,
+            stale.source_version_id,
             stale.field.value,
-            stale.language.value,
+            stale.language,
         )
     )
     coverage = TeachingTextCoverageReport(
@@ -427,7 +444,7 @@ def _resolve_teaching_inputs(
                 missing_count=counts[(field, language)]["missing"],
             )
             for field in TeachingTextField
-            for language in TeachingTextLanguage
+            for language in languages
         ),
         stale_texts=tuple(stale_texts),
         unrepresented_group_ids=tuple(unrepresented_group_ids),
@@ -438,12 +455,21 @@ def _resolve_teaching_inputs(
 class TeachingTextService:
     """Resolve deterministic effective teaching text over the official read seam."""
 
-    def __init__(self, curriculum: CurriculumRead, translations: DerivedTranslationRead) -> None:
+    def __init__(
+        self,
+        curriculum: CurriculumRead,
+        translations: DerivedTranslationRead,
+        *,
+        university: UniversityMetadata | None = None,
+    ) -> None:
         self._curriculum = curriculum
         self._translations = translations
+        self._university = load_instance_settings().university if university is None else university
 
     def build_catalogue(
-        self, *, courses: Sequence[CatalogueCourse | CatalogueTeachingCourse] | None = None
+        self,
+        *,
+        courses: Sequence[CatalogueCourse | CatalogueTeachingCourse] | None = None,
     ) -> EffectiveTeachingTextCatalogue:
         """Resolve every representative cell and report origin/coverage evidence.
 
@@ -451,6 +477,8 @@ class TeachingTextService:
         tuple. The supplied courses go through the identical
         resolver/coverage logic. With the default ``None`` this reads the projected teaching
         catalogue, which carries only the identity, source hash, code, names and teaching text.
+        The resolver's carrier holds exactly the three teaching fields, so prerequisite and
+        additional-information text never crosses this boundary.
         """
         courses = (
             self._curriculum.list_teaching_courses(active_only=None)
@@ -458,7 +486,7 @@ class TeachingTextService:
             else tuple(courses)
         )
         representative_ids = tuple(
-            course.representative.sisu_course_unit_id
+            course.representative.source_version_id
             for course in courses
             if course.representative is not None
         )
@@ -470,20 +498,28 @@ class TeachingTextService:
                     None
                     if course.representative is None
                     else CatalogueRepresentativeTeachingText(
-                        sisu_course_unit_id=course.representative.sisu_course_unit_id,
-                        name_fi=course.representative.name_fi,
-                        name_en=course.representative.name_en,
-                        teaching_text=course.representative.teaching_text,
+                        source_version_id=course.representative.source_version_id,
+                        texts={
+                            OfficialTextField(field): course.representative.texts.get(
+                                OfficialTextField(field), {}
+                            )
+                            for field in TeachingTextField
+                        },
                     )
                 ),
             )
             for course in courses
         )
-        cells_by_group, coverage = _resolve_teaching_inputs(inputs, derived)
+        cells_by_group, coverage = _resolve_teaching_inputs(
+            inputs,
+            derived,
+            languages=self._university.official_languages,
+            translation_priority=self._university.translation_priority,
+        )
         effective_courses = tuple(
             EffectiveCourseTeachingText(
                 group_id=course.group_id,
-                sisu_course_unit_id=course.representative.sisu_course_unit_id,
+                source_version_id=course.representative.source_version_id,
                 representative_source_hash=course.representative.source_hash,
                 is_active=course.is_active,
                 texts=cells_by_group[course.group_id],
@@ -507,10 +543,15 @@ class TeachingTextService:
         """
         inputs = self._curriculum.list_teaching_text_inputs()
         representative_ids = tuple(
-            entry.representative.sisu_course_unit_id
+            entry.representative.source_version_id
             for entry in inputs
             if entry.representative is not None
         )
         derived = self._translations.list_for_course_versions(representative_ids)
-        _cells, coverage = _resolve_teaching_inputs(inputs, derived)
+        _cells, coverage = _resolve_teaching_inputs(
+            inputs,
+            derived,
+            languages=self._university.official_languages,
+            translation_priority=self._university.translation_priority,
+        )
         return coverage

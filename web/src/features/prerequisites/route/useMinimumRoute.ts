@@ -1,9 +1,10 @@
 /**
  * Explicit transient minimum-route ownership: only `find` starts one disposable worker.
  *
- * The held graph supplies the native structure, its dataset identity and the configured allocation
- * limit. A successful outcome joins the shared read cache. The visible route stays transient and
- * every input, readiness, report, pane or dataset change discards it.
+ * The held graph supplies the native structure, its dataset identity, the configured allocation
+ * limit and the configured assumed credit value. A successful outcome joins the shared read cache.
+ * The visible route stays transient and every input, readiness, report, pane or dataset change
+ * discards it.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
@@ -52,6 +53,7 @@ export function useMinimumRoute(
           inputs.graphKey,
           key,
           report.max_compact_nodes,
+          report.assumed_course_credits,
         ])
       : null;
   const currentKey = useRef<string | null>(routeKey);
@@ -93,6 +95,7 @@ export function useMinimumRoute(
     const solverRequest = {
       operation: "route" as const,
       ...withLiveInputs(report.solver, request),
+      assumed_course_credits: report.assumed_course_credits,
       max_compact_nodes: report.max_compact_nodes,
     };
     setState({

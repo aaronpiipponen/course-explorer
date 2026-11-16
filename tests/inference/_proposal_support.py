@@ -13,10 +13,10 @@ from course_explorer.curriculum import (
     CataloguePrerequisiteOption,
     CatalogueSubstitutionMember,
     CatalogueSubstitutionOption,
-    CatalogueTeachingText,
 )
 from course_explorer.enums import (
     InferenceWorkStatus,
+    OfficialTextField,
     PrerequisiteMemberType,
     PrerequisiteRequirementKind,
 )
@@ -61,14 +61,14 @@ def _representative(
 ) -> CatalogueCourseVersion:
     """Build the selected representative of one fixture course with a labelled source digest."""
     return CatalogueCourseVersion(
-        sisu_course_unit_id=f"sisu-{group_id}",
+        source_version_id=f"sisu-{group_id}",
         source_hash=_hash(f"source-{group_id}"),
         code=f"{group_id}-code",
+        texts={OfficialTextField.NAME: {"en": f"Course {group_id}"}},
         credits_min=Decimal("5"),
         official_url=f"https://example.test/courses/{group_id}",
         document_state="ACTIVE",
         curriculum_period_ids=("period",),
-        teaching_text=CatalogueTeachingText(),
         prerequisite_options=prerequisite_options,
         substitution_options=substitution_options,
     )

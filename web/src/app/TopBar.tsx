@@ -1,4 +1,4 @@
-/** Persistent application chrome: brand, cyclic-tab entry points, docs and profile language. */
+/** Persistent application chrome: brand, cyclic-tab entry points, GitHub, docs and profile language. */
 import { useRef } from "react";
 import { visibleTabs, effectiveTab } from "./tabs";
 import { ProfileButton } from "../features/profiles/ProfileButton";
@@ -9,19 +9,23 @@ import { ErrorNotice } from "../shared/ErrorNotice";
 import { useHeaderHeight } from "../shared/useHeaderHeight";
 import { useWording } from "../shared/useWording";
 import { BrandMark } from "../shared/BrandMark";
+import { GITHUB_MARK } from "../shared/icons";
 import { useWebFeatures } from "./useWebFeatures";
 
 /** Render the application header and its navigation controls. */
 export function TopBar({
+  repositoryUrl,
   openDocs,
   openFeedback,
 }: {
+  repositoryUrl: string;
   openDocs: () => void;
   openFeedback: () => void;
 }) {
   const storedTab = useActiveTab();
-  const { embeddings_enabled } = useWebFeatures();
-  const activeTab = effectiveTab(storedTab, embeddings_enabled);
+  const { embeddings_enabled, prerequisites_enabled } = useWebFeatures();
+  const features = { embeddings_enabled, prerequisites_enabled };
+  const activeTab = effectiveTab(storedTab, features);
   const { runAction, error } = useAction();
   const { language, t } = useWording();
   const headerRef = useRef<HTMLElement>(null);
@@ -30,7 +34,7 @@ export function TopBar({
     <header className="topbar" ref={headerRef}>
       <BrandMark site />
       <nav aria-label={t("Main navigation")}>
-        {visibleTabs(embeddings_enabled).map((tab) => (
+        {visibleTabs(features).map((tab) => (
           <button
             key={tab.id}
             type="button"
@@ -42,6 +46,15 @@ export function TopBar({
         ))}
       </nav>
       <div className="topbar-actions">
+        <a
+          className="docs-link github-link"
+          href={repositoryUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {GITHUB_MARK}
+          {t("GitHub")}
+        </a>
         <a
           className="docs-link"
           href="/feedback"

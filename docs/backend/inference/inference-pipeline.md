@@ -1,6 +1,6 @@
 # Inference pipeline
 
-The inference package turns effective text into validated proposals through selection, rerank, generation, and publication.
+The inference package turns effective teaching text and the selected official prompt fields into validated proposals through selection, rerank, generation, and publication.
 
 ## Modules and entry points
 
@@ -29,9 +29,15 @@ The package is `src/course_explorer/inference/`. Each module owns one part of th
 | `diagnostics.py` | `PublicationDiagnostics`, `InferenceCoverageSummary`, and `strict_ancestor_warnings` |
 | `failures.py` | The fixed failure vocabulary and the target-scoped exception types |
 
-The stage entry points form one path. `prepare_operational_catalogue(curriculum, teaching_text, embedding_settings)` in `operational.py` reads the catalogue and effective text once per batch and returns one `OperationalCatalogue`. `select_operational_multiview_pool(...)` returns one `OperationalPoolInput`, and `rerank_operational_pool(...)` returns one `OperationalTargetInput`. `run_routed_operational_target(...)` in `routing.py` materializes the packet and calls `run_operational_target(...)`, which delegates to `run_target(...)`. `run_inference_job(...)` in `job.py` drives all of them and calls `compose_proposal_from_work(...)` and `publish_current_cohort(...)`.
+The stage entry points form one path. `prepare_operational_catalogue(curriculum, teaching_text, embedding_settings, *, university=None, target_fields=None, pool_fields=None)` in `operational.py` reads the prompt-course projection and effective text once per batch and returns one `OperationalCatalogue`. It keeps the full teaching-text catalogue for embedding readiness and filters only the inference projection to the university map's inference language/origin pairs, retaining every represented identity even when its allowed cell tuple is empty. An absent prompt field argument uses the configured university map entry's default.
 
-The packet DTOs in `context.py` carry each course's identity (`group_id`, `sisu_course_unit_id`, `representative_source_sha256`), its `course_code`, its `is_active` flag, its activity year and window, and each effective teaching cell's `field`, `language`, `text`, `origin`, `text_sha256`, and `source_text_sha256`. `InferenceCandidatePacket` carries the packet course alone, and `InferenceTargetPacket` adds `packet_version` and `embedding_configuration_sha256` and refuses a candidate set that repeats an identity or contains the target.
+`run_inference_job(...)` in `job.py` resolves one configured university across its repositories and preparation and drives the stage calls in this order, then calls `compose_proposal_from_work(...)` and `publish_current_cohort(..., *, university)`:
+
+1. `select_operational_multiview_pool(...)` returns one `OperationalPoolInput`.
+2. `rerank_operational_pool(...)` returns one `OperationalTargetInput`.
+3. `run_routed_operational_target(...)` in `routing.py` materializes the packet and calls `run_operational_target(...)`, which delegates to `run_target(...)`.
+
+The packet DTOs in `context.py` carry each course's identity (`group_id`, `source_version_id`, `representative_source_sha256`), its `course_code`, its `is_active` flag, its activity year and window, and each effective teaching cell's `field`, `language`, `text`, `origin`, `text_sha256`, and `source_text_sha256`. The teaching `texts` tuple is the retrieval and rerank boundary, and the full teaching-text catalogue drives embedding readiness. `prompt_texts` holds the selected prompt cells: effective teaching cells whose field is selected, whose origin may be derived, plus selected official non-teaching cells in the languages the inference list allows as official, each with `field`, `language`, `text` and `origin` and no per-cell hash. `InferenceCandidatePacket` carries the packet course alone, and `InferenceTargetPacket` adds `packet_version` and `embedding_configuration_sha256` and refuses a candidate set that repeats an identity or contains the target.
 
 ## Identities and hashes
 
@@ -47,11 +53,13 @@ Every identity is a canonical JSON SHA-256 from `course_explorer.hashing.canonic
 | `run_identity_sha256` in `evidence.py` | The model, runtime, prompt, schema, pipeline, and route identity |
 | `work_key_sha256` in `evidence.py` | One target activity context, a transient input digest, and run identity |
 | `embedding_state_sha256` in `context_repository.py` | The scoped chunk state of the supplied current course pairs under one embedding configuration hash |
-| `processing_cycle_input_sha256` in `scheduling.py` | The catalogue identity, the embedding-state digest, and the selection, context, and rerank settings |
+| `processing_cycle_input_sha256` in `scheduling.py` | The catalogue identity, the embedding-state digest, and the selection, context, and rerank settings, plus only nondefault official languages, inference language/origin pairs and prompt field selection |
 | `official_snapshot_sha256` in `proposals.py` | The target identity, activity context, representative source, and direct official prerequisite and substitution options |
 | `proposal_identity_sha256` in `proposals.py` | The work key, the completion id, the official snapshot, and the proposal version |
 
 `InferencePipelineRunSpec.from_contracts(settings, execution=...)` builds the run spec from the configured prompt, schema, and pipeline versions and the selected execution. `prepare_target_request` rejects a prompt pack whose version differs from `INFERENCE_PROMPT_VERSION` before tokenization. A proposal id is `uuid5(NAMESPACE_URL, identity_sha256)`.
+
+The retained encodings stay byte-stable across the neutral consumer names. `catalogue_identity_sha256` and `embedding_state_sha256` keep the literal `sisu_course_unit_id` JSON keys in their hash payloads, because those keys encode stored selection, not a served field name. `InferenceCourseReference` exposes `source_version_id` as its Python attribute and serializes the one alias `sisu_course_unit_id`, so `selection_references_sha256` and the nested operational pool and target dumps emit the same bytes as the stored cycle. Ordinary packet and score DTOs emit `source_version_id` only.
 
 ## Domain validation and the prompt pack
 
@@ -61,7 +69,7 @@ Every identity is a canonical JSON SHA-256 from `course_explorer.hashing.canonic
 
 `validate_target_result_acceptance(result, *, target_group_id, course_groups_by_code)` is the one shared acceptance rule. It allows at most one requirement set per category, resolves only the codes the result names to exactly one canonical group each, and rejects an unknown code, an ambiguous code, and the target as its own direct or suppressed source. `resolve_result_codes` in `context.py` builds the code map from the request descriptors and calls it.
 
-The prompt pack loads from package resources under `src/course_explorer/inference/prompts/<version>/`, one `system.md` and one `examples.json`. `load_prompt_pack` accepts `v9` and hashes both byte sequences into `content_sha256`. `PromptPack.examples_for_target` returns the examples in file order without any example whose answer is the target course, and `render_target_request` excludes a matching course code as well. `PromptCourse` holds teaching fields with explicit origins, so a prompt model carries teaching text and origins alone.
+The prompt pack loads from package resources under `src/course_explorer/inference/prompts/<version>/`, one `system.md` and one `examples.json`. `load_prompt_pack` accepts `v9` and hashes both byte sequences into `content_sha256`. `PromptPack.examples_for_target` returns the examples in file order without any example whose answer is the target course, and `render_target_request` excludes a matching course code as well. `PromptCourse` holds teaching fields with explicit origins, so a curated example carries teaching text and origins alone. The live descriptor reads the packet's selected prompt cells, which may add prerequisite text and additional information from the official cells.
 
 ## Provider and the target pass
 
@@ -71,7 +79,7 @@ The prompt pack loads from package resources under `src/course_explorer/inferenc
 
 `select_fitting_variant(settings, prompt_tokens)` in `routing.py` returns the first ordered key whose `context_size` and `achieved_max_context` both fit `prompt_tokens + INFERENCE_MAX_TOKENS + INFERENCE_FIT_HEADROOM_TOKENS`, and returns `None` when no key fits. `run_routed_operational_target` prepares the request and its digests once before token counting, counts the tokens through a loaded key when one is loaded, loads the first key on genuine first use, switches to the larger no-MTP key only when only it fits, and raises `TargetContextError` when neither fits and no oversize route is supplied. The token counter, the planned-identity callback, and the selected provider all consume that one prepared request and the one route-bound identity.
 
-`render_target_request(packet, pack, schema_version)` builds one deterministic request. The system prompt is the pack's system text plus the curated examples as sorted compact JSON, and the user prompt is sorted compact JSON of the target and the ordered candidate descriptors.
+`render_target_request(packet, pack, schema_version)` builds one deterministic request. The system prompt is the pack's system text plus the curated examples as sorted compact JSON, and the user prompt is sorted compact JSON of the target and the ordered candidate descriptors. When a selected prompt cell is prerequisite text or additional information, one guidance paragraph between the pack text and the examples states that those fields are official free text and that the official prerequisite structure is never supplied.
 
 `prepare_target_request(value, pack, settings, *, packet)` renders that request once and returns a transient `PreparedTargetRequest` with the request digest and target input digest. `target_work_identity(value, settings, execution, *, packet, prepared)` binds the selected execution, the activity context, and the prepared digests into one work request without rendering again.
 
@@ -103,7 +111,11 @@ The prompt pack loads from package resources under `src/course_explorer/inferenc
 
 `InferenceProposalRepository.save` appends one proposal per identity, reuses an identical identity, rejects a conflicting one, and releases the consumed completion payload in the same transaction.
 
-Publication reads the cohort, validates every accepted pointer by its foreign-key target ownership, builds one complete `InferredSetPublication` per accepted target and one `EquivalenceGroupPublication` per distinct member tuple, and writes them through `InferredPrerequisiteRepository` in `src/course_explorer/prerequisite/repository.py` and `InferredEquivalenceRepository` in `src/course_explorer/prerequisite/equivalence_repository.py`. `_reject_incomplete_cohort` refuses a cohort that omits a live inference-published target, and `_done_without_output_count` lets an explicit done target count as published once its output is withdrawn. `strict_ancestor_warnings` in `diagnostics.py` reports an accepted option that is also a strict ancestor of another accepted option, and it changes no stored result.
+Publication reads the cohort, validates every accepted pointer by its foreign-key target ownership, and builds one complete `InferredSetPublication` per accepted target and one `EquivalenceGroupPublication` per distinct member tuple. It writes them through `InferredPrerequisiteRepository` in `src/course_explorer/prerequisite/repository.py` and `InferredEquivalenceRepository` in `src/course_explorer/prerequisite/equivalence_repository.py`. `strict_ancestor_warnings` in `diagnostics.py` reports an accepted option that is also a strict ancestor of another accepted option, and it changes no stored result.
+
+The cohort carries active accepted pointers and a separate retained inactive pointer map. An inactive canonical target retains its accepted result and equivalence support without becoming eligible or a generation target. `_reject_incomplete_cohort` refuses a cohort that omits a live active inference-published target, and `_done_without_output_count` lets an explicit done target count as published once its output is withdrawn.
+
+A group publication includes every canonical member with its activity context, including an inactive member.
 
 ## Job orchestration and progress
 
@@ -113,7 +125,7 @@ Publication reads the cohort, validates every accepted pointer by its foreign-ke
 
 ## Admin controller and disposition
 
-`course_explorer_admin/inference/controller.py` owns the retained-session contracts. `InferenceControllerPolicy` carries `configuration_sha256` from `inference_configuration_sha256`, which covers the generation, embedding, context, selection, rerank, and rerank-input settings plus the prompt content hash. `InferenceControllerWorkerState` is the schema-2 lifecycle matrix, and `InferenceControllerStatus` adds the per-stage progress projection. `load_inference_dataset_session` requires an inference session, the configured derived database name, and an unbounded session.
+`course_explorer_admin/inference/controller.py` owns the retained-session contracts. `InferenceControllerPolicy` carries `configuration_sha256` from `inference_configuration_sha256`, which covers the generation, embedding, context, selection, rerank, and rerank-input settings plus the prompt content hash and only nondefault official languages, inference language/origin pairs and prompt field selection. `InferenceControllerWorkerState` is the schema-2 lifecycle matrix, and `InferenceControllerStatus` adds the per-stage progress projection. `load_inference_dataset_session` requires an inference session, the configured derived database name, and an unbounded session.
 
 `course_explorer_admin/inference/controller_worker.py` is the worker stage body. `InferenceWorkerStage` forwards one `run_inference_job` call under the live `before_unit` and `before_request` gates, which read the requested action and the latched reboot clock, and `_finalize` publishes the retained cohort once and writes the import receipt. `course_explorer_admin/reboot.py` owns `WorkerGpuClock`, which accumulates loaded time and samples at a checkpoint, and `worker_gpu_reboot_due`, which reports whether a saved sample reached `WORKER_GPU_REBOOT_INTERVAL_MINUTES`.
 
@@ -138,7 +150,7 @@ The model definitions are in `src/course_explorer/db/models.py`, and the migrati
 
 | Test file | Covers |
 |---|---|
-| `tests/inference/test_inference_context.py` | Label-free packet and reference hashes, the deterministic multiview fusion, and the split selection that byte-matches the combined selector |
+| `tests/inference/test_inference_context.py` | Label-free packet and reference hashes, the deterministic multiview fusion, the split selection that byte-matches the combined selector, the inference pair policy that filters packet, rerank and processing input while embedding keeps every configured cell, and the prompt field selection that enters the prompt while retrieval stays teaching-only and only a nondefault selection changes the cycle identity |
 | `tests/inference/test_inference_candidate_repository.py` | The exact best-chunk ranking over current compatible chunks, inactive sources, the rejection of a stale identity or a missing target chunk, and the scoped embedding-state digest |
 | `tests/inference/test_inference_domain.py` | The untrusted grouped result: required and recommended OR-of-AND alternatives, equivalence members, and suppressed directness identities |
 | `tests/inference/test_inference_prompts.py` | Package-relative loading, the content hash, and the exclusion of an official target label |
@@ -148,9 +160,9 @@ The model definitions are in `src/course_explorer/db/models.py`, and the migrati
 | `tests/inference/test_inference_target_pass.py` | The label-free request, the work key, reuse, explicit retry, the semantic rejections, and the pre-claim refusal |
 | `tests/inference/test_inference_proposals.py` | Category pools, the direct-official dedup, the substitution drop, and the ambiguity and multi-set rejections |
 | `tests/inference/test_inference_proposal_repository.py` | One row per identity, reuse, and the refusal of failed or stale input |
-| `tests/inference/test_inference_publication_repository.py` | Idempotent publication, the complete empty result, the withdrawal of a done target's output, and the retained-pointer validation |
-| `tests/inference/test_inference_coverage_repository.py` | Bootstrap and pointer authority, the done cohort, the cycle counters, and the refusal of a broken selected pointer |
-| `tests/inference/test_inference_scheduling_repository.py` | Marker reset rules, strict checkpoints, cycle resume, the generation reservation, legitimate skips, guarded finish, and the durable operator decision |
+| `tests/inference/test_inference_publication_repository.py` | Idempotent publication, the complete empty result, the withdrawal of a done target's output, inactive retained support, and the retained-pointer validation |
+| `tests/inference/test_inference_coverage_repository.py` | Bootstrap and pointer authority, retained inactive cohort support, the done cohort, retained equivalence counting, the cycle counters, and the refusal of a broken selected pointer |
+| `tests/inference/test_inference_scheduling_repository.py` | Marker reset rules, reactivation with a retained pointer and an operator decision, strict checkpoints, cycle resume, the generation reservation, legitimate skips, guarded finish, and the durable operator decision |
 | `tests/inference/test_inference_routing.py` | The fit-only key choice, the execution profile, and the preparation failure that is separate from a fit failure |
 | `tests/inference/test_inference_job.py` | Control refusal, the oversize capacity failure, durable exhaustion, the invalid-result retry, the resumed calculation, and the disposition clear |
 | `tests/inference/test_inference_job_repository.py` | Job resume over real checkpoints, acceptance, and the final stores |

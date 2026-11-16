@@ -280,8 +280,8 @@ def test_operator_commands_report_status_refuse_bad_input_and_map_nothing(
         called: list[object] = []
         report = _Sentinel(case)
 
-        def example_delegate(options, *, write):
-            called.append(options)
+        def example_delegate(options, *, write, checkout_suffix=""):
+            called.append((options, checkout_suffix))
             write("progress-step")
             return report
 
@@ -307,6 +307,11 @@ def test_operator_commands_report_status_refuse_bad_input_and_map_nothing(
 
             monkeypatch.setattr(_CLI_MODULE, "run_administrative_example_setup", example_delegate)
             payload = {
+                "instance_key": "example",
+                "web_port": 18037,
+                "admin_web_port": 18039,
+                "postgres_port": 15433,
+                "embedding_port": 18081,
                 "username": "synthetic-operator",
                 "password": "synthetic-password",
                 "publication_token": "synthetic-token",
@@ -316,7 +321,8 @@ def test_operator_commands_report_status_refuse_bad_input_and_map_nothing(
             monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
             assert _CLI_MODULE.main(["self-host", "example"]) == 0
             assert len(called) == 1
-            options = called[0]
+            options, suffix = called[0]
+            assert suffix == ""
             assert isinstance(options, commands.ExampleSetupInput)
             assert options.password.get_secret_value() == "synthetic-password"
             assert options.publication_token is not None

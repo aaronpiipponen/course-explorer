@@ -4,13 +4,13 @@ Three serving C++ shared libraries, built in a container and loaded by Python, c
 
 ## The three serving libraries
 
-Each library serves one part of the request path, and each has its own Python loader module and its own format version.
+Each library serves one part of the request path, and each has its own Python loader module and its own format version. The prerequisite record format is version 7, shared by the serving and fixture libraries. A mismatch refuses the library. The record view names an exact module version `source_version_id`.
 
 | Library | Serves | Loader | Format version |
 |---|---|---|---|
 | `libcourse_lookup.so` | The token-coverage part of the fuzzy-name score, applied to the score array and positions the projection supplies | `src/course_explorer/search/native_lookup.py` | 1 |
 | `libcourse_recommendation.so` | Recommendation relatedness, overlap, near-duplicate rejection and order | `src/course_explorer/recommendations/native_scorer.py` | 2 |
-| `libcourse_prerequisite.so` | Prerequisite compilation, calculation identities, drawing projection, record view and evaluation | `src/course_explorer/prerequisite/native_compiler.py` | 5 |
+| `libcourse_prerequisite.so` | Prerequisite compilation, calculation identities, drawing projection, record view and evaluation | `src/course_explorer/prerequisite/native_compiler.py` | 7 |
 
 The prerequisite library is compiled from `compiler.cpp`, `identity.cpp`, `projector.cpp`, `structure_view.cpp`, `writer.cpp`, `evaluator.cpp`, `api.cpp`, `library_api.cpp` and `pgloader.cpp`, with its headers beside them in `native/`. [Prerequisite compiler](/docs/backend/prerequisites/prerequisite-compiler.md#compiler-and-fact-loader) states what each of those units does.
 
@@ -65,7 +65,11 @@ The guidance text is `./.venv/bin/python scripts/build_native.py` for a serving 
 
 A native call returns a negative count on failure, and the loader then raises the library's own thread-local message from `course_lookup_last_error`, `course_recommendation_last_error` or `course_prerequisite_last_error`.
 
-`libcourse_prerequisite.so` holds one loaded fact bundle per open handle. `native_handle.py` owns that handle for one worker process: `worker_handle(settings)` builds the libpq connection string from the connection settings, opens one handle through `course_prerequisite_open`, and reuses it for as long as that connection string is the one it was opened from, and `close_database` closes it. The C entry points sit in `native/api.cpp` (`course_prerequisite_open`, `course_prerequisite_close`, `course_prerequisite_evaluate` and `course_prerequisite_compile_bundle`) and in `native/library_api.cpp` (the format version, error text, structure-record accessor and bundle release shared by both libraries). `native/pgloader.cpp` holds the database loader itself, with the fact collection and the connection handle it opens.
+`libcourse_prerequisite.so` holds one loaded fact bundle per open handle. `native_handle.py` owns that handle for one worker process: `worker_handle(settings)` builds the libpq connection string from the connection settings, opens one handle through `course_prerequisite_open`, and reuses it for as long as that connection string is the one it was opened from, and `close_database` closes it.
+
+`open_database(conninfo, *, university=None)` resolves the configured university once when none is supplied, serializes its two display fallback sequences as PostgreSQL text-array parameters, and passes them to the C entry point. The handle owns those two arrays for its lifetime, and the scoped name queries read offered official name cells in the order each array gives.
+
+The C entry points sit in `native/api.cpp` (`course_prerequisite_open`, `course_prerequisite_close`, `course_prerequisite_evaluate` and `course_prerequisite_compile_bundle`) and in `native/library_api.cpp` (the format version, error text, structure-record accessor and bundle release shared by both libraries). `native/pgloader.cpp` holds the database loader itself, with the fact collection and the connection handle it opens. A missing connection string or display array fails at that boundary without printing either.
 
 ## Tests
 

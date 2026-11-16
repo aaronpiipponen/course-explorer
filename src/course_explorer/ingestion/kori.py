@@ -1,10 +1,11 @@
-"""Synchronous, fail-loud adapter for anonymous public Tampere Kori JSON."""
+"""Synchronous, fail-loud adapter for anonymous public Sisu Kori JSON."""
 
 import time
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date
 from itertools import batched
+from threading import Lock
 from types import TracebackType
 from typing import Any, Literal, Self, TypeVar, get_args
 
@@ -24,7 +25,7 @@ from course_explorer.ingestion.source import (
     SourceVersionRef,
 )
 
-_PARTITION_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+_PARTITION_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZÅÄÖ0123456789"
 _ItemT = TypeVar("_ItemT")
 _ResultT = TypeVar("_ResultT")
 
@@ -98,8 +99,8 @@ class _SearchEnvelope(BaseModel):
     notifications: list[_Notification] | None
 
 
-class TuniKoriSource:
-    """One synchronous public Kori client with bounded retries and parallel batches."""
+class KoriSource:
+    """One synchronous public Sisu Kori client with spaced, bounded-retry, parallel requests."""
 
     def __init__(
         self,
@@ -112,6 +113,10 @@ class TuniKoriSource:
         self._settings = settings
         self._sleep = sleep
         self._before_request = before_request
+        # Concurrent callers share one start interval, so the source sees spaced request starts even
+        # when a batch runs in parallel.
+        self._pace_lock = Lock()
+        self._last_request_start = float("-inf")
         client = httpx.Client(
             base_url=str(settings.kori_base_url).rstrip("/") + "/",
             timeout=settings.kori_request_timeout_seconds,
@@ -135,6 +140,19 @@ class TuniKoriSource:
     ) -> None:
         self.close()
 
+    def _get(self, path: str, params: tuple[tuple[str, str], ...]) -> httpx.Response:
+        """Start one request at least the configured interval after the previous request start."""
+        with self._pace_lock:
+            wait = (
+                self._last_request_start
+                + self._settings.kori_request_interval_seconds
+                - time.monotonic()
+            )
+            if wait > 0:
+                self._sleep(wait)
+            self._last_request_start = time.monotonic()
+        return self._client.get(path.removeprefix("/"), params=list(params))
+
     def _request_json(
         self, path: str, params: Sequence[tuple[str, str]]
     ) -> tuple[CapturedResponse, Any]:
@@ -148,7 +166,7 @@ class TuniKoriSource:
             )
 
         response, value = request_json_with_retries(
-            request=lambda: self._client.get(path.removeprefix("/"), params=list(frozen_params)),
+            request=lambda: self._get(path, frozen_params),
             validate=validate,
             max_attempts=self._settings.kori_max_attempts,
             retry_backoff_seconds=self._settings.kori_retry_backoff_seconds,
@@ -175,10 +193,10 @@ class TuniKoriSource:
             raise KoriContractError(f"{context} violates Kori schema") from exc
 
     def get_curriculum_periods(self) -> SourceResponse[tuple[CurriculumPeriodRef, ...]]:
-        """Discover source period IDs and prove configured academic-year continuity."""
+        """Select the published source periods inside the mapped academic-year interval."""
         captured, value = self._request_json(
             "/api/curriculum-periods",
-            (("universityOrgId", self._settings.tuni_university_id),),
+            (("universityOrgId", self._settings.university_id),),
         )
         if not isinstance(value, list):
             raise KoriContractError("curriculum periods response must be a list")
@@ -196,14 +214,12 @@ class TuniKoriSource:
                     raise KoriContractError("multiple curriculum periods share an academic year")
                 selected[year] = CurriculumPeriodRef(id=period.id, academic_year_start=year)
 
-        expected_years = range(
-            self._settings.first_academic_year_start,
-            self._settings.current_academic_year_start + 1,
-        )
-        if set(selected) != set(expected_years):
-            raise KoriContractError("configured curriculum-period range has gaps")
+        if not selected:
+            raise KoriContractError(
+                "configured academic-year interval selects no curriculum period"
+            )
         return SourceResponse(
-            captured=captured, value=tuple(selected[year] for year in expected_years)
+            captured=captured, value=tuple(selected[year] for year in sorted(selected))
         )
 
     def _search_page(
@@ -379,7 +395,7 @@ class TuniKoriSource:
         for period_id in self._validate_period_ids(period_ids):
             fixed_params = (
                 ("curriculumPeriodId", period_id),
-                ("universityOrgId", self._settings.tuni_university_id),
+                ("universityOrgId", self._settings.university_id),
             ) + extra_params
             first = self._search_page(
                 path,
@@ -526,7 +542,7 @@ class TuniKoriSource:
             "/api/course-units",
             (
                 ("groupId", group_id),
-                ("rootOrg", self._settings.tuni_university_id),
+                ("rootOrg", self._settings.university_id),
                 ("includeExpired", "true"),
             ),
         )
@@ -538,7 +554,7 @@ class TuniKoriSource:
             raise KoriContractError("module group ID must be non-blank")
         captured, value = self._request_json(
             "/api/modules/by-group-id",
-            (("groupId", group_id), ("universityId", self._settings.tuni_university_id)),
+            (("groupId", group_id), ("universityId", self._settings.university_id)),
         )
         return SourceResponse(captured, self._validate_group_objects(value, group_id))
 

@@ -24,7 +24,6 @@ from course_explorer.config import (
 from course_explorer.datasets import DatabaseSnapshot
 from course_explorer.enums import (
     TeachingTextField,
-    TeachingTextLanguage,
     TranslationMethod,
 )
 from course_explorer.teaching_text.service import DerivedTranslationInput
@@ -35,6 +34,7 @@ from course_explorer_admin.translation.controller import (
     TranslationControllerControl,
     TranslationControllerPolicy,
     TranslationControllerWorkerState,
+    translation_configuration_sha256,
 )
 from tests.config._support import (
     ADMIN_DATASET_KEYS,
@@ -82,7 +82,7 @@ def report(*, desired: int, generated: int, output: int) -> TranslationRunReport
                 missing_source_count=0,
             )
             for field in TeachingTextField
-            for language in TeachingTextLanguage
+            for language in ("fi", "en")
         ),
         desired_count=desired,
         reused_count=0,
@@ -155,9 +155,9 @@ def seed_directory(
         directory / "policy.json",
         administrative_json(
             TranslationControllerPolicy(
-                schema_version=2,
+                schema_version=3,
                 session_id=SESSION_ID,
-                translation_model=load_translation_settings().provenance_model,
+                configuration_sha256=translation_configuration_sha256(),
             )
         ),
     )
@@ -266,10 +266,10 @@ class FakeOwnedRuntime:
 
 def entry(text: str) -> DerivedTranslationInput:
     return DerivedTranslationInput(
-        sisu_course_unit_id="course-v1",
+        source_version_id="course-v1",
         field=TeachingTextField.NAME,
-        language=TeachingTextLanguage.EN,
-        source_language=TeachingTextLanguage.FI,
+        language="en",
+        source_language="fi",
         source_text="Nimi",
         text=text,
         translation_method=TranslationMethod.MODEL,

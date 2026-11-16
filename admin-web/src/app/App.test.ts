@@ -52,6 +52,7 @@ const ANONYMOUS: SessionReport = {
   poll_seconds: 3600,
   app_url: APP_URL,
   repository_url: REPOSITORY_URL,
+  display_label: "example-uni",
 };
 
 const AUTHENTICATED: SessionReport = {
@@ -60,6 +61,7 @@ const AUTHENTICATED: SessionReport = {
   poll_seconds: 3600,
   app_url: APP_URL,
   repository_url: REPOSITORY_URL,
+  display_label: "example-uni",
 };
 
 const DASHBOARD_REPORT: ServerStatusReport = {
@@ -249,6 +251,7 @@ const CONFIGURATION_FILE: ConfigurationFileReport = {
     WEB_PORT: 8037,
     WEB_INFERENCE_ENABLED: true,
     WEB_EMBEDDINGS_ENABLED: true,
+    WEB_PREREQUISITES_ENABLED: true,
   },
 };
 
@@ -1434,3 +1437,46 @@ describe.each(["true", "false", "failure", "unavailable"] as const)(
     });
   },
 );
+
+describe("console display label", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    calls.length = 0;
+    document.title = "Admin · course-explorer";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    install({ name: "login-success", kind: "login-success" });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the configured display label before and after sign-in", async () => {
+    await act(async () => {
+      root.render(createElement(App));
+    });
+    await settle();
+
+    // The anonymous bootstrap reports the configured display label, so the sign-in screen carries it.
+    expect(heading(container, wording.signIn.heading)).toBe(true);
+    expect(container.querySelector(".brand")?.textContent).toBe(
+      "course-explorer/example-uni",
+    );
+    expect(document.title).toBe("Admin · course-explorer/example-uni");
+
+    await submitCredentials(container);
+
+    // The granted session keeps the same configured label and title.
+    expect(heading(container, wording.dashboard.serving)).toBe(true);
+    expect(container.querySelector(".brand")?.textContent).toBe(
+      "course-explorer/example-uni",
+    );
+    expect(document.title).toBe("Admin · course-explorer/example-uni");
+  });
+});

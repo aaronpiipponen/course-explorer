@@ -20,7 +20,6 @@ from course_explorer.embeddings.generation import (
 )
 from course_explorer.enums import (
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
 )
 from course_explorer.inference.diagnostics import InferenceCoverageSummary
@@ -47,7 +46,7 @@ def sample_verification() -> DatasetVerification:
             missing_count=0,
         )
         for field in TeachingTextField
-        for language in TeachingTextLanguage
+        for language in ("fi", "en")
     )
     cells = tuple(
         CourseEmbeddingCoverageCount(
@@ -57,12 +56,12 @@ def sample_verification() -> DatasetVerification:
             pending_count=0,
             completed_count=1
             if (field, language, origin)
-            == (TeachingTextField.CONTENT, TeachingTextLanguage.FI, TeachingTextOrigin.OFFICIAL)
+            == (TeachingTextField.CONTENT, "fi", TeachingTextOrigin.OFFICIAL)
             else 0,
             failed_count=0,
         )
         for field in TeachingTextField
-        for language in TeachingTextLanguage
+        for language in ("fi", "en")
         for origin in TeachingTextOrigin
     )
     return DatasetVerification(

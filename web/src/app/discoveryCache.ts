@@ -10,8 +10,7 @@ import type { NextCoursesReport, RecommendationsReport } from "../api/types";
 import { ReadCache, type ReportCache } from "./readCache";
 
 /** Storage key of the discovery report envelope. */
-export const DISCOVERY_CACHE_STORAGE_KEY =
-  "tuni-course-explorer/discovery-cache/1";
+export const DISCOVERY_CACHE_STORAGE_KEY = "course-explorer/discovery-cache/1";
 
 /** Envelope version. Another version clears the stored reports. */
 const DISCOVERY_CACHE_VERSION = 1;

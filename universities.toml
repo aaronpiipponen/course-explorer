@@ -1,0 +1,1377 @@
+# One tracked table of every university an instance key can name. `INSTANCE_KEY` in
+# `config/web.toml` selects one entry, and the entry order is the setup menu order.
+# Each entry carries exactly one source block, and each period is a start year with its
+# exclusive end year. An entry may also set `inference_target_fields` and
+# `inference_pool_fields`, each an array of official text field names in canonical order. An
+# entry that omits them uses the name, content, outcomes and prerequisite-text target and the
+# name, content and outcomes pool.
+# `study_plan_script` names the import script, `sisu` or `peppi`, and `study_plan_formats`
+# names the formats the site offers. A Sisu source family accepts
+# `sisu_page`, `sisu_pdf` and `sisu_capture`. A Peppi source family accepts `peppi_page` and
+# `peppi_capture`. A configured script requires its platform's capture format, and a capture
+# format requires its script.
+
+[universities.tau]
+name_en = "Tampere University"
+name_fi = "Tampereen yliopisto"
+display_label = "tampere-uni"
+source_family = "sisu"
+study_plan_script = "sisu"
+study_plan_formats = ["sisu_page", "sisu_pdf", "sisu_capture"]
+source_attribution_en = "Tampere University curriculum data, retrieved from Tampere University's Sisu KORI API."
+source_attribution_fi = "Tampereen yliopiston opetussuunnitelmatiedot. Tiedot on haettu Tampereen yliopiston Sisun KORI-rajapinnasta."
+official_languages = ["fi", "en"]
+# Each pair names an official language and its teaching-text origin, `official` or `derived`.
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+    { language = "fi", origin = "derived" },
+    { language = "en", origin = "derived" },
+]
+
+# The displayed-name fallback per interface language.
+[universities.tau.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+# The accepted translation target and source languages.
+[universities.tau.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.tau.sisu]
+kori_base_url = "https://sisu.tuni.fi/kori"
+university_id = "tuni-university-root-id"
+first_academic_year = "2006-2007"
+course_guide_base_url = "https://sisu.tuni.fi/student/courseunit"
+
+[universities.aalto]
+name_en = "Aalto University"
+name_fi = "Aalto-yliopisto"
+display_label = "aalto-uni"
+source_family = "sisu"
+study_plan_script = "sisu"
+study_plan_formats = ["sisu_page", "sisu_pdf", "sisu_capture"]
+source_attribution_en = "Aalto University curriculum data, retrieved from the institution's Sisu KORI API."
+source_attribution_fi = "Aalto-yliopisto, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun Sisun KORI-rajapinnasta."
+official_languages = ["fi", "sv", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "sv", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.aalto.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "fi", "sv"]
+
+[universities.aalto.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.aalto.sisu]
+kori_base_url = "https://sisu.aalto.fi/kori"
+university_id = "aalto-university-root-id"
+first_academic_year = "2006-2007"
+course_guide_base_url = "https://sisu.aalto.fi/student/courseunit"
+
+[universities.helsinki]
+name_en = "University of Helsinki"
+name_fi = "Helsingin yliopisto"
+display_label = "helsinki-uni"
+source_family = "sisu"
+study_plan_script = "sisu"
+study_plan_formats = ["sisu_page", "sisu_pdf", "sisu_capture"]
+source_attribution_en = "University of Helsinki curriculum data, retrieved from the institution's Sisu KORI API."
+source_attribution_fi = "Helsingin yliopisto, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun Sisun KORI-rajapinnasta."
+official_languages = ["fi", "sv", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "sv", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.helsinki.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "fi", "sv"]
+
+[universities.helsinki.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.helsinki.sisu]
+kori_base_url = "https://sisu.helsinki.fi/kori"
+university_id = "hy-university-root-id"
+first_academic_year = "2006-2007"
+course_guide_base_url = "https://sisu.helsinki.fi/student/courseunit"
+
+[universities.jyu]
+name_en = "University of Jyväskylä"
+name_fi = "Jyväskylän yliopisto"
+display_label = "jyvaskyla-uni"
+source_family = "sisu"
+study_plan_script = "sisu"
+study_plan_formats = ["sisu_page", "sisu_pdf", "sisu_capture"]
+source_attribution_en = "University of Jyväskylä curriculum data, retrieved from the institution's Sisu KORI API."
+source_attribution_fi = "Jyväskylän yliopisto, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun Sisun KORI-rajapinnasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.jyu.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.jyu.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.jyu.sisu]
+kori_base_url = "https://sisu.jyu.fi/kori"
+university_id = "jyu-university-root-id"
+first_academic_year = "2017-2018"
+course_guide_base_url = "https://sisu.jyu.fi/student/courseunit"
+
+[universities.lut]
+name_en = "LUT University"
+name_fi = "LUT-yliopisto"
+display_label = "lut-uni"
+source_family = "sisu"
+study_plan_script = "sisu"
+study_plan_formats = ["sisu_page", "sisu_pdf", "sisu_capture"]
+source_attribution_en = "LUT University curriculum data, retrieved from the institution's Sisu KORI API."
+source_attribution_fi = "LUT-yliopisto, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun Sisun KORI-rajapinnasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.lut.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.lut.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.lut.sisu]
+kori_base_url = "https://sisu.lut.fi/kori"
+university_id = "lut-university-root-id"
+first_academic_year = "2006-2007"
+course_guide_base_url = "https://sisu.lut.fi/student/courseunit"
+
+[universities.hanken]
+name_en = "Hanken School of Economics"
+name_fi = "Hanken Svenska handelshögskolan"
+display_label = "hanken-uni"
+source_family = "sisu"
+study_plan_script = "sisu"
+study_plan_formats = ["sisu_page", "sisu_pdf", "sisu_capture"]
+source_attribution_en = "Hanken School of Economics curriculum data, retrieved from the institution's Sisu KORI API."
+source_attribution_fi = "Hanken Svenska handelshögskolan, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun Sisun KORI-rajapinnasta."
+official_languages = ["sv", "fi", "en"]
+inference_languages = [
+    { language = "sv", origin = "official" },
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.hanken.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "sv", "fi"]
+
+[universities.hanken.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.hanken.sisu]
+kori_base_url = "https://sisu.hanken.fi/kori"
+university_id = "shh-university-root-id"
+first_academic_year = "2006-2007"
+course_guide_base_url = "https://sisu.hanken.fi/student/courseunit"
+
+[universities.arcada]
+name_en = "Arcada University of Applied Sciences"
+name_fi = "Ammattikorkeakoulu Arcada"
+display_label = "arcada-uas"
+source_family = "sisu"
+study_plan_script = "sisu"
+study_plan_formats = ["sisu_page", "sisu_pdf", "sisu_capture"]
+source_attribution_en = "Arcada University of Applied Sciences curriculum data, retrieved from the institution's Sisu KORI API."
+source_attribution_fi = "Ammattikorkeakoulu Arcada, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun Sisun KORI-rajapinnasta."
+official_languages = ["sv", "fi", "en"]
+inference_languages = [
+    { language = "sv", origin = "official" },
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.arcada.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "sv", "fi"]
+
+[universities.arcada.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.arcada.sisu]
+kori_base_url = "https://sisu.arcada.fi/kori"
+university_id = "arc-university-root-id"
+first_academic_year = "2006-2007"
+course_guide_base_url = "https://sisu.arcada.fi/student/courseunit"
+
+[universities.lab]
+name_en = "LAB University of Applied Sciences"
+name_fi = "LAB-ammattikorkeakoulu"
+display_label = "lab-uas"
+source_family = "sisu"
+study_plan_script = "sisu"
+study_plan_formats = ["sisu_page", "sisu_pdf", "sisu_capture"]
+source_attribution_en = "LAB University of Applied Sciences curriculum data, retrieved from the institution's Sisu KORI API."
+source_attribution_fi = "LAB-ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun Sisun KORI-rajapinnasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.lab.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.lab.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.lab.sisu]
+kori_base_url = "https://sisu.lab.fi/kori"
+university_id = "lab-university-root-id"
+first_academic_year = "2006-2007"
+course_guide_base_url = "https://sisu.lab.fi/student/courseunit"
+
+[universities.aland]
+name_en = "Åland University of Applied Sciences"
+name_fi = "Ahvenanmaan ammattikorkeakoulu"
+display_label = "aland-uas"
+source_family = "sisu"
+study_plan_script = "sisu"
+study_plan_formats = ["sisu_page", "sisu_pdf", "sisu_capture"]
+source_attribution_en = "Åland University of Applied Sciences curriculum data, retrieved from the institution's Sisu KORI API."
+source_attribution_fi = "Ahvenanmaan ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun Sisun KORI-rajapinnasta."
+official_languages = ["sv", "fi", "en"]
+inference_languages = [
+    { language = "sv", origin = "official" },
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.aland.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "sv", "fi"]
+
+[universities.aland.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.aland.sisu]
+kori_base_url = "https://sisu.ha.ax/kori"
+university_id = "ha-university-root-id"
+first_academic_year = "2006-2007"
+course_guide_base_url = "https://sisu.ha.ax/student/courseunit"
+
+[universities.turku]
+name_en = "University of Turku"
+name_fi = "Turun yliopisto"
+display_label = "turku-uni"
+source_family = "peppi_legacy"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "University of Turku curriculum data, retrieved from the institution's public Peppi curriculum API."
+source_attribution_fi = "Turun yliopisto, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta Peppi-opetussuunnitelmarajapinnasta."
+official_languages = ["fi", "sv", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "sv", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.turku.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "fi", "sv"]
+
+[universities.turku.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.turku.peppi_legacy]
+api_base_url = "https://opas.peppi.utu.fi"
+guide_base_url = "https://opas.peppi.utu.fi"
+discovery_variant = "organisation_navigation"
+# One period per line. The first year starts the period and the second ends it.
+periods = [
+    [2018, 2020],
+    [2020, 2022],
+    [2022, 2024],
+    [2024, 2027],
+]
+
+[universities.turku.peppi_legacy.course_page_templates]
+fi = "https://opas.peppi.utu.fi/fi/opintojakso/{code}/{id}?period={period}"
+en = "https://opas.peppi.utu.fi/en/course/{code}/{id}?period={period}"
+sv = "https://opas.peppi.utu.fi/sv/kurs/{code}/{id}?period={period}"
+
+[universities.uef]
+name_en = "University of Eastern Finland"
+name_fi = "Itä-Suomen yliopisto"
+display_label = "uef-uni"
+source_family = "peppi_legacy"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "University of Eastern Finland curriculum data, retrieved from the institution's public Peppi curriculum API."
+source_attribution_fi = "Itä-Suomen yliopisto, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta Peppi-opetussuunnitelmarajapinnasta."
+official_languages = ["fi", "sv", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "sv", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.uef.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "fi", "sv"]
+
+[universities.uef.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.uef.peppi_legacy]
+api_base_url = "https://opas.peppi.uef.fi"
+guide_base_url = "https://opas.peppi.uef.fi"
+discovery_variant = "organisation_navigation"
+periods = [
+    [2021, 2022],
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+]
+
+[universities.uef.peppi_legacy.course_page_templates]
+fi = "https://opas.peppi.uef.fi/fi/opintojakso/{code}/{id}?period={period}"
+en = "https://opas.peppi.uef.fi/en/course/{code}/{id}?period={period}"
+sv = "https://opas.peppi.uef.fi/sv/kurs/{code}/{id}?period={period}"
+
+[universities.oulu]
+name_en = "University of Oulu"
+name_fi = "Oulun yliopisto"
+display_label = "oulu-uni"
+source_family = "peppi_legacy"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "University of Oulu curriculum data, retrieved from the institution's public Peppi curriculum API."
+source_attribution_fi = "Oulun yliopisto, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta Peppi-opetussuunnitelmarajapinnasta."
+official_languages = ["fi", "sv", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "sv", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.oulu.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "fi", "sv"]
+
+[universities.oulu.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.oulu.peppi_legacy]
+api_base_url = "https://opasbe.peppi.oulu.fi"
+guide_base_url = "https://opas.peppi.oulu.fi"
+discovery_variant = "organisation_navigation"
+periods = [
+    [2020, 2021],
+    [2021, 2022],
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+]
+
+[universities.oulu.peppi_legacy.course_page_templates]
+fi = "https://opas.peppi.oulu.fi/fi/opintojakso/{code}/{id}?period={period}"
+en = "https://opas.peppi.oulu.fi/en/course/{code}/{id}?period={period}"
+sv = "https://opas.peppi.oulu.fi/sv/kurs/{code}/{id}?period={period}"
+
+[universities.uwasa]
+name_en = "University of Vaasa"
+name_fi = "Vaasan yliopisto"
+display_label = "vaasa-uni"
+source_family = "peppi_legacy"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "University of Vaasa curriculum data, retrieved from the institution's public Peppi curriculum API."
+source_attribution_fi = "Vaasan yliopisto, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta Peppi-opetussuunnitelmarajapinnasta."
+official_languages = ["fi", "sv", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "sv", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.uwasa.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "fi", "sv"]
+
+[universities.uwasa.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.uwasa.peppi_legacy]
+api_base_url = "https://opas.peppi.uwasa.fi"
+guide_base_url = "https://opas.peppi.uwasa.fi"
+discovery_variant = "organisation_navigation"
+periods = [
+    [2020, 2021],
+    [2021, 2022],
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+]
+
+[universities.uwasa.peppi_legacy.course_page_templates]
+fi = "https://opas.peppi.uwasa.fi/fi/opintojakso/{code}/{id}?period={period}"
+en = "https://opas.peppi.uwasa.fi/en/course/{code}/{id}?period={period}"
+sv = "https://opas.peppi.uwasa.fi/sv/kurs/{code}/{id}?period={period}"
+
+[universities.vamk]
+name_en = "Vaasa University of Applied Sciences"
+name_fi = "Vaasan ammattikorkeakoulu"
+display_label = "vaasa-uas"
+source_family = "peppi_legacy"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Vaasa University of Applied Sciences curriculum data, retrieved from the institution's public Peppi curriculum API."
+source_attribution_fi = "Vaasan ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta Peppi-opetussuunnitelmarajapinnasta."
+official_languages = ["fi", "sv", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "sv", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.vamk.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "fi", "sv"]
+
+[universities.vamk.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.vamk.peppi_legacy]
+api_base_url = "https://opas.vamk.fi"
+guide_base_url = "https://opas.vamk.fi"
+discovery_variant = "organisation_navigation"
+periods = [
+    [2025, 2026],
+]
+
+[universities.vamk.peppi_legacy.course_page_templates]
+fi = "https://opas.vamk.fi/fi/opintojakso/{code}/{id}?period={period}"
+en = "https://opas.vamk.fi/en/course/{code}/{id}?period={period}"
+sv = "https://opas.vamk.fi/sv/kurs/{code}/{id}?period={period}"
+
+[universities.abo]
+name_en = "Åbo Akademi University"
+name_fi = "Åbo Akademi"
+display_label = "abo-akademi-uni"
+source_family = "peppi_legacy"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Åbo Akademi University curriculum data, retrieved from the institution's public Peppi curriculum API."
+source_attribution_fi = "Åbo Akademi, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta Peppi-opetussuunnitelmarajapinnasta."
+official_languages = ["sv", "fi", "en"]
+inference_languages = [
+    { language = "sv", origin = "official" },
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.abo.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "sv", "fi"]
+
+[universities.abo.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.abo.peppi_legacy]
+api_base_url = "https://studiehandboken.abo.fi"
+guide_base_url = "https://studiehandboken.abo.fi"
+discovery_variant = "navigation_education_type"
+periods = [
+    [2018, 2020],
+    [2020, 2022],
+    [2022, 2024],
+    [2024, 2027],
+]
+
+[universities.abo.peppi_legacy.course_page_templates]
+fi = "https://studiehandboken.abo.fi/fi/opintojakso/{code}/{id}?period={period}"
+en = "https://studiehandboken.abo.fi/en/course/{code}/{id}?period={period}"
+sv = "https://studiehandboken.abo.fi/sv/kurs/{code}/{id}?period={period}"
+
+[universities.ulapland]
+name_en = "University of Lapland"
+name_fi = "Lapin yliopisto"
+display_label = "lapland-uni"
+source_family = "peppi_legacy"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "University of Lapland curriculum data, retrieved from the institution's public Peppi curriculum API."
+source_attribution_fi = "Lapin yliopisto, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta Peppi-opetussuunnitelmarajapinnasta."
+official_languages = ["fi", "sv", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "sv", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.ulapland.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "fi", "sv"]
+
+[universities.ulapland.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.ulapland.peppi_legacy]
+api_base_url = "https://opinto-opas.peppi.ulapland.csc.fi"
+guide_base_url = "https://opinto-opas.peppi.ulapland.csc.fi"
+discovery_variant = "navigation_education_type"
+periods = [
+    [2024, 2027],
+]
+
+[universities.ulapland.peppi_legacy.course_page_templates]
+fi = "https://opinto-opas.peppi.ulapland.csc.fi/fi/opintojakso/{code}/{id}"
+en = "https://opinto-opas.peppi.ulapland.csc.fi/en/course/{code}/{id}"
+sv = "https://opinto-opas.peppi.ulapland.csc.fi/sv/kurs/{code}/{id}"
+
+[universities.uniarts]
+name_en = "University of the Arts Helsinki"
+name_fi = "Taideyliopisto"
+display_label = "uniarts-uni"
+source_family = "peppi_legacy"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "University of the Arts Helsinki curriculum data, retrieved from the institution's public Peppi curriculum API."
+source_attribution_fi = "Taideyliopisto, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta Peppi-opetussuunnitelmarajapinnasta."
+official_languages = ["fi", "sv", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "sv", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.uniarts.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "fi", "sv"]
+
+[universities.uniarts.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.uniarts.peppi_legacy]
+api_base_url = "https://opinto-opas.uniarts.fi"
+guide_base_url = "https://opinto-opas.uniarts.fi"
+discovery_variant = "organisation_education_type"
+periods = [
+    [2024, 2027],
+]
+
+[universities.uniarts.peppi_legacy.course_page_templates]
+fi = "https://opinto-opas.uniarts.fi/fi/opintojakso/{code}/{id}?period={period}"
+en = "https://opinto-opas.uniarts.fi/en/course/{code}/{id}?period={period}"
+sv = "https://opinto-opas.uniarts.fi/sv/kurs/{code}/{id}?period={period}"
+
+[universities.centria]
+name_en = "Centria University of Applied Sciences"
+name_fi = "Centria-ammattikorkeakoulu"
+display_label = "centria-uas"
+source_family = "peppi_psg"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Centria University of Applied Sciences curriculum data, retrieved from the institution's public Peppi curriculum API."
+source_attribution_fi = "Centria-ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta Peppi-opetussuunnitelmarajapinnasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.centria.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.centria.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.centria.peppi_psg]
+api_base_url = "https://centria.opinto-opas.fi"
+guide_base_url = "https://centria.opinto-opas.fi"
+# One published academic year per line. Each year is one curriculum period.
+years = [
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025,
+    2026,
+    2027,
+]
+course_page_template = "https://centria.opinto-opas.fi/coursedescription/{id}?lang={lang}"
+
+[universities.hamk]
+name_en = "Häme University of Applied Sciences"
+name_fi = "Hämeen ammattikorkeakoulu"
+display_label = "hamk-uas"
+source_family = "peppi_psg"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Häme University of Applied Sciences curriculum data, retrieved from the institution's public Peppi curriculum API."
+source_attribution_fi = "Hämeen ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta Peppi-opetussuunnitelmarajapinnasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.hamk.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.hamk.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.hamk.peppi_psg]
+api_base_url = "https://hamk.opinto-opas.fi"
+guide_base_url = "https://hamk.opinto-opas.fi"
+years = [
+    2014,
+    2015,
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025,
+    2026,
+    2027,
+]
+course_page_template = "https://hamk.opinto-opas.fi/coursedescription/{id}?lang={lang}"
+
+[universities.samk]
+name_en = "Satakunta University of Applied Sciences"
+name_fi = "Satakunnan ammattikorkeakoulu"
+display_label = "samk-uas"
+source_family = "peppi_psg"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Satakunta University of Applied Sciences curriculum data, retrieved from the institution's public Peppi curriculum API."
+source_attribution_fi = "Satakunnan ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta Peppi-opetussuunnitelmarajapinnasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.samk.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.samk.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.samk.peppi_psg]
+api_base_url = "https://samk.opinto-opas.fi"
+guide_base_url = "https://samk.opinto-opas.fi"
+years = [
+    2015,
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025,
+    2026,
+    2027,
+    2028,
+    2029,
+]
+course_page_template = "https://samk.opinto-opas.fi/coursedescription/{id}?lang={lang}"
+
+[universities.diak]
+name_en = "Diakonia University of Applied Sciences"
+name_fi = "Diakonia-ammattikorkeakoulu"
+display_label = "diak-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Diakonia University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Diakonia-ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.diak.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.diak.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.diak.guide]
+guide_base_url = "https://opinto-opas.diak.fi"
+fetch_variant = "plain_http"
+periods = [
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+]
+
+[universities.humak]
+name_en = "Humak University of Applied Sciences"
+name_fi = "Humanistinen ammattikorkeakoulu"
+display_label = "humak-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Humak University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Humanistinen ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.humak.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.humak.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.humak.guide]
+guide_base_url = "https://opetussuunnitelmat.humak.fi"
+fetch_variant = "plain_http"
+periods = [
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+]
+
+[universities.jamk]
+name_en = "JAMK University of Applied Sciences"
+name_fi = "Jyväskylän ammattikorkeakoulu"
+display_label = "jamk-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "JAMK University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Jyväskylän ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.jamk.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.jamk.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.jamk.guide]
+guide_base_url = "https://opetussuunnitelmat.peppi.jamk.fi"
+fetch_variant = "plain_http"
+periods = [
+    [2015, 2016],
+    [2016, 2017],
+    [2017, 2018],
+    [2018, 2019],
+    [2019, 2020],
+    [2020, 2021],
+    [2021, 2022],
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+    [2031, 2032],
+]
+
+[universities.kamk]
+name_en = "Kajaani University of Applied Sciences"
+name_fi = "Kajaanin ammattikorkeakoulu"
+display_label = "kamk-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Kajaani University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Kajaanin ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.kamk.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.kamk.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.kamk.guide]
+guide_base_url = "https://opinto-opas.kamk.fi"
+fetch_variant = "plain_http"
+periods = [
+    [2021, 2022],
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+]
+
+[universities.lapinamk]
+name_en = "Lapland University of Applied Sciences"
+name_fi = "Lapin ammattikorkeakoulu"
+display_label = "lapinamk-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Lapland University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Lapin ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.lapinamk.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.lapinamk.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.lapinamk.guide]
+guide_base_url = "https://opinto-opas.peppi.lapinamk.csc.fi"
+fetch_variant = "headless_browser"
+periods = [
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+]
+
+[universities.laurea]
+name_en = "Laurea University of Applied Sciences"
+name_fi = "Laurea-ammattikorkeakoulu"
+display_label = "laurea-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Laurea University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Laurea-ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.laurea.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.laurea.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.laurea.guide]
+guide_base_url = "https://ops.laurea.fi"
+fetch_variant = "plain_http"
+periods = [
+    [2019, 2020],
+    [2020, 2021],
+    [2021, 2022],
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+]
+
+[universities.novia]
+name_en = "Novia University of Applied Sciences"
+name_fi = "Yrkeshögskolan Novia"
+display_label = "novia-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Novia University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Yrkeshögskolan Novia, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["sv", "fi", "en"]
+inference_languages = [
+    { language = "sv", origin = "official" },
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.novia.display_fallback]
+fi = ["fi", "en", "sv"]
+en = ["en", "sv", "fi"]
+
+[universities.novia.translation_priority]
+fi = ["en", "sv"]
+en = ["fi", "sv"]
+sv = ["fi", "en"]
+
+[universities.novia.guide]
+guide_base_url = "https://studieguide.novia.fi"
+fetch_variant = "plain_http"
+periods = [
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+    [2031, 2032],
+]
+
+[universities.turkuamk]
+name_en = "Turku University of Applied Sciences"
+name_fi = "Turun ammattikorkeakoulu"
+display_label = "turkuamk-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Turku University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Turun ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.turkuamk.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.turkuamk.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.turkuamk.guide]
+guide_base_url = "https://opinto-opas.turkuamk.fi"
+fetch_variant = "headless_browser"
+periods = [
+    [2015, 2016],
+    [2016, 2017],
+    [2017, 2018],
+    [2018, 2019],
+    [2019, 2020],
+    [2020, 2021],
+    [2021, 2022],
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+]
+
+[universities.metropolia]
+name_en = "Metropolia University of Applied Sciences"
+name_fi = "Metropolia Ammattikorkeakoulu"
+display_label = "metropolia-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Metropolia University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Metropolia Ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.metropolia.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.metropolia.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.metropolia.guide]
+guide_base_url = "https://opinto-opas.metropolia.fi"
+fetch_variant = "headless_browser"
+periods = [
+    [2021, 2022],
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+]
+
+[universities.seamk]
+name_en = "Seinäjoki University of Applied Sciences"
+name_fi = "Seinäjoen ammattikorkeakoulu"
+display_label = "seinajoki-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Seinäjoki University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Seinäjoen ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.seamk.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.seamk.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.seamk.guide]
+guide_base_url = "https://opinto-opas.seamk.fi"
+fetch_variant = "headless_browser"
+periods = [
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+]
+
+[universities.tamk]
+name_en = "Tampere University of Applied Sciences"
+name_fi = "Tampereen ammattikorkeakoulu"
+display_label = "tampere-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Tampere University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Tampereen ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.tamk.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.tamk.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.tamk.guide]
+guide_base_url = "https://tamk-study-guide.tuni.fi"
+fetch_variant = "headless_browser"
+periods = [
+    [2021, 2022],
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+    [2031, 2032],
+]
+
+[universities.oamk]
+name_en = "Oulu University of Applied Sciences"
+name_fi = "Oulun ammattikorkeakoulu"
+display_label = "oulu-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Oulu University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Oulun ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.oamk.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.oamk.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.oamk.guide]
+guide_base_url = "https://opetussuunnitelmat.oamk.fi"
+fetch_variant = "headless_browser"
+periods = [
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+    [2031, 2032],
+]
+
+[universities.haaga-helia]
+name_en = "Haaga-Helia University of Applied Sciences"
+name_fi = "Haaga-Helia ammattikorkeakoulu"
+display_label = "haaga-helia-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Haaga-Helia University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Haaga-Helia ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.haaga-helia.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.haaga-helia.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.haaga-helia.guide]
+guide_base_url = "https://opinto-opas.haaga-helia.fi"
+fetch_variant = "headless_browser"
+periods = [
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+]
+
+[universities.karelia]
+name_en = "Karelia University of Applied Sciences"
+name_fi = "Karelia-ammattikorkeakoulu"
+display_label = "karelia-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Karelia University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Karelia-ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.karelia.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.karelia.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.karelia.guide]
+guide_base_url = "https://opintoopas.karelia.fi"
+fetch_variant = "headless_browser"
+periods = [
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+]
+
+[universities.savonia]
+name_en = "Savonia University of Applied Sciences"
+name_fi = "Savonia-ammattikorkeakoulu"
+display_label = "savonia-uas"
+source_family = "guide"
+study_plan_script = "peppi"
+study_plan_formats = ["peppi_page", "peppi_capture"]
+source_attribution_en = "Savonia University of Applied Sciences curriculum data, retrieved from the institution's public study guide."
+source_attribution_fi = "Savonia-ammattikorkeakoulu, opetussuunnitelmatiedot. Tiedot on haettu korkeakoulun julkisesta opinto-oppaasta."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+]
+
+[universities.savonia.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.savonia.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.savonia.guide]
+guide_base_url = "https://opinto-opas.peppi.savonia.fi"
+fetch_variant = "headless_browser"
+periods = [
+    [2021, 2022],
+    [2022, 2023],
+    [2023, 2024],
+    [2024, 2025],
+    [2025, 2026],
+    [2026, 2027],
+    [2027, 2028],
+    [2028, 2029],
+    [2029, 2030],
+    [2030, 2031],
+]
+
+# The fictional university the example configuration presents. Its Sisu block names a fictional
+# source.
+[universities.example]
+name_en = "Example University"
+name_fi = "Esimerkkiyliopisto"
+display_label = "example-uni"
+source_family = "sisu"
+study_plan_script = "sisu"
+study_plan_formats = ["sisu_page", "sisu_pdf", "sisu_capture"]
+source_attribution_en = "Fictional example data."
+source_attribution_fi = "Kuvitteellista esimerkkitietoa."
+official_languages = ["fi", "en"]
+inference_languages = [
+    { language = "fi", origin = "official" },
+    { language = "en", origin = "official" },
+    { language = "fi", origin = "derived" },
+    { language = "en", origin = "derived" },
+]
+
+[universities.example.display_fallback]
+fi = ["fi", "en"]
+en = ["en", "fi"]
+
+[universities.example.translation_priority]
+fi = ["en"]
+en = ["fi"]
+
+[universities.example.sisu]
+kori_base_url = "https://example.org/kori"
+university_id = "example-university-root-id"
+first_academic_year = "2020-2021"
+course_guide_base_url = "https://example.org/student/courseunit"

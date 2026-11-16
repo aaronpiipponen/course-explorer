@@ -8,7 +8,7 @@
  */
 import type { StudyStructureReport } from "../../api/types";
 
-const DATABASE_NAME = "tuni-course-explorer-structures";
+const DATABASE_NAME = "course-explorer-structures";
 const DATABASE_VERSION = 2;
 const STORE_NAME = "reports";
 
@@ -16,11 +16,6 @@ function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
     request.onupgradeneeded = () => {
-      // A store keyed by dataset and root alone cannot answer another selection, so the upgrade
-      // discards the stored reports. Only this derived store is dropped, so profiles and every
-      // other stored value are kept.
-      if (request.result.objectStoreNames.contains(STORE_NAME))
-        request.result.deleteObjectStore(STORE_NAME);
       request.result.createObjectStore(STORE_NAME);
     };
     request.onsuccess = () => resolve(request.result);

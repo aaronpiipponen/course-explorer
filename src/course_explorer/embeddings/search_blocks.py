@@ -62,7 +62,7 @@ class CourseEmbeddingSearchRepository:
         rows = self._session.execute(
             select(
                 Course.group_id,
-                CourseVersion.sisu_course_unit_id,
+                CourseVersion.source_version_id,
                 CourseEmbeddingChunk.representative_source_hash,
                 func.vector_send(centred_embedding).label("payload"),
                 func.inner_product(centred_embedding, centred_embedding).label("squared_norm"),
@@ -76,15 +76,15 @@ class CourseEmbeddingSearchRepository:
             )
             .order_by(
                 Course.group_id,
-                CourseVersion.sisu_course_unit_id,
+                CourseVersion.source_version_id,
                 CourseEmbeddingChunk.representative_source_hash,
                 CourseEmbeddingChunk.id,
             )
         ).all()
         identities = sorted(
             {
-                (group_id, sisu_course_unit_id, representative_source_hash)
-                for group_id, sisu_course_unit_id, representative_source_hash, _payload, _norm in rows
+                (group_id, source_version_id, representative_source_hash)
+                for group_id, source_version_id, representative_source_hash, _payload, _norm in rows
             }
         )
         if not identities:
@@ -98,12 +98,12 @@ class CourseEmbeddingSearchRepository:
             norms: list[float] = []
             for (
                 group_id,
-                sisu_course_unit_id,
+                source_version_id,
                 representative_source_hash,
                 payload,
                 squared_norm,
             ) in batch:
-                number = group_numbers[(group_id, sisu_course_unit_id, representative_source_hash)]
+                number = group_numbers[(group_id, source_version_id, representative_source_hash)]
                 vector = numpy.frombuffer(payload[4:], dtype=">f4")
                 if vector.shape != (COURSE_EMBEDDING_DIMENSION,):
                     raise ValueError("stored chunk vector has an unexpected dimension")
@@ -125,7 +125,7 @@ class CourseEmbeddingSearchRepository:
                 {
                     "group_no": number,
                     "group_id": identity[0],
-                    "sisu_course_unit_id": identity[1],
+                    "source_version_id": identity[1],
                     "representative_source_hash": identity[2],
                 }
                 for identity, number in group_numbers.items()

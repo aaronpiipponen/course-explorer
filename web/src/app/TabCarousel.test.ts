@@ -19,7 +19,7 @@ vi.mock("../features/prerequisites/graph/elk", () => ({
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const ACTIVE_TAB_KEY = "tuni-course-explorer-active-tab";
+const ACTIVE_TAB_KEY = "course-explorer-active-tab";
 const IDENTITY = "synthetic-dataset";
 
 type PointerInit = {
@@ -122,7 +122,20 @@ describe("carousel touch swipes", () => {
                 value: {
                   embeddings_enabled: false,
                   inference_enabled: false,
+                  prerequisites_enabled: true,
                   dataset_identity: IDENTITY,
+                  display_label: "example-uni",
+                  university_names: {
+                    en: "Example University",
+                    fi: "Esimerkkiyliopisto",
+                  },
+                  source_attribution: {
+                    en: "Source attribution",
+                    fi: "Lähdemerkintä",
+                  },
+                  assumed_course_credits: "5",
+                  study_plan_script: null,
+                  study_plan_formats: [],
                 },
               },
               createElement(NoticeProvider, null, createElement(TabCarousel)),

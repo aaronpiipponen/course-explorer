@@ -4,7 +4,7 @@ The feedback page collects a message in the app language, with optional images, 
 
 ## Open the form
 
-On desktop **Feedback** sits beside **Docs** in the top bar. On a phone it shares the language row of the **More** sheet with **Docs**. The page opens on its own and is not a tab, so the tab you were reading stays where it is. **Return to app** at the top of the page goes back to that tab.
+On desktop **Feedback** sits beside **Docs** in the top bar. On a phone it shares the language row of the **More** sheet with **GitHub** and **Docs**. The page opens on its own and is not a tab, so the tab you were reading stays where it is. **Return to app** at the top of the page goes back to that tab.
 
 The page fills the window with its own scroll and shows no top bar, footer or phone bottom bar. It keeps the language of the open profile. Its answers, images and publication choice belong to the open page, so leaving the page or reloading it starts an empty form.
 

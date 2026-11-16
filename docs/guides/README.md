@@ -12,7 +12,7 @@ The steps use the features a site serves, so a step that names **Compare** or **
 
 3. **Compare two courses.** Choose **Add to comparison** from the course menu of one course, then of a second course. The two take the slots A and B on the **Compare** tab, which reports five percentages and one verdict. [Comparing two courses](/docs/guides/compare.md) explains the meters and the verdict.
 
-4. **Open a prerequisite graph.** Choose **Open prerequisite graph** from any course menu. The **Prerequisites** tab opens with that course at the top and follows the requirements the catalogue lists before it. [Exploring prerequisites](/docs/guides/prerequisites.md) covers the graph and the route with the fewest new credits.
+4. **Open a prerequisite graph.** On a site that serves the prerequisite graph, choose **Open prerequisite graph** from any course menu. The **Prerequisites** tab opens with that course at the top and follows the requirements the catalogue lists before it. [Exploring prerequisites](/docs/guides/prerequisites.md) covers the graph and the route with the fewest new credits.
 
 5. **Look at what comes next.** Open the **Discover** tab to see the courses that your completed or selected courses reach, and, on a site that serves the embedding features, the courses whose teaching text resembles them. [Discovering courses](/docs/guides/discover.md) explains the lists and the basis they share.
 
@@ -24,11 +24,11 @@ The selection and the completion belong to the profile and are read by every tab
 
 The app keeps the eight most recent successful reads, so returning to one of them shows its result at once.
 
-![The course menu open on a search result, with the course code, credit value and active status on the first row above the full course name and a grey divider above the entries Add to comparison, Open prerequisite graph, Add to Unplaced studies, Mark completed, and Open in Sisu](/docs/screenshots/course-actions-menu.png)
+![The course menu open on a search result, with the course code, credit value and active status on the first row above the full course name and a grey divider above the entries Add to comparison, Open prerequisite graph, Add to Unplaced studies, Mark completed, and Open in study guide](/docs/screenshots/course-actions-menu.png)
 
 Every course card opens that same menu. Its title shows the course code in purple, with the credits and the active or inactive status on the same row, above the course's full name. The name follows the chosen language when the catalogue holds one for it, and it wraps to its full text.
 
-A grey divider separates the title from the actions: **Add to comparison** on a site that serves comparison, **Open prerequisite graph**, the Unplaced studies action, **Mark completed** or **Remove completion**, and **Open in Sisu**.
+A grey divider separates the title from the actions: **Add to comparison** on a site that serves comparison, **Open prerequisite graph** on a site that serves the prerequisite graph, the Unplaced studies action, **Mark completed** or **Remove completion**, and **Open in study guide**.
 
 The Unplaced studies action follows the course's own state. A course that is not selected offers **Add to Unplaced studies**. A course that a programme or module holds offers **Move to Unplaced studies**, and below it **Remove from** and the name of that programme or module. A selected course that no programme or module holds offers **Remove from Unplaced studies**, and one that already sits in the Unplaced studies list offers **Move to Unplaced studies**.
 
@@ -38,7 +38,7 @@ The Unplaced studies action follows the course's own state. A course that is not
 
 In **Structure of studies**, the **Complete** control on a course card completes the course directly, and in a module drawer it places the course in the rule and completes it, without that dialog.
 
-Marking a course completed records the completion in the profile and changes nothing in the catalogue, so the completion serves the app's own calculations. **Open in Sisu** is the one action that leaves the app, and it opens the official page of the course.
+Marking a course completed records the completion in the profile and changes nothing in the catalogue, so the completion serves the app's own calculations. **Open in study guide** is the one action that leaves the app, and it opens the official page of the course.
 
 **Add to Unplaced studies** selects a course and places it under [**Unplaced studies**](/docs/guides/structure-of-studies.md#unplaced-studies) in the structure of studies, whether or not the programme list holds a programme. The action shows a bottom notice that names the course it added. **Move to Unplaced studies** reports **Moved DEMO.X to Unplaced studies**, and a move out of a holder also names that holder. **Remove from Unplaced studies** reports **Removed DEMO.X from Unplaced studies**. The words **Unplaced studies** in these notices open that list. For a course that a programme or module holds, **Move to Unplaced studies** in a menu outside Structure of studies asks **Move to Unplaced studies?** with **DEMO.X is already in your plan. Move it to Unplaced studies?**, and **Move** confirms the move. Inside Structure of studies the move happens at once.
 
@@ -50,17 +50,17 @@ The **?** buttons of **Search**, **Compare**, **Prerequisites**, **Discover** an
 
 ## The top bar and the tab controls
 
-![The five tab buttons, Feedback, Docs, the profile control, and the FI and EN language control in the top bar, above the Search tab's query field and result list](/docs/screenshots/search-course-list.png)
+![The five tab buttons, GitHub, Feedback, Docs, the profile control, and the FI and EN language control in the top bar, above the Search tab's query field and result list](/docs/screenshots/search-course-list.png)
 
-On desktop the top bar holds a button for each tab the site serves, **Feedback**, **Docs**, the profile control, and the language control.
+On desktop the top bar holds a button for each tab the site serves, **GitHub**, **Feedback**, **Docs**, the profile control, and the language control.
 
-On a phone the app has no top bar and no footer. A bar at the bottom holds one button for each served tab and **More**, and the tab content begins at the top of the window. **More** opens a sheet with the profile control, a row for the language control, **Feedback** and **Docs**, and the footer notice, and the sheet grows upward when you open the profile list. The bar hides while the open tab scrolls down and returns at the top, on an upward scroll, or after an overlay closes. [Using the app on a phone](/docs/guides/phone.md) describes the bar, the **More** sheet and the option sheets of each tab.
+On a phone the app has no top bar and no footer. A bar at the bottom holds one button for each served tab and **More**, and the tab content begins at the top of the window. **More** opens a sheet with the profile control, a row for the language control, **GitHub**, **Feedback** and **Docs**, and the footer notice, and the sheet grows upward when you open the profile list. The bar hides while the open tab scrolls down and returns at the top, on an upward scroll, or after an overlay closes. [Using the app on a phone](/docs/guides/phone.md) describes the bar, the **More** sheet and the option sheets of each tab.
 
 At a desktop width an arrow at each side of the tab area moves one tab back or forward, and the left and right arrow keys do the same. At a phone width the arrows are absent: swipe horizontally in the tab content to move between the tabs. The tabs form a ring, so the last tab leads back to the first, and a move takes the shorter way round. A tab the site does not serve is absent from the top bar and from the ring, and a stored **Compare** opens **Search** on a site that serves no comparison.
 
 **Docs** opens the documentation wiki inside the app. On desktop its one-row header carries the search and **GitHub**, and the page list sits beside the article. On a phone the header keeps the brand, **Docs** and **Return to app**, and a menu opens the page list and **GitHub**. **GitHub** opens the project's source code repository in a new browser tab.
 
-On desktop the footer at the bottom of the window states **This is an independent project that is not affiliated with Tampere University.** and links **Source code on GitHub.** to the project's source code repository, which opens in a new browser tab. On a phone the same notice and link sit at the end of the **More** sheet.
+On desktop the footer at the bottom of the window states that the project is independent and not affiliated with the site's university, and a source line states where the course data comes from. On a phone the same notice and source line end the **More** sheet.
 
 The profile control switches between the named profiles and shows how many courses each one has selected and completed, and the language control switches the interface between FI and EN. [Profiles and language](/docs/guides/profiles-and-language.md) covers both.
 
@@ -72,7 +72,9 @@ The profile control switches between the named profiles and shows how many cours
 - [Discovering courses](/docs/guides/discover.md) for next courses, recommended courses, and the basis.
 - [Planning a structure of studies](/docs/guides/structure-of-studies.md) for the official structure and its modules.
 - [Editing a structure of studies](/docs/guides/editing-structure-of-studies.md) for the drawer, dragging, moving, removing and resetting.
-- [Importing a Sisu plan](/docs/guides/sisu-import.md) for capturing a plan in Sisu or importing a supported plan PDF as a profile.
+- [Importing a study plan](/docs/guides/importing-a-study-plan.md) for the import dialog, the outcomes it names, and the modules that wait for a version choice.
+- [Importing a Sisu plan](/docs/guides/sisu-import.md) for the Sisu saved page, plan PDF, capture and script.
+- [Importing a Peppi plan](/docs/guides/peppi-import.md) for the Peppi HOPS saved page, capture and script.
 - [Profiles and language](/docs/guides/profiles-and-language.md) for named profiles and the interface language.
 - [Sending feedback](/docs/guides/feedback.md) for the feedback form, its images and its publication choice.
 - [Using the app on a phone](/docs/guides/phone.md) for the bottom bar, the **More** sheet, and the option sheets of each tab.

@@ -56,6 +56,9 @@ export type MinimumRoute = PrerequisitePath & {
   inferred_coverage: SolverStructure["inferred_coverage"];
 };
 
+/** One route result before its assumed-credit use flag is attached. */
+type RouteDraft = Omit<MinimumRoute, "uses_assumed_credits">;
+
 /** Return every drawn node bound to the supplied scoped supports. */
 function nodeIdsForSupports(
   structure: SolverStructure,
@@ -123,7 +126,7 @@ function exactZero(
   satisfaction: SatisfactionEvaluation,
   coverage: SolverStructure["inferred_coverage"],
   blockedExcludedGroupIds: string[] = [],
-): MinimumRoute {
+): RouteDraft {
   return {
     state: "exact",
     new_courses: [],
@@ -154,7 +157,7 @@ function nonExact(
     problems?: PathProblem[];
     blockedExcludedNodeKeys?: string[];
   } = {},
-): MinimumRoute {
+): RouteDraft {
   return {
     state,
     new_courses: [],
@@ -202,8 +205,8 @@ function referencedFacts(
 /** Add every fact referenced by the result's located records to its machine facts. */
 function attachFacts(
   structure: SolverStructure,
-  result: MinimumRoute,
-): MinimumRoute {
+  result: RouteDraft,
+): RouteDraft {
   const supports = new Set<string>();
   for (const problem of result.problems) {
     if (problem.support_id !== null) {
@@ -301,6 +304,7 @@ function exactResult(
   drawing: DrawingNode,
   summariesByGroupId: ReadonlyMap<string, SolverStructure["courses"][number]>,
   opaqueCredits: ReadonlyMap<string, number>,
+  credits: ReadonlyMap<string, number>,
   coverage: SolverStructure["inferred_coverage"],
   blockedExcludedGroupIds: string[],
   options: {
@@ -309,12 +313,12 @@ function exactResult(
     problems: PathProblem[];
     blockedExcludedNodeKeys?: string[];
   },
-): MinimumRoute {
+): RouteDraft {
   const newCourses = buildNewCourses(selected, summariesByGroupId, structure);
   const newOpaqueWork = buildOpaqueWork(selected, opaqueCredits, structure);
   let total = 0;
   for (const entry of newCourses) {
-    total += parseCredits(entry.course.credits_min);
+    total += credits.get(entry.course.group_id)!;
   }
   for (const entry of newOpaqueWork) {
     total += parseCredits(entry.credits_min);
@@ -552,10 +556,11 @@ function evaluatePrimaryCandidates(
 function solvePath(
   structure: SolverStructure,
   satisfaction: SatisfactionEvaluation,
+  assumedCourseCredits: string,
   maxCompactNodes: number | null,
-): MinimumRoute {
+): RouteDraft {
   const coverage = structure.inferred_coverage;
-  const credits = structureCreditsByGroupId(structure);
+  const credits = structureCreditsByGroupId(structure, assumedCourseCredits);
   const summariesByGroupId = new Map(
     structure.courses.map((course) => [course.group_id, course]),
   );
@@ -604,6 +609,7 @@ function solvePath(
       chosen.drawing,
       summariesByGroupId,
       opaqueCredits,
+      credits,
       coverage,
       primary.blockedExcludedGroupIds,
       {
@@ -655,6 +661,7 @@ function solvePath(
     chosen.drawing,
     summariesByGroupId,
     opaqueCredits,
+    credits,
     coverage,
     primary.blockedExcludedGroupIds,
     {
@@ -670,12 +677,13 @@ function solvePath(
 function solveGreedyPath(
   structure: SolverStructure,
   satisfaction: SatisfactionEvaluation,
-): MinimumRoute {
+  assumedCourseCredits: string,
+): RouteDraft {
   const coverage = structure.inferred_coverage;
   if (structure.root_use_id === null) {
     return exactZero(satisfaction, coverage);
   }
-  const credits = structureCreditsByGroupId(structure);
+  const credits = structureCreditsByGroupId(structure, assumedCourseCredits);
   const summariesByGroupId = new Map(
     structure.courses.map((course) => [course.group_id, course]),
   );
@@ -716,6 +724,7 @@ function solveGreedyPath(
     route.drawing,
     summariesByGroupId,
     opaqueCredits,
+    credits,
     coverage,
     [...evaluator.blockedExcludedGroupIds].sort(compareText),
     {
@@ -734,7 +743,7 @@ function solveGreedyPath(
 function approximationFailed(
   structure: SolverStructure,
   satisfaction: SatisfactionEvaluation,
-): MinimumRoute {
+): RouteDraft {
   const problem: PathProblem = {
     node_id: `course:${structure.root_group_id}`,
     support_id: null,
@@ -764,6 +773,18 @@ function approximationFailed(
   };
 }
 
+/** Attach the exact assumed-credit use flag to one route draft. */
+function withAssumption(
+  result: RouteDraft,
+  satisfaction: SatisfactionEvaluation,
+): MinimumRoute {
+  const uses =
+    satisfaction.uses_assumed_credits ||
+    result.new_courses.some((entry) => entry.course.credits_min === null) ||
+    result.covered_courses.some((course) => course.credits_min === null);
+  return { ...result, uses_assumed_credits: uses };
+}
+
 /**
  * Return the exact, approximate or shortfall minimum-new-credit route for one solver structure.
  *
@@ -773,12 +794,17 @@ function approximationFailed(
 export function calculateMinimumNewCredits(
   structure: SolverStructure,
   basisGroupIds: Iterable<string>,
+  assumedCourseCredits: string,
   maxCompactNodes: number | null = null,
 ): MinimumRoute {
   if (maxCompactNodes !== null && maxCompactNodes <= 0) {
     throw new Error("maxCompactNodes must be positive");
   }
-  const satisfaction = evaluateSatisfaction(structure, basisGroupIds);
+  const satisfaction = evaluateSatisfaction(
+    structure,
+    basisGroupIds,
+    assumedCourseCredits,
+  );
   const coverage = structure.inferred_coverage;
   if (structure.excluded_group_ids.includes(structure.root_group_id)) {
     const rootGroupId = structure.root_group_id;
@@ -791,26 +817,46 @@ export function calculateMinimumNewCredits(
       detail: null,
       referenced_group_id: rootGroupId,
     };
-    return attachFacts(
-      structure,
-      nonExact(satisfaction, "no_solution", [], coverage, [rootGroupId], {
-        problems: [rootProblem],
-        blockedExcludedNodeKeys: [`course:${rootGroupId}`],
-      }),
+    return withAssumption(
+      attachFacts(
+        structure,
+        nonExact(satisfaction, "no_solution", [], coverage, [rootGroupId], {
+          problems: [rootProblem],
+          blockedExcludedNodeKeys: [`course:${rootGroupId}`],
+        }),
+      ),
+      satisfaction,
     );
   }
   if (satisfaction.requirements_state === "satisfied") {
-    return attachFacts(structure, exactZero(satisfaction, coverage));
+    return withAssumption(
+      attachFacts(structure, exactZero(satisfaction, coverage)),
+      satisfaction,
+    );
   }
   try {
-    return attachFacts(
-      structure,
-      solvePath(structure, satisfaction, maxCompactNodes),
+    return withAssumption(
+      attachFacts(
+        structure,
+        solvePath(
+          structure,
+          satisfaction,
+          assumedCourseCredits,
+          maxCompactNodes,
+        ),
+      ),
+      satisfaction,
     );
   } catch (error) {
     if (!(error instanceof PathSizeLimitExceeded) || maxCompactNodes === null) {
       throw error;
     }
   }
-  return attachFacts(structure, solveGreedyPath(structure, satisfaction));
+  return withAssumption(
+    attachFacts(
+      structure,
+      solveGreedyPath(structure, satisfaction, assumedCourseCredits),
+    ),
+    satisfaction,
+  );
 }

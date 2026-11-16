@@ -14,7 +14,7 @@ from course_explorer.comparison.service import (
 from course_explorer.config import SearchSettings
 from course_explorer.embeddings.hub import subtract_hub, subtract_hub_rows
 from course_explorer.embeddings.read import TeachingEmbeddingChunk
-from course_explorer.enums import TeachingTextField, TeachingTextLanguage, TeachingTextOrigin
+from course_explorer.enums import TeachingTextField, TeachingTextOrigin
 from tests.support import settings_factory
 
 
@@ -23,7 +23,7 @@ def _chunk(
     *,
     vector: tuple[float, ...],
     field: TeachingTextField = TeachingTextField.CONTENT,
-    language: TeachingTextLanguage = TeachingTextLanguage.EN,
+    language: str = "en",
     chunk_index: int = 0,
     characters: int = 10,
 ) -> TeachingEmbeddingChunk:
@@ -72,6 +72,7 @@ def test_hub_subtraction_removes_a_shared_component() -> None:
         settings=settings,
         hub=(0.0, 0.0),
         outcomes_hub=(0.0, 0.0),
+        official_languages=("fi", "en"),
     )
     centred = compare_teaching_chunks(
         (_chunk("a", vector=(1.0, 0.1)),),
@@ -79,6 +80,7 @@ def test_hub_subtraction_removes_a_shared_component() -> None:
         settings=settings,
         hub=shared,
         outcomes_hub=shared,
+        official_languages=("fi", "en"),
     )
     assert raw.content_similarity > 90.0
     assert centred.content_similarity == pytest.approx(0.0)
@@ -103,6 +105,7 @@ def test_comparison_identical_chunks_are_fully_similar_and_overlapping() -> None
         settings=settings,
         hub=_HUB,
         outcomes_hub=_HUB,
+        official_languages=("fi", "en"),
     )
     assert identical.content_similarity == pytest.approx(100.0)
     assert identical.learning_outcome_similarity is None
@@ -122,7 +125,9 @@ def test_prepared_overlap_preserves_directional_containment() -> None:
     )
     prepared = PreparedTeachingOverlap(b)
     prepared_overlap = prepared.compare(a, floor=0.0, ceiling=1.0)
-    contained = compare_teaching_chunks(a, b, settings=settings, hub=_HUB, outcomes_hub=_HUB)
+    contained = compare_teaching_chunks(
+        a, b, settings=settings, hub=_HUB, outcomes_hub=_HUB, official_languages=("fi", "en")
+    )
     assert prepared_overlap == contained.overlap
     assert contained.overlap.a_in_b == pytest.approx(100.0)
     assert contained.overlap.b_in_a == pytest.approx(10.0)
@@ -139,7 +144,12 @@ def test_graded_overlap_is_partial_for_partly_shared_chunks() -> None:
     )
     thematic_b = (_chunk("b", vector=(1.0, 1.0)),)
     thematic = compare_teaching_chunks(
-        thematic_a, thematic_b, settings=settings, hub=_HUB, outcomes_hub=_HUB
+        thematic_a,
+        thematic_b,
+        settings=settings,
+        hub=_HUB,
+        outcomes_hub=_HUB,
+        official_languages=("fi", "en"),
     )
     assert thematic.overall_relatedness == pytest.approx(100.0)
     assert thematic.overlap.a_in_b == pytest.approx(70.7, abs=0.1)
@@ -156,6 +166,7 @@ def test_partial_overlap_uses_configured_verdict() -> None:
         settings=settings,
         hub=_HUB,
         outcomes_hub=_HUB,
+        official_languages=("fi", "en"),
     )
     assert partial.overlap.a_in_b == pytest.approx(60.0)
     assert partial.overlap.b_in_a == pytest.approx(60.0)
@@ -171,6 +182,7 @@ def test_unrelated_chunks_have_zero_similarity_and_overlap() -> None:
         settings=settings,
         hub=_HUB,
         outcomes_hub=_HUB,
+        official_languages=("fi", "en"),
     )
     assert unrelated.content_similarity == pytest.approx(0.0)
     assert unrelated.overall_relatedness == pytest.approx(0.0)
@@ -187,6 +199,7 @@ def test_name_only_relatedness_has_no_descriptive_overlap() -> None:
         settings=settings,
         hub=_HUB,
         outcomes_hub=_HUB,
+        official_languages=("fi", "en"),
     )
     assert name_only.content_similarity is None
     assert name_only.learning_outcome_similarity is None
@@ -200,11 +213,12 @@ def test_disjoint_languages_have_unavailable_meters() -> None:
     """Disjoint languages leave every meter without a value."""
     settings = _settings()
     disjoint = compare_teaching_chunks(
-        (_chunk("a", language=TeachingTextLanguage.FI, vector=(1.0, 0.0)),),
-        (_chunk("b", language=TeachingTextLanguage.EN, vector=(1.0, 0.0)),),
+        (_chunk("a", language="fi", vector=(1.0, 0.0)),),
+        (_chunk("b", language="en", vector=(1.0, 0.0)),),
         settings=settings,
         hub=_HUB,
         outcomes_hub=_HUB,
+        official_languages=("fi", "en"),
     )
     assert disjoint.content_similarity is None
     assert disjoint.learning_outcome_similarity is None
@@ -215,21 +229,24 @@ def test_disjoint_languages_have_unavailable_meters() -> None:
 
 
 def test_common_languages_are_averaged_equally() -> None:
-    """Both common languages weigh equally in the average."""
+    """Each shared language weighs equally in the average, including Swedish."""
     settings = _settings()
     mixed = compare_teaching_chunks(
         (
-            _chunk("a", language=TeachingTextLanguage.FI, vector=(1.0, 0.0)),
-            _chunk("a", language=TeachingTextLanguage.EN, vector=(1.0, 0.0)),
+            _chunk("a", language="fi", vector=(1.0, 0.0)),
+            _chunk("a", language="en", vector=(1.0, 0.0)),
+            _chunk("a", language="sv", vector=(1.0, 0.0)),
         ),
         (
-            _chunk("b", language=TeachingTextLanguage.FI, vector=(1.0, 0.0)),
-            _chunk("b", language=TeachingTextLanguage.EN, vector=(0.0, 1.0)),
+            _chunk("b", language="fi", vector=(1.0, 0.0)),
+            _chunk("b", language="en", vector=(0.0, 1.0)),
+            _chunk("b", language="sv", vector=(1.0, 0.0)),
         ),
         settings=settings,
         hub=_HUB,
         outcomes_hub=_HUB,
+        official_languages=("fi", "en"),
     )
-    assert mixed.content_similarity == pytest.approx(50.0)
-    assert mixed.overlap.a_in_b == pytest.approx(50.0)
-    assert mixed.overlap.b_in_a == pytest.approx(50.0)
+    assert mixed.content_similarity == pytest.approx(200.0 / 3.0)
+    assert mixed.overlap.a_in_b == pytest.approx(200.0 / 3.0)
+    assert mixed.overlap.b_in_a == pytest.approx(200.0 / 3.0)

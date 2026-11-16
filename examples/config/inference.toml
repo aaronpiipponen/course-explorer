@@ -68,6 +68,11 @@ INFERENCE_PROPOSAL_VERSION = "v1"
 # selection mechanics. The solo fit-only MIX model above is the operating local policy.
 INFERENCE_MULTIVIEW_EVALUATION_FIELDS = ["name", "content", "outcomes"]
 INFERENCE_MULTIVIEW_FUSION_RANK_OFFSET = 60
+# Optional inference prompt field selection. When omitted, the configured university map entry's
+# target and pool defaults apply. `INFERENCE_TARGET_FIELDS` and `INFERENCE_POOL_FIELDS` each take an
+# array of field names from name, content, outcomes, prerequisite_text and additional_info, in that
+# order.
+
 # Embedding pool depth consumed by the installed operational CE-only selection stage
 # `select_operational_multiview_pool`. K=1000 is the operational selection depth.
 INFERENCE_SELECTION_POOL_K = 1000

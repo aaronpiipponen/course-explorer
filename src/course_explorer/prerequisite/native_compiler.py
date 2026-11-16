@@ -51,7 +51,7 @@ if TYPE_CHECKING:
     from course_explorer.prerequisite.projection import PrerequisiteGraphCompilation
 
 # Format version the loaded compiler library must report.
-FORMAT_VERSION = 5
+FORMAT_VERSION = 7
 _NATIVE_LOCK = threading.RLock()
 
 _PIECE_KINDS = {
@@ -178,7 +178,7 @@ class _Course(ctypes.Structure):
 class _Module(ctypes.Structure):
     _fields_ = [
         ("group_id", ctypes.c_char_p),
-        ("sisu_module_id", ctypes.c_char_p),
+        ("source_version_id", ctypes.c_char_p),
         ("module_type", ctypes.c_char_p),
         ("code", ctypes.c_char_p),
         ("name_fi", ctypes.c_char_p),
@@ -330,17 +330,23 @@ class _NativeOutcome(ctypes.Structure):
         ("recommended_coverage", ctypes.c_double),
         ("has_required", ctypes.c_int),
         ("has_recommended", ctypes.c_int),
+        ("uses_assumed_credits", ctypes.c_int),
     ]
 
 
 @dataclass(frozen=True)
 class NativeOutcome:
-    """One structure's native eligibility and coverage outcome."""
+    """One structure's native eligibility and coverage outcome.
+
+    `uses_assumed_credits` reports a credit-bound piece that retained a course whose minimum
+    credit was substituted.
+    """
 
     compilation: DirectPrerequisiteCompilation | DirectPrerequisiteSummaryCompilation
     has_outcome: bool
     required_coverage: float | None
     recommended_coverage: float | None
+    uses_assumed_credits: bool
 
 
 def _text(value: bytes | None) -> str:
@@ -373,7 +379,7 @@ def _courses(structure: _Structure) -> tuple[CourseSummary, ...]:
                 name_fi=_text(record.name_fi) if record.has_name_fi else None,
                 name_en=_text(record.name_en) if record.has_name_en else None,
                 code=_text(record.code),
-                credits_min=Decimal(_text(record.credits_min)),
+                credits_min=_decimal(record.credits_min),
                 credits_max=Decimal(_text(record.credits_max)) if record.has_credits_max else None,
                 is_active=bool(record.is_active),
                 official_url=_text(record.official_url),
@@ -477,7 +483,7 @@ def _modules(structure: _Structure) -> tuple[ModuleSummary, ...]:
         modules.append(
             ModuleSummary.model_construct(
                 group_id=_text(record.group_id),
-                sisu_module_id=_text(record.sisu_module_id),
+                source_version_id=_text(record.source_version_id),
                 module_type=ModuleType(_text(record.module_type)),
                 code=_text(record.code) if record.has_code else None,
                 name_fi=_text(record.name_fi) if record.has_name_fi else None,
@@ -702,10 +708,23 @@ class NativeBundle:
         self.structures = structures
         self._library = library
 
-    def evaluate(self, basis: tuple[str, ...], *, mode: int) -> tuple[NativeOutcome, ...]:
-        """Return every structure's native outcome in bundle order."""
+    def evaluate(
+        self,
+        basis: tuple[str, ...],
+        *,
+        mode: int,
+        assumed_course_credits: Decimal,
+    ) -> tuple[NativeOutcome, ...]:
+        """Return every structure's native outcome in bundle order.
+
+        ``assumed_course_credits`` is a positive credit amount. A value that is not positive after
+        conversion to hundredths of a credit raises ``ValueError``, as does a failed native call.
+        """
         library = self._library
         basis_buffer, basis_offsets = _blob(basis)
+        assumed_hundredths = int((assumed_course_credits * 100).to_integral_value())
+        if assumed_hundredths <= 0:
+            raise ValueError("assumed course credits must be positive")
         outcomes = (_NativeOutcome * len(self.structures))()
         written = library.course_prerequisite_evaluate(
             self._pointer,
@@ -713,6 +732,7 @@ class NativeBundle:
             basis_offsets,
             len(basis),
             mode,
+            assumed_hundredths,
             outcomes,
             len(self.structures),
         )
@@ -737,6 +757,7 @@ class NativeBundle:
                     if outcomes[index].recommended_coverage < 0
                     else outcomes[index].recommended_coverage
                 ),
+                uses_assumed_credits=bool(outcomes[index].uses_assumed_credits),
             )
             for index in range(written)
         )
@@ -755,7 +776,11 @@ def _library_path() -> Path:
 def _configure(library: ctypes.CDLL) -> Callable[[], int]:
     library.course_prerequisite_version.restype = ctypes.c_int32
     library.course_prerequisite_open.restype = ctypes.c_int
-    library.course_prerequisite_open.argtypes = [ctypes.c_char_p]
+    library.course_prerequisite_open.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+    ]
     library.course_prerequisite_close.argtypes = [ctypes.c_int]
     library.course_prerequisite_compile_bundle.restype = ctypes.c_void_p
     library.course_prerequisite_compile_bundle.argtypes = [
@@ -796,6 +821,7 @@ def _configure(library: ctypes.CDLL) -> Callable[[], int]:
         ctypes.POINTER(ctypes.c_int64),
         ctypes.c_int,
         ctypes.c_int,
+        ctypes.c_int64,
         ctypes.POINTER(_NativeOutcome),
         ctypes.c_int,
     ]

@@ -13,7 +13,9 @@ Every selected unit is validated through ``server.read_owned_site_unit`` before 
 rebuild and no restart can reach another application's service. The steps
 run in one fixed order, each bounded by the configured stop timeout, and the first failure stops the
 command without a later step, a rollback, a retry or a success report. The administration restart
-returns once the queue admits the request.
+returns once the queue admits the request. ``rebuild_site`` holds the checkout reservation for its
+whole body, so it refuses while a preparation stage or a Working operation holds it. The
+administration build and the web-only restart take no reservation.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ from course_explorer.config import (
     load_administrative_site_settings,
     load_local_lifecycle_settings,
 )
-from course_explorer_admin import mechanics, server
+from course_explorer_admin import machine_locks, mechanics, server
 
 # The exact ordered steps a completed rebuild names, as its transient acknowledgment.
 REBUILD_STEPS: tuple[str, ...] = ("frontend", "containers", "web", "bind")
@@ -152,35 +154,38 @@ def restart_web(website: server.WebsiteStatus, *, runner: mechanics.ProcessRunne
 def rebuild_site(*, runner: mechanics.ProcessRunner) -> RebuildReport:
     """Rebuild the frontend, the two containers, the web unit and its verified bind.
 
+    The checkout reservation is held for the whole rebuild, so a preparation stage or a Working
+    operation refuses before the web-unit read and before any frontend output or container change.
     Every step is checked. The frontend build runs from the checkout with its installed
     dependencies, the containers are recreated from their prepared images without a build or a
     download, the unit restarts through its configured manager, and the restarted unit must answer
     on the configured loopback bind.
     """
-    root = administration.repository_root()
-    # The checkout's own unit is validated before any frontend output or container changes.
-    website = server.read_web_service(runner=runner)
-    settings = load_local_lifecycle_settings()
-    timeout = settings.stop_timeout_seconds
+    with machine_locks.checkout_reservation("rebuild_site"):
+        root = administration.repository_root()
+        # The checkout's own unit is validated before any frontend output or container changes.
+        website = server.read_web_service(runner=runner)
+        settings = load_local_lifecycle_settings()
+        timeout = settings.stop_timeout_seconds
 
-    runner.run(("npm", "--prefix", "web", "run", "build"), cwd=root, timeout=timeout)
-    runner.run(
-        (
-            *mechanics.compose_prefix(non_interactive=True, interpreter=True),
-            "up",
-            "-d",
-            "--wait",
-            "--force-recreate",
-            "--no-build",
-            "--pull",
-            "never",
-            *REBUILD_SERVICES,
-        ),
-        cwd=root,
-        timeout=timeout,
-    )
-    restart_web(website, runner=runner)
-    return RebuildReport(steps=REBUILD_STEPS, host=website.host, port=website.port)
+        runner.run(("npm", "--prefix", "web", "run", "build"), cwd=root, timeout=timeout)
+        runner.run(
+            (
+                *mechanics.compose_prefix(non_interactive=True, interpreter=True),
+                "up",
+                "-d",
+                "--wait",
+                "--force-recreate",
+                "--no-build",
+                "--pull",
+                "never",
+                *REBUILD_SERVICES,
+            ),
+            cwd=root,
+            timeout=timeout,
+        )
+        restart_web(website, runner=runner)
+        return RebuildReport(steps=REBUILD_STEPS, host=website.host, port=website.port)
 
 
 def rebuild_admin(*, runner: mechanics.ProcessRunner) -> AdminRebuildReport:

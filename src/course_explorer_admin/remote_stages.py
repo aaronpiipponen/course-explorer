@@ -7,7 +7,8 @@ detached worker-run launch, a progress poll that forwards no control, a foregrou
 pause and a foreground finalize hook for stop. The whole worker database is returned, verified and
 published as Working through the dataset owner, then dropped only after the server receipt exists.
 Stage DTO logic lives in the two policy/status seams, and every transport construction goes through
-``_transport``.
+``_transport``. Each adapter takes the checkout reservation on this machine and the worker
+reservation on the worker.
 """
 
 from __future__ import annotations
@@ -30,12 +31,11 @@ from course_explorer.config import (
     WorkerConnectionSettings,
     load_administrative_dataset_settings,
     load_inference_controller_settings,
+    load_instance_settings,
     load_translation_controller_settings,
-    load_translation_settings,
     load_worker_gpu_reboot_settings,
 )
-from course_explorer.hashing import json_sha256
-from course_explorer_admin import mechanics, reboot, remote
+from course_explorer_admin import machine_locks, mechanics, reboot, remote
 from course_explorer_admin.datasets import admin_state_root
 from course_explorer_admin.inference.controller import (
     InferenceControllerPolicy,
@@ -57,7 +57,9 @@ from course_explorer_admin.lifecycle import (
 )
 from course_explorer_admin.local_stages import (
     require_working_database_schema,
+    reserve_local_stage,
     stage_identity_sha256,
+    unreserve_local_stage,
 )
 from course_explorer_admin.remote import (
     WorkerControllerStatus,
@@ -69,6 +71,7 @@ from course_explorer_admin.translation.controller import (
     TranslationControllerPolicy,
     TranslationControllerStatus,
     load_translation_dataset_session,
+    translation_configuration_sha256,
 )
 from course_explorer_admin.transport import (
     SshWslTransport,
@@ -506,6 +509,56 @@ class RemoteStage:
 
     def require_database(self) -> None:
         require_working_database_schema()
+
+    def reserve(self, session_id: str, *, runner: mechanics.ProcessRunner) -> None:
+        """Take the local checkout reservation and the machine-wide worker reservation.
+
+        The worker read renders the held owner in the refusal, and the worker acquire is the atomic
+        check. Any worker-side failure releases the checkout reservation only when this call created
+        it.
+        """
+        instance_key = load_instance_settings().instance_key
+        checkout_created = reserve_local_stage(self.name, session_id, ("checkout",))
+        owner = machine_locks.configured_owner(self.name, session_id)
+        try:
+            connection = self.connection()
+            transport = _transport(runner, connection)
+            payload = _worker_helper(
+                transport,
+                connection,
+                "course_explorer_admin.machine_locks",
+                ("read", "worker", instance_key, self.name, session_id),
+            )
+            held = (
+                machine_locks.Reservation.model_validate_json(payload) if payload.strip() else None
+            )
+            if held is not None and held != owner:
+                raise RuntimeError(
+                    f"worker reservation is held by {held.operation} in {held.instance_key}"
+                )
+            _worker_helper(
+                transport,
+                connection,
+                "course_explorer_admin.machine_locks",
+                ("acquire", "worker", instance_key, self.name, session_id),
+            )
+        except Exception:
+            if checkout_created:
+                unreserve_local_stage(self.name, session_id, ("checkout",))
+            raise
+
+    def unreserve(self, session_id: str, *, runner: mechanics.ProcessRunner) -> None:
+        """Release the worker reservation, then the local checkout reservation."""
+        connection = self.connection()
+        transport = _transport(runner, connection)
+        instance_key = load_instance_settings().instance_key
+        _worker_helper(
+            transport,
+            connection,
+            "course_explorer_admin.machine_locks",
+            ("release", "worker", instance_key, self.name, session_id),
+        )
+        unreserve_local_stage(self.name, session_id, ("checkout",))
 
     def _progress(self, status: WorkerControllerStatus) -> TranslationProgress | InferenceProgress:
         if self.name == "translation":
@@ -1018,13 +1071,11 @@ def translation_stage() -> RemoteStage:
         startup_attempts=connection.translation_controller_health_attempts,
         load_session=load_translation_dataset_session,
         make_policy=lambda session_id: TranslationControllerPolicy(
-            schema_version=2,
+            schema_version=3,
             session_id=session_id,
-            translation_model=load_translation_settings().provenance_model,
+            configuration_sha256=translation_configuration_sha256(),
         ),
-        configuration_sha256=lambda: json_sha256(
-            {"model": load_translation_settings().provenance_model}, ensure_ascii=True
-        ),
+        configuration_sha256=translation_configuration_sha256,
     )
 
 

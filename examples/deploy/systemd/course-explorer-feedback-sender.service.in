@@ -1,6 +1,6 @@
 # One bounded feedback publication attempt, scheduled by its paired timer.
 [Unit]
-Description=TUNI Course Explorer feedback publication sender
+Description=course-explorer feedback publication sender
 
 [Service]
 Type=oneshot

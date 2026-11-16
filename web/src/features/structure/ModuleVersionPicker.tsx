@@ -11,7 +11,7 @@ import { moduleName } from "./presentation";
 
 /** One version row's exact group and version identity. */
 const versionKey = (module: CatalogueModule) =>
-  JSON.stringify([module.group_id, module.sisu_module_id]);
+  JSON.stringify([module.group_id, module.source_version_id]);
 
 /**
  * Show every candidate of one exact group as a native selectable row.

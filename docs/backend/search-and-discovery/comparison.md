@@ -33,7 +33,7 @@ The diagram shows the two courses entering the comparison through their stored c
 
 ## Languages and fields
 
-Every meter is computed one language at a time. Finnish text is measured against Finnish text and English text against English text, so a meter that has no language in common between the two courses has no value.
+Every meter is computed one language at a time. Text of one configured language is measured against text of the same language, so a meter that has no language in common between the two courses has no value. The languages iterate in the configured university's official-language order, then the remaining shared codes in sorted order.
 
 Content similarity measures content against content, and Learning-outcome similarity measures learning outcomes against learning outcomes, so a similarity meter reads one field on both sides. Overall relatedness combines the name, the content, and the learning outcomes of the two courses with configured weights, and it counts a field of one language only when both courses carry that field, so the weights are shared by the fields the pair has in common.
 

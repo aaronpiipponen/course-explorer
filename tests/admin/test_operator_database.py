@@ -9,18 +9,26 @@ any processing, model, or state work.
 
 from __future__ import annotations
 
+import json
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from alembic import command
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
-from sqlalchemy import Engine, func, select, text
+from sqlalchemy import Engine, func, select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from course_explorer import administration
 from course_explorer.administration import administrative_json, atomic_write_private_text
-from course_explorer.config import load_inference_settings, load_normalization_settings
+from course_explorer.config import (
+    load_inference_settings,
+    load_normalization_settings,
+    load_raw_database_settings,
+)
+from course_explorer.configuration import clear_configuration_caches
 from course_explorer.datasets import (
     DatabaseSchemaMismatchError,
     DatasetPointer,
@@ -29,18 +37,26 @@ from course_explorer.datasets import (
 )
 from course_explorer.db.models import (
     Course,
-    CourseText,
     CourseVersion,
+    CourseVersionCurriculumPeriod,
+    CurriculumPeriod,
     InferenceCourseProcessing,
     InferenceModelAttempt,
     InferenceProposal,
+    IngestionRun,
+    OfficialCourseText,
 )
-from course_explorer.db.session import session_scope
+from course_explorer.db.session import (
+    create_database_engine,
+    create_session_factory,
+    session_scope,
+)
 from course_explorer.enums import (
+    OfficialTextField,
     TeachingTextField,
-    TeachingTextLanguage,
 )
 from course_explorer_admin import commands, worker_session
+from course_explorer_admin import datasets as datasets_module
 from course_explorer_admin.inference import controller_worker as inference_worker
 from course_explorer_admin.inference import disposition as disposition_module
 from course_explorer_admin.lifecycle import (
@@ -54,6 +70,7 @@ from tests.admin.inference import _worker_support as inference_support
 from tests.admin.translation import _worker_support as translation_support
 from tests.datasets._support import sample_receipt, sample_verification
 from tests.inference._scheduling_support import reconcile, seed_courses
+from tests.support import write_example_config_tree
 from tests.support.repository import scratch_repository
 
 SESSION_ID = "0123456789abcdef0123456789abcdef"
@@ -115,6 +132,27 @@ def _seed_report_catalogue(factory: sessionmaker) -> tuple[str, ...]:
         for index in range(_INACTIVE_COUNT)
     ]
     seed_courses(factory, active_specs + inactive_specs)
+
+    def set_cell(session, version_id, field, language: str, text: str) -> None:
+        cell = session.scalar(
+            select(OfficialCourseText).where(
+                OfficialCourseText.course_version_id == version_id,
+                OfficialCourseText.field == field,
+                OfficialCourseText.language == language,
+            )
+        )
+        if cell is None:
+            session.add(
+                OfficialCourseText(
+                    course_version_id=version_id,
+                    field=field,
+                    language=language,
+                    text=text,
+                )
+            )
+        else:
+            cell.text = text
+
     with session_scope(factory) as session:
         for group_id, _code, name_en, name_fi, content_fi, outcomes_fi in _ACTIVE_TARGETS:
             course = session.scalar(select(Course).where(Course.group_id == group_id))
@@ -125,15 +163,10 @@ def _seed_report_catalogue(factory: sessionmaker) -> tuple[str, ...]:
             )
             if version is None:
                 raise RuntimeError("seeded active target version is missing")
-            version.name_en = name_en
-            version.name_fi = name_fi
-            text = session.scalar(
-                select(CourseText).where(CourseText.course_version_id == version.id)
-            )
-            if text is None:
-                raise RuntimeError("seeded active target text is missing")
-            text.content_fi = content_fi
-            text.outcomes_fi = outcomes_fi
+            set_cell(session, version.id, OfficialTextField.NAME, "en", name_en)
+            set_cell(session, version.id, OfficialTextField.NAME, "fi", name_fi)
+            set_cell(session, version.id, OfficialTextField.CONTENT, "fi", content_fi)
+            set_cell(session, version.id, OfficialTextField.OUTCOMES, "fi", outcomes_fi)
         for index in range(_INACTIVE_COUNT):
             group_id = f"admin-live-source-{index:04d}"
             course = session.scalar(select(Course).where(Course.group_id == group_id))
@@ -144,13 +177,8 @@ def _seed_report_catalogue(factory: sessionmaker) -> tuple[str, ...]:
             )
             if version is None:
                 raise RuntimeError("seeded inactive source version is missing")
-            text = session.scalar(
-                select(CourseText).where(CourseText.course_version_id == version.id)
-            )
-            if text is None:
-                raise RuntimeError("seeded inactive source text is missing")
-            text.content_fi = _INACTIVE_CONTENT_FI
-            text.content_en = _INACTIVE_CONTENT_EN
+            set_cell(session, version.id, OfficialTextField.CONTENT, "fi", _INACTIVE_CONTENT_FI)
+            set_cell(session, version.id, OfficialTextField.CONTENT, "en", _INACTIVE_CONTENT_EN)
     return tuple(
         [group_id for group_id, _code, *_rest in _ACTIVE_TARGETS]
         + [f"admin-live-source-{index:04d}" for index in range(_INACTIVE_COUNT)]
@@ -186,7 +214,7 @@ def _count(engine: Engine, model: object) -> int:
         return int(connection.execute(select(func.count()).select_from(model)).scalar_one())
 
 
-def _field(report, field: TeachingTextField, language: TeachingTextLanguage):
+def _field(report, field: TeachingTextField, language: str):
     for count in report.fields:
         if count.field == field and count.language == language:
             return count
@@ -224,13 +252,8 @@ def test_operator_reports_read_selected_disposable_fixture_without_writes(
         assert catalogue.active_course_count == 3
 
         teaching = commands.run_administrative_coverage("teaching-text", role="selected")
-        assert (
-            _field(teaching, TeachingTextField.CONTENT, TeachingTextLanguage.EN).missing_count == 3
-        )
-        assert (
-            _field(teaching, TeachingTextField.OUTCOMES, TeachingTextLanguage.EN).missing_count
-            == 1003
-        )
+        assert _field(teaching, TeachingTextField.CONTENT, "en").missing_count == 3
+        assert _field(teaching, TeachingTextField.OUTCOMES, "en").missing_count == 1003
         assert all(count.derived_count == 0 for count in teaching.fields)
 
         embedding = commands.run_administrative_coverage("embedding", role="selected")
@@ -530,3 +553,156 @@ def test_disposition_reads_selected_schema_and_guards_writes(
             assert _count(engine, InferenceProposal) == 0
     finally:
         _set_alembic_version(engine, head)
+
+
+def test_activity_configuration_save_refreshes_existing_dataset_roles(
+    database: tuple[Engine, object],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The real save refreshes both role databases without creating an import or changing pointers."""
+    engine, selected_factory = database
+    real_raw = load_raw_database_settings()
+    root = write_example_config_tree(tmp_path / "checkout")
+    monkeypatch.setattr(administration, "repository_root", lambda: root)
+    monkeypatch.setattr(datasets_module, "load_raw_database_settings", lambda: real_raw)
+    state_root_name = f"data/admin-{uuid.uuid4().hex}"
+    monkeypatch.setenv("ADMIN_STATE_ROOT", state_root_name)
+    monkeypatch.delenv("CURRENT_ACADEMIC_YEAR", raising=False)
+    monkeypatch.delenv("ACTIVE_ACADEMIC_YEAR_WINDOW", raising=False)
+    clear_configuration_caches()
+    clear_dataset_cache()
+
+    working_name = f"course_explorer_test_activity_{uuid.uuid4().hex[:8]}"
+    working_engine = None
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            connection.execute(text(f'CREATE DATABASE "{working_name}" TEMPLATE template0'))
+        working_settings = real_raw.model_copy(update={"postgres_db": working_name})
+        working_engine = create_database_engine(working_settings)
+        with working_engine.connect() as connection:
+            migration = AlembicConfig("alembic.ini")
+            migration.attributes["connection"] = connection
+            command.upgrade(migration, "head")
+        working_factory = create_session_factory(working_engine)
+
+        selected_id = "0" * 32
+        working_id = "1" * 32
+        selected_receipt = sample_receipt(dataset_id=selected_id, database_name=engine.url.database)
+        working_receipt = sample_receipt(
+            dataset_id=working_id,
+            database_name=working_name,
+            kind="copied",
+            predecessor_id=selected_id,
+            dump_sha256="b" * 64,
+        )
+        state_root = root / state_root_name
+        for receipt in (selected_receipt, working_receipt):
+            directory = state_root / "datasets" / receipt.dataset_id
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            atomic_write_private_text(directory / "receipt.json", administrative_json(receipt))
+        atomic_write_private_text(
+            state_root / "selected-dataset.json",
+            administrative_json(DatasetPointer(schema_version=1, dataset_id=selected_id)),
+        )
+        atomic_write_private_text(
+            state_root / "working-dataset.json",
+            administrative_json(DatasetPointer(schema_version=1, dataset_id=working_id)),
+        )
+        selected_pointer = (state_root / "selected-dataset.json").read_bytes()
+        working_pointer = (state_root / "working-dataset.json").read_bytes()
+        selected_receipt_bytes = (
+            state_root / "datasets" / selected_id / "receipt.json"
+        ).read_bytes()
+        working_receipt_bytes = (state_root / "datasets" / working_id / "receipt.json").read_bytes()
+
+        seed_courses(
+            selected_factory,
+            [("activity-2026", "AY.26", True), ("activity-2024", "AY.24", True)],
+        )
+        seed_courses(working_factory, [("activity-working", "AY.W", True)])
+        with session_scope(selected_factory) as session:
+            session.add(CurriculumPeriod(id="period-2024", academic_year_start=2024))
+            session.flush()
+            for group_id in ("activity-2026", "activity-2024"):
+                course = session.scalar(select(Course).where(Course.group_id == group_id))
+                assert course is not None
+                course.is_active = False
+                course.activity_as_of_academic_year_start = 2020
+                course.activity_window_years = 1
+            version = session.scalar(
+                select(CourseVersion)
+                .join(Course, Course.id == CourseVersion.course_id)
+                .where(Course.group_id == "activity-2024")
+            )
+            assert version is not None
+            session.execute(
+                update(CourseVersionCurriculumPeriod)
+                .where(CourseVersionCurriculumPeriod.course_version_id == version.id)
+                .values(curriculum_period_id="period-2024")
+            )
+            session.add(
+                CourseVersionCurriculumPeriod(
+                    course_version_id=version.id, curriculum_period_id="period-2026"
+                )
+            )
+        with session_scope(working_factory) as session:
+            course = session.scalar(select(Course).where(Course.group_id == "activity-working"))
+            assert course is not None
+            course.is_active = False
+            course.activity_as_of_academic_year_start = 2020
+            course.activity_window_years = 1
+
+        selected_runs = _count(engine, IngestionRun)
+        working_runs = _count(working_engine, IngestionRun)
+        report = commands.run_administrative_config_set(
+            "config/curriculum.toml", "CURRENT_ACADEMIC_YEAR", json.dumps("2024-2025")
+        )
+
+        assert report.file == "config/curriculum.toml"
+        assert report.key == "CURRENT_ACADEMIC_YEAR"
+        assert 'CURRENT_ACADEMIC_YEAR = "2024-2025"' in (
+            root / "config" / "curriculum.toml"
+        ).read_text(encoding="utf-8")
+        with session_scope(selected_factory) as session:
+            contexts = {
+                course.group_id: (
+                    course.first_listed_academic_year_start,
+                    course.last_listed_academic_year_start,
+                    course.is_active,
+                    course.activity_as_of_academic_year_start,
+                    course.activity_window_years,
+                )
+                for course in session.scalars(
+                    select(Course).where(Course.group_id.in_(("activity-2026", "activity-2024")))
+                )
+            }
+        assert contexts == {
+            "activity-2026": (2026, 2026, False, 2024, 3),
+            "activity-2024": (2024, 2026, True, 2024, 3),
+        }
+        with session_scope(working_factory) as session:
+            working_course = session.scalar(
+                select(Course).where(Course.group_id == "activity-working")
+            )
+            assert working_course is not None
+            assert working_course.is_active is False
+            assert working_course.activity_as_of_academic_year_start == 2024
+            assert working_course.activity_window_years == 3
+        assert _count(engine, IngestionRun) == selected_runs
+        assert _count(working_engine, IngestionRun) == working_runs
+        assert (state_root / "selected-dataset.json").read_bytes() == selected_pointer
+        assert (state_root / "working-dataset.json").read_bytes() == working_pointer
+        assert (
+            state_root / "datasets" / selected_id / "receipt.json"
+        ).read_bytes() == selected_receipt_bytes
+        assert (
+            state_root / "datasets" / working_id / "receipt.json"
+        ).read_bytes() == working_receipt_bytes
+    finally:
+        if working_engine is not None:
+            working_engine.dispose()
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{working_name}"'))
+        clear_dataset_cache()
+        clear_configuration_caches()

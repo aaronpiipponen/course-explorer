@@ -7,7 +7,6 @@
  */
 export const wording = {
   brand: "course-explorer",
-  brandSite: "tuni",
   admin: "Admin",
   app: "App",
   docs: "Docs",
@@ -358,9 +357,12 @@ export const wording = {
     invalidValue: "The {key} value is not valid JSON.",
     featureSwitches: "Feature switches",
     inferenceFeatures: "Inference features",
-    inferenceDetail: "Inferred toggle, inferred tags, Discover",
+    inferenceDetail: "Inferred toggle and inferred tags",
     embeddingFeatures: "Embedding features",
     embeddingDetail: "Recommendations, semantic tier, vector meters",
+    prerequisitesFeatures: "Prerequisite features",
+    prerequisitesDetail:
+      "Prerequisite graph and Next courses. Discover appears only while the embedding switch or this switch is on.",
     switchSaved: "{key} is {state}. Rebuild or restart applies it to serving.",
     backups: "Backups",
     file: "File",
@@ -371,11 +373,11 @@ export const wording = {
     noBackups: "No backup file is listed.",
     rebuild: "Rebuild",
     rebuildApp: "Rebuild app",
-    rebuildAdmin: "Rebuild admin panel",
+    rebuildAdmin: "Rebuild administration console",
     rebuildConfirm: "Rebuild this site's frontend, containers and web server?",
     rebuildAdminConfirm:
-      "Rebuild the admin panel? This signs all operators out.",
-    adminRebuilt: "The admin panel is restarting. Sign in again.",
+      "Rebuild the administration console? This signs all operators out.",
+    adminRebuilt: "The administration console is restarting. Sign in again.",
     rebuildSteps: {
       frontend: "Build the site frontend",
       containers: "Recreate the database and embedding containers",

@@ -1,8 +1,8 @@
-/** Transient result of one Sisu import: the items the placement left out and why. */
+/** Transient result of one study-plan import: the item label and issue row it renders. */
 import type { ReactNode } from "react";
 import { motion } from "framer-motion";
-import type { SisuImportIssue } from "./sisu";
-import { SISU_IMPORT_REASON_KEYS } from "./sisuImportWording";
+import type { ImportIssue } from "./plan";
+import { IMPORT_REASON_KEYS } from "./importWording";
 import { useReducedMotion } from "../../shared/useReducedMotion";
 import { useWording } from "../../shared/useWording";
 
@@ -12,40 +12,38 @@ export function itemLabel(item: { code: string | null; name: string }): string {
 }
 
 /** Render one captured item's label and the reason the import left it out. */
-export function SisuIssueItem({
+export function ImportIssueItem({
   label,
   reason,
   children,
 }: {
   label: string;
-  reason: SisuImportIssue["reason"];
+  reason: ImportIssue["reason"];
   children?: ReactNode;
 }) {
   const { t } = useWording();
   return (
     <>
-      <span className="sisu-import-item">{label}</span>
-      <span className="sisu-import-reason">
-        {t(SISU_IMPORT_REASON_KEYS[reason])}
-      </span>
+      <span className="import-item">{label}</span>
+      <span className="import-reason">{t(IMPORT_REASON_KEYS[reason])}</span>
       {children}
     </>
   );
 }
 
-/** Render the transient result of one Sisu import. */
-export function SisuImportNotice({
+/** Render the transient result of one study-plan import. */
+export function ImportNotice({
   issues,
   onDismiss,
 }: {
-  issues: readonly SisuImportIssue[];
+  issues: readonly ImportIssue[];
   onDismiss(): void;
 }) {
   const reducedMotion = useReducedMotion();
   const { t } = useWording();
   return (
     <motion.section
-      className="sisu-import-notice"
+      className="import-notice"
       role="status"
       initial={reducedMotion ? false : { opacity: 0, height: 0 }}
       animate={{ opacity: 1, height: "auto" }}
@@ -59,14 +57,14 @@ export function SisuImportNotice({
         ease: [0.22, 0.8, 0.2, 1],
       }}
     >
-      <div className="sisu-import-notice-body">
+      <div className="import-notice-body">
         <h2>{t("The import skipped some items")}</h2>
         <ul>
           {issues.map((issue, index) => (
             <li
               key={`${issue.reason}:${issue.code ?? ""}:${issue.name}:${index}`}
             >
-              <SisuIssueItem label={itemLabel(issue)} reason={issue.reason} />
+              <ImportIssueItem label={itemLabel(issue)} reason={issue.reason} />
             </li>
           ))}
         </ul>

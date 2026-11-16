@@ -18,6 +18,7 @@ describe("route minimum", () => {
     const result = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.compilation`),
       [],
+      "5",
     );
     expect(result.state).toBe("exact");
     expect(selectedGroupIds(result)).toEqual(["a", "b", "c"]);
@@ -26,16 +27,17 @@ describe("route minimum", () => {
     const overlapResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.overlap_compilation`),
       [],
+      "5",
     );
     expect(selectedGroupIds(overlapResult)).toEqual(["a"]);
     expect(creditsOf(overlapResult.total_new_credits)).toBe(200);
 
     const repeated = loadStructure(fixtures, `${prefix}.repeated_compilation`);
-    const repeatedResult = calculateMinimumNewCredits(repeated, ["a"]);
+    const repeatedResult = calculateMinimumNewCredits(repeated, ["a"], "5");
     expect(selectedGroupIds(repeatedResult)).toEqual(["b"]);
     expect(creditsOf(repeatedResult.total_new_credits)).toBe(400);
 
-    const incompleteResult = calculateMinimumNewCredits(repeated, []);
+    const incompleteResult = calculateMinimumNewCredits(repeated, [], "5");
     expect(selectedGroupIds(incompleteResult)).toEqual(["a", "b"]);
     expect(creditsOf(incompleteResult.total_new_credits)).toBe(600);
     const aEntry = incompleteResult.new_courses.find(
@@ -49,7 +51,7 @@ describe("route minimum", () => {
       fixtures,
       "minimum_path_expands_new_courses_and_directional_substitutions.substitution_compilation",
     );
-    const optionOneResult = calculateMinimumNewCredits(structure, []);
+    const optionOneResult = calculateMinimumNewCredits(structure, [], "5");
     expect(selectedGroupIds(optionOneResult)).toEqual(["a1", "a2", "e1"]);
     expect(creditsOf(optionOneResult.total_new_credits)).toBe(300);
     const a1Entry = optionOneResult.new_courses.find(
@@ -61,20 +63,24 @@ describe("route minimum", () => {
     expect(a1Entry?.node_ids).toEqual(["course:a1"]);
     expect(e1Entry?.node_ids).toEqual(["course:e1"]);
 
-    const partial = calculateMinimumNewCredits(structure, ["a1"]);
+    const partial = calculateMinimumNewCredits(structure, ["a1"], "5");
     expect(selectedGroupIds(partial)).toEqual(["a2"]);
     expect(creditsOf(partial.total_new_credits)).toBe(100);
 
-    const otherMember = calculateMinimumNewCredits(structure, ["a2"]);
+    const otherMember = calculateMinimumNewCredits(structure, ["a2"], "5");
     expect(selectedGroupIds(otherMember)).toEqual(["a1", "e1"]);
     expect(creditsOf(otherMember.total_new_credits)).toBe(200);
 
-    const satisfiedOption = calculateMinimumNewCredits(structure, ["a1", "a2"]);
+    const satisfiedOption = calculateMinimumNewCredits(
+      structure,
+      ["a1", "a2"],
+      "5",
+    );
     expect(satisfiedOption.state).toBe("exact");
     expect(creditsOf(satisfiedOption.total_new_credits)).toBe(0);
     expect(selectedGroupIds(satisfiedOption)).toEqual([]);
 
-    const prerequisiteOnly = calculateMinimumNewCredits(structure, ["e1"]);
+    const prerequisiteOnly = calculateMinimumNewCredits(structure, ["e1"], "5");
     expect(selectedGroupIds(prerequisiteOnly)).toEqual(["a1", "a2"]);
   });
 
@@ -83,13 +89,13 @@ describe("route minimum", () => {
       fixtures,
       "logical_composed_and_charges_every_incomplete_child.compilation",
     );
-    const result = calculateMinimumNewCredits(structure, ["a"]);
+    const result = calculateMinimumNewCredits(structure, ["a"], "5");
     expect(result.satisfaction.requirements_state).toBe("unsatisfied");
     expect(result.state).toBe("exact");
     expect(selectedGroupIds(result)).toEqual(["b"]);
     expect(creditsOf(result.total_new_credits)).toBe(400);
 
-    const completed = calculateMinimumNewCredits(structure, ["a", "b"]);
+    const completed = calculateMinimumNewCredits(structure, ["a", "b"], "5");
     expect(completed.state).toBe("exact");
     expect(selectedGroupIds(completed)).toEqual([]);
     expect(creditsOf(completed.total_new_credits)).toBe(0);
@@ -101,6 +107,7 @@ describe("route minimum", () => {
     const chosen = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.cardinality_compilation`),
       [],
+      "5",
     );
     expect(selectedGroupIds(chosen)).toEqual(["a"]);
     expect(creditsOf(chosen.total_new_credits)).toBe(100);
@@ -108,6 +115,7 @@ describe("route minimum", () => {
     const overlapResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.overlap_compilation`),
       [],
+      "5",
     );
     expect(selectedGroupIds(overlapResult)).toEqual(["a"]);
     expect(creditsOf(overlapResult.total_new_credits)).toBe(100);
@@ -115,6 +123,7 @@ describe("route minimum", () => {
     const neutralResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.neutral_compilation`),
       [],
+      "5",
     );
     expect(neutralResult.state).toBe("exact");
     expect(creditsOf(neutralResult.total_new_credits)).toBe(0);
@@ -123,6 +132,7 @@ describe("route minimum", () => {
     const creditResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.credit_compilation`),
       [],
+      "5",
     );
     expect(creditResult.state).toBe("exact");
     expect(selectedGroupIds(creditResult)).toEqual(["a", "e"]);
@@ -131,6 +141,7 @@ describe("route minimum", () => {
     const countResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.count_compilation`),
       [],
+      "5",
     );
     expect(selectedGroupIds(countResult)).toEqual(["b"]);
     expect(creditsOf(countResult.total_new_credits)).toBe(200);
@@ -139,37 +150,38 @@ describe("route minimum", () => {
   it("minimum path reports unresolved cycles and no solution", () => {
     const prefix = "minimum_path_reports_unresolved_cycles_and_no_solution";
     const zeroOpaque = loadStructure(fixtures, `${prefix}.zero_opaque`);
-    const unrestrictedResult = calculateMinimumNewCredits(zeroOpaque, []);
+    const unrestrictedResult = calculateMinimumNewCredits(zeroOpaque, [], "5");
     expect(unrestrictedResult.state).toBe("exact");
     expect(creditsOf(unrestrictedResult.total_new_credits)).toBe(0);
     expect(selectedGroupIds(unrestrictedResult)).toEqual([]);
     expect(unrestrictedResult.blockers).toEqual([]);
 
     const mixed = loadStructure(fixtures, `${prefix}.mixed_compilation`);
-    const mixedResult = calculateMinimumNewCredits(mixed, []);
+    const mixedResult = calculateMinimumNewCredits(mixed, [], "5");
     expect(mixedResult.state).toBe("unresolved");
     expect(mixedResult.total_new_credits).toBeNull();
     expect(selectedGroupIds(mixedResult)).toEqual([]);
 
-    const known = calculateMinimumNewCredits(mixed, ["a"]);
+    const known = calculateMinimumNewCredits(mixed, ["a"], "5");
     expect(known.state).toBe("exact");
     expect(creditsOf(known.total_new_credits)).toBe(0);
     expect(known.blockers).toEqual([]);
 
     const cycle = loadStructure(fixtures, `${prefix}.cycle_compilation`);
-    const cycleResult = calculateMinimumNewCredits(cycle, []);
+    const cycleResult = calculateMinimumNewCredits(cycle, [], "5");
     expect(cycleResult.state).toBe("unresolved");
     expect(cycleResult.total_new_credits).toBeNull();
     expect(selectedGroupIds(cycleResult)).toEqual([]);
     expect(cycleResult.blockers[0].kind).toBe("course_cycle");
     expect(cycleResult.blockers[0].course_group_path).toEqual(["root", "a"]);
-    const cycleSatisfied = calculateMinimumNewCredits(cycle, ["a"]);
+    const cycleSatisfied = calculateMinimumNewCredits(cycle, ["a"], "5");
     expect(cycleSatisfied.state).toBe("exact");
     expect(creditsOf(cycleSatisfied.total_new_credits)).toBe(0);
 
     const impossibleResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.impossible_compilation`),
       [],
+      "5",
     );
     expect(impossibleResult.state).toBe("no_solution");
     expect(impossibleResult.total_new_credits).toBeNull();
@@ -184,6 +196,7 @@ describe("route minimum", () => {
         "minimum_path_handles_large_nested_choice_rules_exactly.compilation",
       ),
       [],
+      "5",
     );
     expect(result.state).toBe("exact");
     expect(selectedGroupIds(result)).toEqual([
@@ -208,6 +221,7 @@ describe("route minimum", () => {
         "repeated_unexpandable_module_work_is_charged_once.compilation",
       ),
       [],
+      "5",
     );
     expect(result.state).toBe("exact");
     expect(result.new_courses).toEqual([]);
@@ -224,6 +238,7 @@ describe("route minimum", () => {
         "repeated_bounded_work_keeps_intrinsic_identity_and_occurrences.compilation",
       ),
       [],
+      "5",
     );
     expect(result.new_opaque_work).toHaveLength(1);
     expect(creditsOf(result.new_opaque_work[0].credits_min)).toBe(1000);
@@ -239,6 +254,7 @@ describe("route minimum", () => {
         "distinct_opaque_siblings_are_charged_separately.compilation",
       ),
       [],
+      "5",
     );
     expect(result.new_opaque_work).toHaveLength(2);
     expect(creditsOf(result.total_new_credits)).toBe(2000);
@@ -251,6 +267,7 @@ describe("route minimum", () => {
         "resolved_members_cost_courses_not_module_target.compilation",
       ),
       [],
+      "5",
     );
     expect(result.state).toBe("exact");
     expect(selectedGroupIds(result)).toEqual(["member"]);
@@ -265,6 +282,7 @@ describe("route minimum", () => {
         "unknown_course_count_never_fabricates_courses.compilation",
       ),
       [],
+      "5",
     );
     expect(result.state).toBe("unresolved");
     expect(result.new_courses).toEqual([]);
@@ -283,6 +301,7 @@ describe("route minimum", () => {
         "completed_unknown_extent_fails_positive_credit_bound.tree",
       ),
       [],
+      "5",
     );
     expect(result.state).toBe("unresolved");
     expect(result.new_courses).toEqual([]);
@@ -300,6 +319,7 @@ describe("route minimum", () => {
         "bounded_unknown_extent_with_unpaid_sibling_is_unresolved.tree",
       ),
       [],
+      "5",
     );
     expect(result.state).toBe("unresolved");
     expect(
@@ -316,6 +336,7 @@ describe("route minimum", () => {
         "known_alternative_survives_unknown_count_option.compilation",
       ),
       ["known-alt"],
+      "5",
     );
     expect(result.state).toBe("exact");
     expect(creditsOf(result.total_new_credits)).toBe(0);
@@ -329,7 +350,7 @@ describe("route minimum", () => {
         fixtures,
         `zero_bound_unknown_extent_wrappers_preserve_unpaid_sibling.tree[${wrapper}]`,
       );
-      const result = calculateMinimumNewCredits(structure, []);
+      const result = calculateMinimumNewCredits(structure, [], "5");
       expect(result.state).toBe("exact");
       expect(creditsOf(result.total_new_credits)).toBe(500);
       expect(selectedGroupIds(result)).toEqual(["unpaid"]);
@@ -338,7 +359,7 @@ describe("route minimum", () => {
           (problem) => problem.reason === "unknown_credit_extent",
         ),
       ).toBe(false);
-      const greedy = calculateMinimumNewCredits(structure, [], 1);
+      const greedy = calculateMinimumNewCredits(structure, [], "5", 1);
       expect(greedy.state).toBe("approximate");
       expect(selectedGroupIds(greedy)).toEqual(["unpaid"]);
     },
@@ -351,7 +372,7 @@ describe("route minimum", () => {
         fixtures,
         `known_completed_extent_satisfies_credit_bound_without_member_courses.tree[${completedKind}]`,
       );
-      const result = calculateMinimumNewCredits(structure, []);
+      const result = calculateMinimumNewCredits(structure, [], "5");
       expect(result.state).toBe("exact");
       expect(creditsOf(result.total_new_credits)).toBe(500);
       expect(selectedGroupIds(result)).toEqual(["unpaid"]);
@@ -360,7 +381,7 @@ describe("route minimum", () => {
           (problem) => problem.reason === "unknown_credit_extent",
         ),
       ).toBe(false);
-      const greedy = calculateMinimumNewCredits(structure, [], 1);
+      const greedy = calculateMinimumNewCredits(structure, [], "5", 1);
       expect(greedy.state).toBe("approximate");
       expect(creditsOf(greedy.total_new_credits)).toBe(500);
       expect(selectedGroupIds(greedy)).toEqual(["unpaid"]);
@@ -374,10 +395,12 @@ describe("route minimum", () => {
     const duplicatedResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.duplicated_compilation`),
       [],
+      "5",
     );
     const withoutDuplicateResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.without_duplicate_compilation`),
       [],
+      "5",
     );
     expect(duplicatedResult.state).toBe("exact");
     expect(duplicatedResult.state).toBe(withoutDuplicateResult.state);
@@ -388,4 +411,105 @@ describe("route minimum", () => {
       selectedGroupIds(withoutDuplicateResult),
     );
   });
+});
+
+it("uses the configured assumed credits for route cost and credit bounds", () => {
+  const structure = structuredClone(
+    loadStructure(
+      fixtures,
+      "known_completed_extent_satisfies_credit_bound_without_member_courses.tree[credit_rule]",
+    ),
+  );
+  structure.completed_node_keys = [];
+  const member = structure.courses.find(
+    (course) => course.group_id === "member",
+  );
+  expect(member).toBeDefined();
+  if (member === undefined) return;
+  member.credits_min = null;
+
+  const result = calculateMinimumNewCredits(structure, [], "10");
+
+  expect(result.state).toBe("exact");
+  expect(selectedGroupIds(result)).toEqual(["member", "unpaid"]);
+  expect(
+    result.new_courses.filter((entry) => entry.course.group_id === "member"),
+  ).toHaveLength(1);
+  expect(creditsOf(result.total_new_credits)).toBe(1500);
+  expect(result.uses_assumed_credits).toBe(true);
+  expect(member.credits_min).toBeNull();
+
+  const fullRouteStructure = structuredClone(
+    loadStructure(
+      fixtures,
+      "minimum_path_uses_global_union_and_new_credits_not_local_course_count.repeated_compilation",
+    ),
+  );
+  const coveredUnknown = fullRouteStructure.courses.find(
+    (course) => course.group_id === "a",
+  );
+  expect(coveredUnknown).toBeDefined();
+  if (coveredUnknown === undefined) return;
+  coveredUnknown.credits_min = null;
+
+  const coveredResult = calculateMinimumNewCredits(
+    fullRouteStructure,
+    ["a"],
+    "5",
+  );
+
+  expect(coveredResult.state).toBe("exact");
+  expect(selectedGroupIds(coveredResult)).toEqual(["b"]);
+  expect(
+    coveredResult.covered_courses.map((course) => course.group_id),
+  ).toEqual(["a"]);
+  expect(coveredResult.uses_assumed_credits).toBe(true);
+
+  const unusedStructure = structuredClone(
+    loadStructure(
+      fixtures,
+      "minimum_path_uses_global_union_and_new_credits_not_local_course_count.repeated_compilation",
+    ),
+  );
+  const unusedSource = unusedStructure.courses.find(
+    (course) => course.group_id === "a",
+  );
+  expect(unusedSource).toBeDefined();
+  if (unusedSource === undefined) return;
+  unusedStructure.courses = [
+    ...unusedStructure.courses,
+    { ...unusedSource, group_id: "unused-unknown", credits_min: null },
+  ];
+
+  const unusedResult = calculateMinimumNewCredits(unusedStructure, ["a"], "5");
+
+  expect(unusedResult.state).toBe("exact");
+  expect(selectedGroupIds(unusedResult)).toEqual(["b"]);
+  expect(unusedResult.uses_assumed_credits).toBe(false);
+
+  const boundStructure = structuredClone(
+    loadStructure(
+      fixtures,
+      "known_completed_extent_satisfies_credit_bound_without_member_courses.tree[credit_rule]",
+    ),
+  );
+  boundStructure.completed_node_keys = [];
+  const boundMember = boundStructure.courses.find(
+    (course) => course.group_id === "member",
+  );
+  expect(boundMember).toBeDefined();
+  if (boundMember === undefined) return;
+  boundMember.credits_min = null;
+
+  const boundResult = calculateMinimumNewCredits(
+    boundStructure,
+    ["member", "unpaid"],
+    "10",
+  );
+
+  expect(boundResult.state).toBe("exact");
+  expect(creditsOf(boundResult.total_new_credits)).toBe(0);
+  expect(boundResult.satisfaction.requirements_state).toBe("satisfied");
+  expect(boundResult.satisfaction.uses_assumed_credits).toBe(true);
+  expect(boundResult.uses_assumed_credits).toBe(true);
 });

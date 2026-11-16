@@ -9,6 +9,7 @@ import type {
 import type { GraphModel, ModelNode } from "../graph/model";
 import { connectorLabel } from "../graph/model";
 import { localizedName } from "../../../shared/course/presentation";
+import { effectiveCourseCredits } from "../../../solver/credits";
 import { diagnosticText, reasonText, uiText } from "../../../shared/wording";
 
 type RouteRow =
@@ -33,6 +34,7 @@ export type RouteSummary = {
     reason: string | null;
   }[];
   shortfalls: { title: string; text: string }[];
+  usesAssumedCredits: boolean;
 };
 type RouteView = RouteSummary & {
   lit: { nodes: Set<string>; edges: Set<string>; levels: Map<string, number> };
@@ -175,7 +177,13 @@ export function buildRouteSummary(
   }
   const coveredCredits = path.covered_courses
     .filter((course) => !newIds.has(course.group_id))
-    .reduce((sum, course) => sum + Number(course.credits_min), 0);
+    .reduce(
+      (sum, course) =>
+        sum +
+        Number(effectiveCourseCredits(course, graph.assumed_course_credits)) /
+          100,
+      0,
+    );
   const total =
     path.total_new_credits === null ? null : Number(path.total_new_credits);
   const seen = new Set<string>();
@@ -211,7 +219,7 @@ export function buildRouteSummary(
     return {
       title: label,
       text: count
-        ? uiText(language, "{achieved} of {required} courses", {
+        ? uiText(language, "Courses: {achieved} of {required}", {
             achieved: item.achieved_count ?? 0,
             required: item.required_count ?? 0,
           })
@@ -230,6 +238,7 @@ export function buildRouteSummary(
     missingCourseIds: path.new_courses.map(({ course }) => course.group_id),
     problems,
     shortfalls,
+    usesAssumedCredits: path.uses_assumed_credits,
   };
 }
 

@@ -46,6 +46,7 @@ class SupportStage:
 
     def __init__(self, name: StageName) -> None:
         self.name = name
+        self.reservations: list[tuple[str, str]] = []
         if name == "ingestion":
             self.services: tuple[str, ...] = ("db",)
             self.temporary_services: tuple[str, ...] = ()
@@ -92,6 +93,14 @@ class SupportStage:
     def require_database(self) -> None:
         if os.environ.get(FAIL_DATABASE_ALIAS) == "1":
             raise RuntimeError("synthetic database preparation failure")
+
+    def reserve(self, session_id: str, *, runner: mechanics.ProcessRunner) -> None:
+        """Record one reservation call."""
+        self.reservations.append(("reserve", session_id))
+
+    def unreserve(self, session_id: str, *, runner: mechanics.ProcessRunner) -> None:
+        """Record one reservation release."""
+        self.reservations.append(("unreserve", session_id))
 
     def run(self, context: LifecycleContext) -> bool:
         total = int(os.environ.get(UNITS_ALIAS, "4"))
@@ -268,6 +277,7 @@ def configure_environment(
     monkeypatch.setenv("ADMIN_STARTUP_ATTEMPTS", str(startup_attempts))
     monkeypatch.setenv("ADMIN_POLL_INTERVAL_SECONDS", "0.02")
     monkeypatch.setenv("ADMIN_STOP_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(repository_root.parent / "shared"))
     monkeypatch.setenv(INITIAL_ACTION_ALIAS, "run")
 
 

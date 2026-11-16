@@ -32,7 +32,7 @@ import httpx
 import pytest
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
-from sqlalchemy import Engine, select, text
+from sqlalchemy import Engine, MetaData, Table, inspect, select, text
 
 from course_explorer import administration
 from course_explorer.administration import (
@@ -52,6 +52,7 @@ from course_explorer.datasets import (
     DatabaseSchemaMismatchError,
     DatasetPointer,
     DatasetReceipt,
+    dataset_pointer_path,
     read_dataset_receipt,
     read_dataset_verification,
     resolve_dataset_role,
@@ -61,17 +62,17 @@ from course_explorer.db.models import (
     Base,
     Course,
     CourseEmbeddingChunk,
-    CourseText,
     CourseVersion,
     DerivedCourseText,
+    OfficialCourseText,
     SourceSnapshot,
 )
 from course_explorer.db.session import create_database_engine, create_session_factory, session_scope
 from course_explorer.embeddings import commands as embedding_commands
 from course_explorer.enums import (
     CourseEmbeddingStatus,
+    OfficialTextField,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
     TranslationMethod,
 )
@@ -87,8 +88,8 @@ from course_explorer.teaching_text.service import DerivedTranslationInput, teach
 from course_explorer_admin import (
     commands,
     lifecycle,
+    machine_locks,
     mechanics,
-    provisioning_worker,
     worker_session,
 )
 from course_explorer_admin import datasets as datasets_module
@@ -117,6 +118,7 @@ from course_explorer_admin.snapshots import database_dump_contains_embedding_dat
 from course_explorer_admin.translation.controller import (
     TranslationControllerPolicy,
     TranslationControllerWorkerState,
+    translation_configuration_sha256,
 )
 from course_explorer_admin.translation.controller_worker import TranslationWorkerStage
 from course_explorer_web.dataset import resolve_serving_dataset
@@ -138,7 +140,7 @@ from tests.config._support import (
 )
 from tests.datasets._support import INITIAL_ID, sample_verification
 from tests.embeddings._http_support import embedding_response, vector
-from tests.inference._scheduling_support import reconcile, seed_courses
+from tests.inference._scheduling_support import seed_courses
 
 pytestmark = [
     pytest.mark.integration,
@@ -150,7 +152,7 @@ SERVER_PREFIX = "course_tests"
 
 
 @pytest.fixture()
-def isolated_database_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
+def isolated_database_cluster(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Run the Compose maintenance boundary on its own extension-enabled project and volume."""
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -159,16 +161,12 @@ def isolated_database_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COMPOSE_PROJECT_NAME", project)
     monkeypatch.setenv("POSTGRES_PORT", str(port))
     monkeypatch.setenv("POSTGRES_DB", f"{SERVER_PREFIX}_bootstrap")
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(tmp_path / "shared"))
     runner = mechanics.SubprocessRunner()
     root = administration.repository_root()
-    image = provisioning_worker._db_image_name(runner, root)
-    if not provisioning_worker._db_image_present(runner, root, image):
-        raise RuntimeError(
-            "the prepared database image is missing; prepare it with "
-            "`uv run python -m course_explorer_admin.compose --non-interactive -- build db`"
-        )
     prefix = mechanics.compose_prefix(non_interactive=True, interpreter=True)
     try:
+        runner.run((*prefix, "build", "db"), cwd=root, timeout=600)
         runner.run(
             (*prefix, "up", "-d", "--wait", "--no-build", "--pull", "never", "db"),
             cwd=root,
@@ -177,7 +175,7 @@ def isolated_database_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
         yield
     finally:
         runner.run(
-            (*prefix, "down", "-v", "--remove-orphans"),
+            (*prefix, "down", "-v", "--remove-orphans", "--rmi", "local"),
             cwd=root,
             timeout=600,
         )
@@ -227,7 +225,7 @@ def _seed_embedding(factory) -> None:
             CourseEmbeddingChunk(
                 course_version_id=version.id,
                 field=TeachingTextField.CONTENT,
-                language=TeachingTextLanguage.FI,
+                language="fi",
                 chunk_index=0,
                 text_origin=TeachingTextOrigin.OFFICIAL,
                 text="Sisalto TEST.001",
@@ -260,6 +258,7 @@ def test_full_snapshot_return_and_rotation_preserve_database_state(
     initial = f"course_tests_initial_{uuid.uuid4().hex[:8]}"
     monkeypatch.setenv("POSTGRES_DB", initial)
     monkeypatch.setenv("ADMIN_STATE_ROOT", admin_state)
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(tmp_path / "shared"))
     monkeypatch.setenv("ADMIN_DATASET_DATABASE_PREFIX", SERVER_PREFIX)
     monkeypatch.setenv("ADMIN_WORKER_DATABASE_PREFIX", WORKER_PREFIX)
     monkeypatch.setenv("ADMIN_DATABASE_OPERATION_TIMEOUT_SECONDS", "3600")
@@ -348,9 +347,9 @@ def test_full_snapshot_return_and_rotation_preserve_database_state(
             translation_directory / "policy.json",
             administrative_json(
                 TranslationControllerPolicy(
-                    schema_version=2,
+                    schema_version=3,
                     session_id=translation_id,
-                    translation_model=load_translation_settings().provenance_model,
+                    configuration_sha256=translation_configuration_sha256(),
                 )
             ),
         )
@@ -362,10 +361,10 @@ def test_full_snapshot_return_and_rotation_preserve_database_state(
 
         generated_at = datetime(2026, 9, 30, 12, 0, tzinfo=UTC)
         synthetic = DerivedTranslationInput(
-            sisu_course_unit_id="sisu-dataset-target",
+            source_version_id="sisu-dataset-target",
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
-            source_language=TeachingTextLanguage.FI,
+            language="en",
+            source_language="fi",
             source_text="Sisalto TEST.001",
             text="Synthetic translated content",
             translation_method=TranslationMethod.MODEL,
@@ -423,9 +422,9 @@ def test_full_snapshot_return_and_rotation_preserve_database_state(
                     select(DerivedCourseText)
                     .join(CourseVersion, CourseVersion.id == DerivedCourseText.course_version_id)
                     .where(
-                        CourseVersion.sisu_course_unit_id == "sisu-dataset-target",
+                        CourseVersion.source_version_id == "sisu-dataset-target",
                         DerivedCourseText.field == TeachingTextField.CONTENT,
-                        DerivedCourseText.language == TeachingTextLanguage.EN,
+                        DerivedCourseText.language == "en",
                     )
                 )
                 assert derived is not None
@@ -434,12 +433,16 @@ def test_full_snapshot_return_and_rotation_preserve_database_state(
                 assert derived.translation_method is TranslationMethod.MODEL
                 assert derived.translation_model == load_translation_settings().provenance_model
                 official = returned.scalar(
-                    select(CourseText)
-                    .join(CourseVersion, CourseVersion.id == CourseText.course_version_id)
-                    .where(CourseVersion.code == "TEST.001")
+                    select(OfficialCourseText)
+                    .join(CourseVersion, CourseVersion.id == OfficialCourseText.course_version_id)
+                    .where(
+                        CourseVersion.code == "TEST.001",
+                        OfficialCourseText.field == OfficialTextField.CONTENT,
+                        OfficialCourseText.language == "fi",
+                    )
                 )
                 assert official is not None
-                assert official.content_fi == "Sisalto TEST.001"
+                assert official.text == "Sisalto TEST.001"
                 chunk = returned.scalar(select(CourseEmbeddingChunk))
                 assert chunk is not None
                 assert chunk.embedding is not None
@@ -535,6 +538,7 @@ def test_copy_to_working_preserves_the_served_source(
     monkeypatch.setenv("ADMIN_DATASET_DATABASE_PREFIX", prefix)
     monkeypatch.setenv("ADMIN_WORKER_DATABASE_PREFIX", f"{prefix}_worker")
     monkeypatch.setenv("ADMIN_DATABASE_OPERATION_TIMEOUT_SECONDS", "3600")
+    monkeypatch.setenv("INSTANCE_KEY", "hanken")
     for keys in (LOCAL_LIFECYCLE_KEYS, TRANSLATION_CONTROLLER_KEYS, INFERENCE_CONTROLLER_KEYS):
         for key, value in keys.items():
             monkeypatch.setenv(key, value)
@@ -579,6 +583,22 @@ def test_copy_to_working_preserves_the_served_source(
         selected_artifact.mkdir(mode=0o700, parents=True)
         artifact_file = selected_artifact / "keep.txt"
         artifact_file.write_text("selected-artifact", encoding="utf-8")
+
+        # A preparation stage holding the checkout refuses the copy before any dataset work begins.
+        shared = tmp_path / "shared"
+        holder = machine_locks.Reservation(
+            instance_key="hanken", operation="ingestion", session_id="d" * 32
+        )
+        assert (
+            machine_locks.acquire(shared, "checkout", instance_key="hanken", owner=holder) is True
+        )
+        try:
+            with pytest.raises(RuntimeError, match="held by ingestion in hanken"):
+                copy_to_working(selected.dataset_id, runner=runner)
+            assert not dataset_pointer_path(root, "working").exists()
+            assert {path.name for path in (root / "datasets").iterdir()} == {selected.dataset_id}
+        finally:
+            machine_locks.release(shared, "checkout", instance_key="hanken", owner=holder)
 
         working = copy_to_working(selected.dataset_id, runner=runner)
         working_database = working.database_name
@@ -829,27 +849,196 @@ def test_manual_dataset_cleanup_drops_one_retained_database(
             raise ExceptionGroup("manual dataset cleanup test cleanup failed", errors)
 
 
-def _sql_projections(engine: Engine) -> dict[str, tuple[int, str]]:
-    """Return one (count, digest) SQL projection per application table."""
-    projections: dict[str, tuple[int, str]] = {}
+def _logical_official_cells(engine: Engine) -> tuple[tuple[str, str, str, str, str], ...]:
+    """Return one database's logical official cells in either official-text table layout.
+
+    The ordered tuples hold `(group_id, source_version_id, field, language, text)` for every course
+    and module cell, so a pre-migration and a post-migration database compare by content rather
+    than by table layout.
+    """
+    rows: list[tuple[str, str, str, str, str]] = []
     with engine.connect() as connection:
-        for table in Base.metadata.sorted_tables:
-            if table.name == "inference_target_failures":
-                continue
-            rows = (
-                connection.execute(
+        table_names = set(inspect(connection).get_table_names())
+        if "official_course_texts" in table_names:
+            rows.extend(
+                (group_id, source_id, field, language, value)
+                for group_id, source_id, field, language, value in connection.execute(
                     text(
-                        "SELECT encode(sha256(convert_to(to_jsonb(t)::text, 'UTF8')), 'hex') "
-                        f'FROM "{table.name}" AS t'
+                        "SELECT c.group_id, v.source_version_id, oct.field::text, "
+                        "oct.language, oct.text "
+                        "FROM official_course_texts oct "
+                        "JOIN course_versions v ON v.id = oct.course_version_id "
+                        "JOIN courses c ON c.id = v.course_id"
                     )
                 )
-                .scalars()
-                .all()
             )
-            ordered = sorted(rows)
-            concatenated = "".join(ordered).encode("utf-8")
-            projections[table.name] = (len(rows), hashlib.sha256(concatenated).hexdigest())
-    return projections
+            rows.extend(
+                (group_id, source_id, "name", language, value)
+                for group_id, source_id, language, value in connection.execute(
+                    text(
+                        "SELECT m.group_id, mv.source_version_id, omt.language, omt.text "
+                        "FROM official_module_texts omt "
+                        "JOIN module_versions mv ON mv.id = omt.module_version_id "
+                        "JOIN modules m ON m.id = mv.module_id"
+                    )
+                )
+            )
+        else:
+            for field, fi_column, en_column in (
+                ("name", "v.name_fi", "v.name_en"),
+                ("content", "ct.content_fi", "ct.content_en"),
+                ("outcomes", "ct.outcomes_fi", "ct.outcomes_en"),
+                ("prerequisite_text", "ct.prerequisite_text_fi", "ct.prerequisite_text_en"),
+                ("additional_info", "ct.additional_info_fi", "ct.additional_info_en"),
+            ):
+                table = (
+                    "course_versions v JOIN courses c ON c.id = v.course_id"
+                    if field == "name"
+                    else "course_versions v JOIN courses c ON c.id = v.course_id "
+                    "JOIN course_texts ct ON ct.course_version_id = v.id"
+                )
+                for language, column in (("fi", fi_column), ("en", en_column)):
+                    rows.extend(
+                        (group_id, source_id, field, language, value)
+                        for group_id, source_id, value in connection.execute(
+                            text(
+                                f"SELECT c.group_id, v.source_version_id, {column} "
+                                f"FROM {table} WHERE {column} IS NOT NULL"
+                            )
+                        )
+                    )
+            rows.extend(
+                (group_id, source_id, "name", language, value)
+                for group_id, source_id, language, value in connection.execute(
+                    text(
+                        "SELECT m.group_id, mv.source_version_id, language, value FROM ("
+                        "SELECT id, module_id, source_version_id, name_fi AS fi, name_en AS en "
+                        "FROM module_versions"
+                        ") mv JOIN modules m ON m.id = mv.module_id "
+                        "CROSS JOIN LATERAL (VALUES ('fi', mv.fi), ('en', mv.en)) "
+                        "AS cell(language, value) WHERE cell.value IS NOT NULL"
+                    )
+                )
+            )
+    return tuple(sorted(rows))
+
+
+def _seed_pre_multilingual(database_name: str, *, group_id: str, code: str) -> None:
+    """Seed one pre-migration database through reflected historical tables."""
+    raw = load_raw_database_settings().model_copy(update={"postgres_db": database_name})
+    engine = create_database_engine(raw)
+    try:
+        with engine.begin() as connection:
+
+            def table(table_name: str) -> Table:
+                return Table(table_name, MetaData(), autoload_with=connection)
+
+            run_id, snapshot_id = uuid.uuid4(), uuid.uuid4()
+            course_id, version_id = uuid.uuid4(), uuid.uuid4()
+            connection.execute(
+                table("ingestion_runs")
+                .insert()
+                .values(
+                    id=run_id,
+                    status="completed",
+                    raw_root_path="data/raw/pre-migration",
+                    manifest_path="data/raw/pre-migration/manifest.json",
+                )
+            )
+            connection.execute(
+                table("source_snapshots")
+                .insert()
+                .values(
+                    id=snapshot_id,
+                    ingestion_run_id=run_id,
+                    object_type="course_unit",
+                    source_object_id=f"{group_id}-v1",
+                    source_group_id=group_id,
+                    response_path="responses/pre-migration.json.gz",
+                    response_item_index=0,
+                    source_hash="c" * 64,
+                )
+            )
+            connection.execute(
+                table("courses")
+                .insert()
+                .values(
+                    id=course_id,
+                    group_id=group_id,
+                    is_active=True,
+                    activity_as_of_academic_year_start=2026,
+                    activity_window_years=3,
+                )
+            )
+            connection.execute(
+                table("course_versions")
+                .insert()
+                .values(
+                    id=version_id,
+                    course_id=course_id,
+                    source_version_id=f"{group_id}-v1",
+                    code=code,
+                    credits_min=5,
+                    credits_max=5,
+                    official_url=f"https://example.test/{group_id}",
+                    document_state="ACTIVE",
+                    source_snapshot_id=snapshot_id,
+                )
+            )
+            connection.execute(
+                table("official_course_texts")
+                .insert()
+                .values(
+                    course_version_id=version_id,
+                    field="name",
+                    language="fi",
+                    text="Nimi TEST.001",
+                )
+            )
+            connection.execute(
+                table("official_course_texts")
+                .insert()
+                .values(
+                    course_version_id=version_id,
+                    field="name",
+                    language="en",
+                    text="Name TEST.001",
+                )
+            )
+            connection.execute(
+                table("official_course_texts")
+                .insert()
+                .values(
+                    course_version_id=version_id,
+                    field="content",
+                    language="fi",
+                    text="Sisalto TEST.001",
+                )
+            )
+            connection.execute(
+                table("official_course_texts")
+                .insert()
+                .values(
+                    course_version_id=version_id,
+                    field="content",
+                    language="en",
+                    text="Content TEST.001",
+                )
+            )
+            connection.execute(
+                table("inference_course_processing")
+                .insert()
+                .values(
+                    course_id=course_id,
+                    teaching_text_sha256="a" * 64,
+                    processed=True,
+                    was_active=True,
+                    generation_attempt_count=0,
+                    disposition=None,
+                )
+            )
+    finally:
+        engine.dispose()
 
 
 def selected_row_content(engine: Engine) -> dict[str, list[str]]:
@@ -911,24 +1100,67 @@ def test_selected_migration_preserves_work_and_frozen_receipt(
     settings = load_administrative_dataset_settings()
     root = admin_state_root(settings)
     raw = load_raw_database_settings().model_copy(update={"postgres_db": "course_explorer_test"})
-    working_database: str | None = None
+    selected_database = f"course_explorer_selected_{uuid.uuid4().hex[:8]}"
+    working_database = f"course_explorer_working_{uuid.uuid4().hex[:8]}"
+    working_dataset_id = "1" * 32
     try:
         # The immutable snapshot fact is the genuine head verification before any migration.
         verification = read_dataset_verification(raw)
-        seed_courses(factory, [("dataset-target", "TEST.001", True)])
-        markers = reconcile(factory)
-        assert any(marker.group_id == "dataset-target" for marker in markers)
+
+        def create_pre_migration(database_name: str) -> None:
+            _compose_exec(
+                runner,
+                "createdb",
+                "--username",
+                "course_explorer",
+                "--template",
+                "template0",
+                database_name,
+            )
+            runner.run(
+                (
+                    "uv",
+                    "run",
+                    "--offline",
+                    "--no-sync",
+                    "python",
+                    "-m",
+                    "alembic",
+                    "upgrade",
+                    "20261108_0025",
+                ),
+                cwd=administration.repository_root(),
+                env={"POSTGRES_DB": database_name},
+                timeout=600,
+            )
+
+        def cells_of(database_name: str):
+            copy_engine = create_database_engine(
+                raw.model_copy(update={"postgres_db": database_name})
+            )
+            try:
+                return _logical_official_cells(copy_engine)
+            finally:
+                copy_engine.dispose()
+
+        create_pre_migration(selected_database)
+        create_pre_migration(working_database)
+        _seed_pre_multilingual(selected_database, group_id="dataset-target", code="TEST.001")
+        _seed_pre_multilingual(working_database, group_id="dataset-target", code="TEST.001")
 
         directory = root / "datasets" / dataset_id
+        working_directory = root / "datasets" / working_dataset_id
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        working_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         receipt_path = directory / "receipt.json"
+        working_receipt_path = working_directory / "receipt.json"
         atomic_write_private_text(
             receipt_path,
             administrative_json(
                 DatasetReceipt(
                     schema_version=1,
                     dataset_id=dataset_id,
-                    database_name="course_explorer_test",
+                    database_name=selected_database,
                     predecessor_id=None,
                     kind="initial",
                     dump_sha256=None,
@@ -937,24 +1169,42 @@ def test_selected_migration_preserves_work_and_frozen_receipt(
             ),
         )
         atomic_write_private_text(
+            working_receipt_path,
+            administrative_json(
+                DatasetReceipt(
+                    schema_version=1,
+                    dataset_id=working_dataset_id,
+                    database_name=working_database,
+                    predecessor_id=dataset_id,
+                    kind="copied",
+                    dump_sha256="e" * 64,
+                    verification=verification,
+                )
+            ),
+        )
+        atomic_write_private_text(
             root / "selected-dataset.json",
             administrative_json(DatasetPointer(schema_version=1, dataset_id=dataset_id)),
         )
+        atomic_write_private_text(
+            root / "working-dataset.json",
+            administrative_json(DatasetPointer(schema_version=1, dataset_id=working_dataset_id)),
+        )
         dump = directory / "database.dump"
+        working_dump = working_directory / "database.dump"
         dump.write_bytes(b"frozen-dump-sentinel")
+        working_dump.write_bytes(b"frozen-working-dump-sentinel")
         receipt_bytes = receipt_path.read_bytes()
         pointer_bytes = (root / "selected-dataset.json").read_bytes()
         dump_bytes = dump.read_bytes()
-
-        working = copy_to_working(dataset_id, runner=runner)
-        working_database = working.database_name
-        working_receipt_path = root / "datasets" / working.dataset_id / "receipt.json"
-        working_dump = root / "datasets" / working.dataset_id / "database.dump"
         working_receipt_bytes = working_receipt_path.read_bytes()
         working_dump_bytes = working_dump.read_bytes()
         working_pointer_bytes = (root / "working-dataset.json").read_bytes()
 
-        projections_before = _sql_projections(engine)
+        selected_before = cells_of(selected_database)
+        working_before = cells_of(working_database)
+        assert selected_before
+        assert selected_before == working_before
 
         # A genuinely non-idle stage state refuses before any apply.
         inference_root = root / "inference" / "current"
@@ -993,7 +1243,26 @@ def test_selected_migration_preserves_work_and_frozen_receipt(
         assert raw_applied.alembic_revision == verification.alembic_revision
         monkeypatch.setenv("ADMIN_STATE_ROOT", admin_state)
 
-        assert _sql_projections(engine) == projections_before
+        # The migrated databases carry the same logical official cells as the pre-migration copies.
+        assert cells_of(selected_database) == selected_before
+        assert cells_of(working_database) == working_before
+        selected_engine = create_database_engine(
+            raw.model_copy(update={"postgres_db": selected_database})
+        )
+        try:
+            with selected_engine.connect() as connection:
+                assert (
+                    connection.scalar(
+                        text(
+                            "SELECT teaching_text_sha256 FROM inference_course_processing "
+                            "WHERE course_id = ("
+                            "SELECT id FROM courses WHERE group_id = 'dataset-target')"
+                        )
+                    )
+                    == "a" * 64
+                )
+        finally:
+            selected_engine.dispose()
         # The frozen Selected and Working receipts, pointers and dumps are identical.
         assert (directory / "receipt.json").read_bytes() == receipt_bytes
         assert (root / "selected-dataset.json").read_bytes() == pointer_bytes
@@ -1001,7 +1270,7 @@ def test_selected_migration_preserves_work_and_frozen_receipt(
         assert working_receipt_path.read_bytes() == working_receipt_bytes
         assert working_dump.read_bytes() == working_dump_bytes
         assert (root / "working-dataset.json").read_bytes() == working_pointer_bytes
-        assert read_dataset_receipt(root, dataset_id).database_name == "course_explorer_test"
+        assert read_dataset_receipt(root, dataset_id).database_name == selected_database
         # A fresh snapshot capture uses the migrated head.
         snapshot_dump = root / "capture.dump"
         dump_database(
@@ -1025,6 +1294,8 @@ def test_selected_migration_preserves_work_and_frozen_receipt(
         )
         if working_database is not None:
             _drop(runner, working_database)
+        if selected_database is not None:
+            _drop(runner, selected_database)
         if root.exists():
             shutil.rmtree(root)
         if "bootstrap_state" in locals():
@@ -1045,6 +1316,7 @@ def test_local_stage_writes_working_without_changing_selected(
     initial = f"course_tests_local_{uuid.uuid4().hex[:8]}"
     monkeypatch.setenv("POSTGRES_DB", initial)
     monkeypatch.setenv("ADMIN_STATE_ROOT", admin_state)
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(tmp_path / "shared"))
     monkeypatch.setenv("ADMIN_DATASET_DATABASE_PREFIX", SERVER_PREFIX)
     monkeypatch.setenv("ADMIN_WORKER_DATABASE_PREFIX", WORKER_PREFIX)
     monkeypatch.setenv("ADMIN_DATABASE_OPERATION_TIMEOUT_SECONDS", "3600")
@@ -1096,7 +1368,12 @@ def test_local_stage_writes_working_without_changing_selected(
 
         selected_engine = create_database_engine(selected_settings)
         selected_content = selected_row_content(selected_engine)
-        for table in ("courses", "course_versions", "course_texts", "course_embedding_chunks"):
+        for table in (
+            "courses",
+            "course_versions",
+            "official_course_texts",
+            "course_embedding_chunks",
+        ):
             assert selected_content[table]
         serving_before = resolve_serving_dataset()
         assert serving_before.settings.postgres_db == selected_settings.postgres_db
@@ -1106,12 +1383,16 @@ def test_local_stage_writes_working_without_changing_selected(
         working_engine = create_database_engine(load_database_settings(role="working"))
         with session_scope(create_session_factory(working_engine)) as working_session:
             text_row = working_session.scalar(
-                select(CourseText)
-                .join(CourseVersion, CourseVersion.id == CourseText.course_version_id)
-                .where(CourseVersion.code == "TEST.001")
+                select(OfficialCourseText)
+                .join(CourseVersion, CourseVersion.id == OfficialCourseText.course_version_id)
+                .where(
+                    CourseVersion.code == "TEST.001",
+                    OfficialCourseText.field == OfficialTextField.CONTENT,
+                    OfficialCourseText.language == "fi",
+                )
             )
             assert text_row is not None
-            text_row.content_fi = changed_text
+            text_row.text = changed_text
         working_engine.dispose()
         working_engine = None
 
@@ -1171,11 +1452,15 @@ def test_local_stage_writes_working_without_changing_selected(
         working_engine = create_database_engine(load_database_settings(role="working"))
         with session_scope(create_session_factory(working_engine)) as working_session:
             stored_text = working_session.scalar(
-                select(CourseText)
-                .join(CourseVersion, CourseVersion.id == CourseText.course_version_id)
-                .where(CourseVersion.code == "TEST.001")
+                select(OfficialCourseText)
+                .join(CourseVersion, CourseVersion.id == OfficialCourseText.course_version_id)
+                .where(
+                    CourseVersion.code == "TEST.001",
+                    OfficialCourseText.field == OfficialTextField.CONTENT,
+                    OfficialCourseText.language == "fi",
+                )
             )
-            assert stored_text is not None and stored_text.content_fi == changed_text
+            assert stored_text is not None and stored_text.text == changed_text
             chunk = working_session.scalar(
                 select(CourseEmbeddingChunk)
                 .join(CourseVersion, CourseVersion.id == CourseEmbeddingChunk.course_version_id)

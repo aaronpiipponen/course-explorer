@@ -48,13 +48,13 @@ Choice 1 opens the 13 setup and preflight entries.
 | 8 | Configuration | `Configuration file (0 to cancel): `, `Configuration key (0 to cancel): `, `JSON value: `, then `Save configuration <file> key <key>?` |
 | 9 | Rebuild app | `Rebuild this site's frontend, containers and web server?` |
 | 10 | Administration password | `Username (0 to cancel): `, then the command's hidden `Password: ` and `Repeat password: ` prompts |
-| 11 | Rebuild admin panel | `Rebuild the admin panel? This signs all operators out.` |
-| 12 | Set up example site | `App URL [<example address>]: `, `Administration username (0 to cancel): `, `Startup mode`, `Download the pinned embedding model if it is absent?`, `Set up feedback publication?`, then the hidden token prompt after a publication choice and the hidden password prompts |
+| 11 | Rebuild administration console | `Rebuild the administration console? This signs all operators out.` |
+| 12 | Set up example site | `University` with the implemented entries, `Feature web port [<default>]: `, `Administration port [<default>]: `, `Database port [<default>]: `, `Embedding port [<default>]: `, `Shared directory [<default>]: `, `App URL [<derived address>]: `, `Administration origin [<derived origin>]: `, `Administration username (0 to cancel): `, `Startup mode`, `Download the pinned embedding model if it is absent?`, `Set up feedback publication?`, then the hidden token prompt after a publication choice and the hidden password prompts |
 | 13 | Set up real empty database | `Database name [course_explorer_real]: ` and `Startup mode` |
 
 Except for the administration rebuild, each entry prints the report of the command it runs. [Setup and preflight](/docs/operations/setup-and-preflight.md) states what each entry does, the machine command behind it, and its prompts and confirmations.
 
-Choices 12 and 13 run the two self-host workflows. The administration console offers no action for either workflow.
+Choices 12 and 13 run the two self-host workflows. The administration console offers no action for either workflow. Choice 12 refuses at the host preflight when another process holds one of its loopback ports, except the database port or the embedding port of a container this project already runs, and the entry runs again with another port. In foreground mode, choice 13 refuses a busy feature or administration port and asks for the first workflow's foreground pair to end first.
 
 ## The stage tools
 
@@ -71,7 +71,9 @@ The four stage tools share five entries. The inference tool adds one, and the em
 
 The inference tool inserts **6 Dispose target** before **0 Back**, and the embedding tool inserts **6 Build serving artifacts** there.
 
-Start reserves the stage, prepares its services and database, and launches one detached worker. The command returns once the launch is acknowledged, and the work continues in that worker. Resume re-arms a session the stage retained and launches its worker again. A stage that finalizes its work at a stop has nothing to resume, and resume is refused with a safe error.
+Start reserves the stage, prepares its services and database, and launches one detached worker. The command returns once the launch is acknowledged, and the work continues in that worker. An idle ingestion or embedding session with pending work whose work identity does not match this device is superseded: its receipt and state move to `superseded-<session_id>` under the stage controller directory, a fresh session starts, and the report names the superseded session. Resume re-arms a session the stage retained and launches its worker again. A stage that finalizes its work at a stop has nothing to resume, and resume is refused with a safe error.
+
+The log commands list only the stage's current sessions, and a superseded session's receipt and server streams (`runner.out` and `runner.err`) move to `superseded-<session_id>/session`, where no command reads them. The worker's `runner.log` and `runtime.log` live in the worker's session directory under `ADMIN_STATE_ROOT/sessions`, and a worker log read verifies the stage's current session record before it opens the transport. A log read of a superseded identity refuses.
 
 Pause publishes a pause request, waits for the owned worker to exit, and unloads the resources the session started. The session, its receipt, and its progress are retained, so the work can continue from its own checkpoints. A pause never overwrites a pending stop.
 
@@ -173,7 +175,7 @@ The [Operations](/docs/operations/README.md#the-two-operator-surfaces) overview 
 | Entry | Writes | Waits for work |
 |---|---|---|
 | Enroll/select dataset | The initial receipt and the Selected pointer | No |
-| Set up example site | The absent working files, both generated database passwords, the administration account when absent, the pinned model after confirmation, the database and embedding services, the example data, the feedback application store, the built artifacts and frontends, and the chosen startup mode's units or children | No |
+| Set up example site | The checkout rename of a checkout with no working file, the absent working files, the chosen instance key, ports, origins, feature-switch defaults and shared directory, both generated database passwords, the administration account when absent, the pinned model after confirmation, the database and embedding services, the example data, the feedback application store, the built artifacts and frontends, and the chosen startup mode's units or children | No |
 | Set up real empty database | One named database, the initial receipt and the Selected pointer, the serving artifacts, and the chosen startup mode's units or children | No |
 | Copy dataset to Working | The copied receipt and the Working pointer | No |
 | Worker setup/update | The worker checkout, its locked environment, and its pointed resources | No |
@@ -192,7 +194,7 @@ The [Operations](/docs/operations/README.md#the-two-operator-surfaces) overview 
 | Session log, Embedding log and Command log | Nothing | No |
 | Usage | The usage file, with the retained records | No |
 | Rebuild app | The built site frontend, the two recreated containers, and the restarted web unit | No |
-| Rebuild admin panel | The built administration frontend, and the administration unit's queued restart | No |
+| Rebuild administration console | The built administration frontend, and the administration unit's queued restart | No |
 | Build serving artifacts | The versioned artifact directory with its study fragments and catalogue artifact, and, on a site that serves the embedding features, its hub pair, shared stores and packed search relation, the course centroid table and the stored neighbour table | No |
 
 ## What an entry needs
@@ -207,7 +209,7 @@ The [Operations](/docs/operations/README.md#the-two-operator-surfaces) overview 
 | `migrate selected` | A Selected dataset and the running server database service |
 | `migrate working` | Every stage idle, a Working dataset, and the running server database service |
 | A stage start | The stage state root, a Working dataset, and its database at this checkout's migration head |
-| An ingestion start | A stage start, plus the configured source base and university root |
+| An ingestion start | A stage start, plus the configured instance's mapped source base and university root |
 | A translation or inference start | A stage start, plus the worker connection, the locked environment installed on the worker, and the received worker database at the worker code's migration head |
 | An embedding start | A stage start, plus the pinned model artifact file present and matching `EMBEDDING_ARTIFACT_SHA256` |
 | A stage status | The configured stage state root |

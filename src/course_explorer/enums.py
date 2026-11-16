@@ -7,6 +7,14 @@ a member changes stored bytes.
 """
 
 from enum import StrEnum
+from typing import Annotated
+
+from pydantic import StringConstraints
+
+# The canonical language-tag syntax: a two- or three-letter lowercase primary tag followed by
+# optional two- to eight-character lowercase or digit subtags, for example `fi` or `zh-hans`.
+LANGUAGE_CODE_PATTERN = r"^[a-z]{2,3}(-[a-z0-9]{2,8})*$"
+LanguageCode = Annotated[str, StringConstraints(pattern=LANGUAGE_CODE_PATTERN)]
 
 
 class IngestionRunStatus(StrEnum):
@@ -25,7 +33,7 @@ class SourceObjectType(StrEnum):
 
 
 class ModuleType(StrEnum):
-    """Public and recursively discovered Kori module types."""
+    """Public and recursively discovered study-structure module types."""
 
     DEGREE_PROGRAMME = "DegreeProgramme"
     STUDY_MODULE = "StudyModule"
@@ -47,7 +55,7 @@ class PrerequisiteMemberType(StrEnum):
 
 
 class ModuleRuleType(StrEnum):
-    """Typed Kori module-rule AST node kinds."""
+    """Typed study-structure module-rule AST node kinds."""
 
     COMPOSITE_RULE = "CompositeRule"
     CREDITS_RULE = "CreditsRule"
@@ -56,6 +64,16 @@ class ModuleRuleType(StrEnum):
     MODULE_RULE = "ModuleRule"
     ANY_COURSE_UNIT_RULE = "AnyCourseUnitRule"
     ANY_MODULE_RULE = "AnyModuleRule"
+
+
+class OfficialTextField(StrEnum):
+    """Official curriculum text field families stored once per version, field and language."""
+
+    NAME = "name"
+    CONTENT = "content"
+    OUTCOMES = "outcomes"
+    PREREQUISITE_TEXT = "prerequisite_text"
+    ADDITIONAL_INFO = "additional_info"
 
 
 class TeachingTextField(StrEnum):
@@ -72,13 +90,6 @@ DESCRIPTIVE_TEACHING_TEXT_FIELDS: tuple[TeachingTextField, ...] = (
     TeachingTextField.CONTENT,
     TeachingTextField.OUTCOMES,
 )
-
-
-class TeachingTextLanguage(StrEnum):
-    """Language of a teaching-text value, either official or derived."""
-
-    FI = "fi"
-    EN = "en"
 
 
 class TranslationMethod(StrEnum):
@@ -104,14 +115,14 @@ class CourseEmbeddingStatus(StrEnum):
 
 
 class InferredCoverageState(StrEnum):
-    """Whether a current inferred set processed every eligible source course."""
+    """Whether an inferred set processed every eligible source course."""
 
     PARTIAL = "partial"
     COMPLETE = "complete"
 
 
 class InferredProducerKind(StrEnum):
-    """What produced a derived inferred artifact, such as a current prerequisite set or group."""
+    """What produced a derived inferred artifact, such as a prerequisite set or group."""
 
     TEST = "test"
     INFERENCE = "inference"

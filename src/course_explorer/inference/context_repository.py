@@ -90,7 +90,7 @@ class InferenceCandidateRepository:
         for identity in identities:
             _require_identity(identity)
         keys = tuple(
-            (identity.group_id, identity.sisu_course_unit_id, identity.representative_source_sha256)
+            (identity.group_id, identity.source_version_id, identity.representative_source_sha256)
             for identity in identities
         )
         if len(keys) != len(set(keys)):
@@ -102,7 +102,7 @@ class InferenceCandidateRepository:
         candidate_rows = tuple(
             (
                 identity.group_id,
-                identity.sisu_course_unit_id,
+                identity.source_version_id,
                 identity.representative_source_sha256,
             )
             for identity in identities
@@ -129,7 +129,7 @@ class InferenceCandidateRepository:
                 match=InferenceCandidateMatch(
                     course=InferenceCourseEmbeddingIdentity(
                         group_id=candidate_group_id,
-                        sisu_course_unit_id=candidate_source_id,
+                        source_version_id=candidate_source_id,
                         representative_source_sha256=candidate_source_hash,
                     ),
                     score=float(score),
@@ -177,7 +177,7 @@ class InferenceCandidateRepository:
         """Hash the current stored embedding state over the supplied exact course pairs.
 
         One scoped projection reads only identity/provenance/status columns for chunks on the
-        supplied exact ``(Course.group_id, CourseVersion.sisu_course_unit_id)`` pairs under the
+        supplied exact ``(Course.group_id, CourseVersion.source_version_id)`` pairs under the
         requested embedding configuration hash. It reads every chunk source
         hash, lifecycle, or vector presence, so a stale-source, pending, or failed chunk on a
         supplied current version participates and changes the digest. A different source
@@ -188,7 +188,7 @@ class InferenceCandidateRepository:
         identities = tuple(represented_courses)
         for identity in identities:
             _require_identity(identity)
-        keys = tuple((identity.group_id, identity.sisu_course_unit_id) for identity in identities)
+        keys = tuple((identity.group_id, identity.source_version_id) for identity in identities)
         if len(keys) != len(set(keys)):
             raise ValueError("represented course identities must be unique")
         records: list[dict[str, object]] = []
@@ -201,7 +201,7 @@ class InferenceCandidateRepository:
                         session.execute(
                             select(
                                 Course.group_id,
-                                CourseVersion.sisu_course_unit_id,
+                                CourseVersion.source_version_id,
                                 CourseEmbeddingChunk.id,
                                 CourseEmbeddingChunk.field,
                                 CourseEmbeddingChunk.language,
@@ -227,9 +227,7 @@ class InferenceCandidateRepository:
                             )
                             .join(Course, Course.id == CourseVersion.course_id)
                             .where(
-                                tuple_(Course.group_id, CourseVersion.sisu_course_unit_id).in_(
-                                    batch
-                                ),
+                                tuple_(Course.group_id, CourseVersion.source_version_id).in_(batch),
                                 CourseEmbeddingChunk.embedding_configuration_hash
                                 == embedding_configuration_hash,
                             )
@@ -239,10 +237,10 @@ class InferenceCandidateRepository:
                     [
                         {
                             "group_id": row.group_id,
-                            "sisu_course_unit_id": row.sisu_course_unit_id,
+                            "sisu_course_unit_id": row.source_version_id,
                             "id": str(row.id),
                             "field": row.field.value,
-                            "language": row.language.value,
+                            "language": row.language,
                             "chunk_index": row.chunk_index,
                             "representative_source_hash": row.representative_source_hash,
                             "effective_text_hash": row.effective_text_hash,
@@ -297,7 +295,7 @@ class InferenceCandidateRepository:
                 .join(Course, Course.id == CourseVersion.course_id)
                 .where(
                     Course.group_id == target.group_id,
-                    CourseVersion.sisu_course_unit_id == target.sisu_course_unit_id,
+                    CourseVersion.source_version_id == target.source_version_id,
                     CourseEmbeddingChunk.representative_source_hash
                     == target.representative_source_sha256,
                     CourseEmbeddingChunk.status == CourseEmbeddingStatus.COMPLETED,
@@ -320,7 +318,7 @@ class InferenceCandidateRepository:
         """Build the exact best-pair-then-ranked statement without loading vector/text columns."""
         identities = values(
             column("group_id", Text),
-            column("sisu_course_unit_id", Text),
+            column("source_version_id", Text),
             column("representative_source_hash", Text),
             name=_REPRESENTED_IDENTITIES_CTE,
         ).data(list(candidate_rows))
@@ -343,7 +341,7 @@ class InferenceCandidateRepository:
         best_pairs = (
             select(
                 candidate_course.group_id.label("candidate_group_id"),
-                candidate_version.sisu_course_unit_id.label("candidate_source_id"),
+                candidate_version.source_version_id.label("candidate_source_id"),
                 candidate_chunk.representative_source_hash.label("candidate_source_hash"),
                 (1 - distance).label("score"),
                 target_chunk.field.label("target_field"),
@@ -360,7 +358,7 @@ class InferenceCandidateRepository:
                 .over(
                     partition_by=[
                         candidate_course.group_id,
-                        candidate_version.sisu_course_unit_id,
+                        candidate_version.source_version_id,
                         candidate_chunk.representative_source_hash,
                     ],
                     order_by=[
@@ -383,7 +381,7 @@ class InferenceCandidateRepository:
                 candidate_version,
                 and_(
                     candidate_version.course_id == candidate_course.id,
-                    candidate_version.sisu_course_unit_id == identities.c.sisu_course_unit_id,
+                    candidate_version.source_version_id == identities.c.source_version_id,
                 ),
             )
             .join(
@@ -402,7 +400,7 @@ class InferenceCandidateRepository:
                 target_version,
                 and_(
                     target_version.course_id == target_course.id,
-                    target_version.sisu_course_unit_id == target.sisu_course_unit_id,
+                    target_version.source_version_id == target.source_version_id,
                 ),
             )
             .join(

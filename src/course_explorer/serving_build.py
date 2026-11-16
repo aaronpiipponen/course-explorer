@@ -34,6 +34,7 @@ from course_explorer.config import (
     DatabaseSettings,
     EmbeddingRuntimeSettings,
     load_database_settings,
+    load_instance_settings,
     load_raw_database_settings,
     load_search_settings,
 )
@@ -334,6 +335,7 @@ def build_serving_artifacts(
     key = serving_key(settings)
     family = serving_artifact_root(repository / settings.admin_state_root, key)
     family.mkdir(parents=True, exist_ok=True)
+    university = load_instance_settings().university
     current = family / "current"
     previous_build = Path(os.path.realpath(current)).name if current.exists() else None
     build_root = create_build_directory(family)
@@ -361,7 +363,9 @@ def build_serving_artifacts(
     try:
         with database_context(settings) as factory:
             if embedding is not None:
-                current_chunks = read_current_chunk_vectors(factory, embedding)
+                current_chunks = read_current_chunk_vectors(
+                    factory, embedding, university=university
+                )
                 hubs = compute_embedding_hubs(current_chunks)
                 centroids = compute_course_centroids(
                     current_chunks.chunks,
@@ -379,16 +383,19 @@ def build_serving_artifacts(
                 )
 
             fragment_service = StudyStructureService(
-                CurriculumRepository(factory), academic_year_start=key.academic_year_start
+                CurriculumRepository(factory, university=university),
+                academic_year_start=key.academic_year_start,
             )
             fragment_report = StudyFragmentStore.build(
                 fragment_service,
-                CurriculumRepository(factory).list_module_group_ids(),
+                CurriculumRepository(factory, university=university).list_module_group_ids(),
                 dataset_key=key.key,
                 academic_year_start=key.academic_year_start,
                 path=build_root / STUDY_FRAGMENT_FILE,
             )
-            catalogue_projection = build_lookup_projection(CurriculumRepository(factory))
+            catalogue_projection = build_lookup_projection(
+                CurriculumRepository(factory, university=university)
+            )
             catalogue_report = run_catalogue_command(
                 database_settings=settings,
                 academic_year_start=key.academic_year_start,

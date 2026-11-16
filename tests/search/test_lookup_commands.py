@@ -62,7 +62,9 @@ def test_catalogue_command_maps_minimal_projection_and_empty_summaries_shortcut(
     def _context(_settings: DatabaseSettings, **_kwargs):
         yield object()
 
-    monkeypatch.setattr(command_module, "CurriculumRepository", lambda _factory: curriculum)
+    monkeypatch.setattr(
+        command_module, "CurriculumRepository", lambda _factory, **_kwargs: curriculum
+    )
     monkeypatch.setattr(command_module, "_database_context", _context)
     monkeypatch.setattr(command_module, "load_database_settings", lambda: settings)
 
@@ -95,7 +97,7 @@ def test_catalogue_command_maps_minimal_projection_and_empty_summaries_shortcut(
             "group_id": "module-group-a",
             "candidates": [
                 {
-                    "sisu_module_id": "module-a-v1",
+                    "source_version_id": "module-a-v1",
                     "module_type": "DegreeProgramme",
                     "code": "DP.A",
                     "name_fi": "Ohjelma",

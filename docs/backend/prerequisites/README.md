@@ -12,7 +12,7 @@ The compiler folds the official prerequisite options, the inlined rules of the s
 
 ## The graph
 
-The graph operation derives the drawing from that structure and returns the structure, the drawing and the drawing allowance. The web response adds the serving dataset identity and the configured allocation limit. The browser computes the box states from the held structure and the live course state, and the inferred toggle takes part only on a site that serves the inference features. A script caller passes no drawing limit, and the web route applies the configured one. [Prerequisite graph](/docs/backend/prerequisites/prerequisite-graph.md) describes the report and its drawing.
+The graph operation derives the drawing from that structure and returns the structure, the drawing and the drawing allowance. The web response adds the serving dataset identity, the configured allocation limit and the configured assumed course credits. The browser computes the box states from the held structure and the live course state, and the inferred toggle takes part only on a site that serves the inference features. A script caller passes no drawing limit, and the web route applies the configured one. [Prerequisite graph](/docs/backend/prerequisites/prerequisite-graph.md) describes the report and its drawing.
 
 ## The minimum route
 

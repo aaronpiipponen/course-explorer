@@ -30,6 +30,7 @@ from course_explorer.config import (
     SearchSettings,
     WebSettings,
 )
+from course_explorer.instance import UNIVERSITIES
 from course_explorer_web import launch
 from tests.support import write_example_config_tree
 
@@ -100,7 +101,12 @@ def test_web_launcher_excludes_operator_credentials(
     assert observed["WEB_WORKERS"] == "4"
     assert observed["WEB_EMBEDDINGS_ENABLED"] == ("1" if embeddings_enabled else "0")
     assert observed["WEB_INFERENCE_ENABLED"] == "1"
+    assert observed["WEB_PREREQUISITES_ENABLED"] == "1"
     assert observed["WEB_APP_URL"] == "https://feedback.example.org/"
+    assert observed["INSTANCE_KEY"] == "example"
+    # The optional display-label override is absent, so the handoff carries no value for it and the
+    # child composes the configured university's map label.
+    assert "INSTANCE_DISPLAY_LABEL" not in observed
     assert observed["ADMISSION_ENABLED"] == "1"
     assert observed["MALLOC_ARENA_MAX"] == "2"
     assert {"HOME", "PATH", "LANG"} <= observed.keys()
@@ -149,8 +155,11 @@ def test_web_launcher_excludes_operator_credentials(
     assert WebSettings().web_respawn_exit_limit == 3
     assert WebSettings().web_respawn_window_seconds == 60
     assert WebSettings().web_app_url == "https://feedback.example.org/"
+    assert WebSettings().instance_key == "example"
+    assert WebSettings().display_label == UNIVERSITIES["example"].display_label
     assert WebSettings().embeddings_enabled is embeddings_enabled
     assert WebSettings().inference_enabled is True
+    assert WebSettings().prerequisites_enabled is True
     assert AdmissionSettings().admission_enabled is True
     # The handed feedback families reconstruct from the closed environment alone, and the one app
     # address supplies the exact feedback origin without its root slash.
@@ -196,6 +205,7 @@ def test_web_router_waits_for_all_workers(
         repository / "src" / "course_explorer_web", root / "src" / "course_explorer_web"
     )
     shutil.copytree(repository / "config", root / "config")
+    shutil.copy2(repository / "universities.toml", root / "universities.toml")
     (root / "native").symlink_to(repository / "native", target_is_directory=True)
     monkeypatch.setenv("WEB_EMBEDDINGS_ENABLED", "0")
     settings = load_database_settings()

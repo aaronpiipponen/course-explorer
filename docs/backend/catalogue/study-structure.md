@@ -18,7 +18,7 @@ A structure read takes one or more canonical root identities, each a [programme]
 
 The academic year is the configured current academic year, `CURRENT_ACADEMIC_YEAR` in `config/curriculum.toml`. The example sets `2026-2027`, so the projection uses the academic year that starts in 2026.
 
-A projected root carries exactly one version for that year. A version is a candidate when it is a member of that exact academic year's curriculum periods, or, when the module has no such membership, when it carries no period membership and its own validity bounds contain the year. No nearest-year fallback applies, so a root whose versions are all tied to other years is unavailable. [Prerequisite graph](/docs/backend/prerequisites/prerequisite-graph.md) is the reader that accepts a single nearest dated version for a module reference and discloses the fallback. [Representative versions and activity](/docs/backend/catalogue/representative-versions.md) states the shared candidate rule.
+A projected root carries exactly one version for that year. A version is a candidate when it is a member of that exact academic year's curriculum periods, or, when the module has no such membership, when it carries no period membership and its own validity bounds contain the year. A validity bound the version does not state leaves that side open, so a version with neither bound is a candidate for every academic year. No nearest-year fallback applies, so a root whose versions are all tied to other years is unavailable. [Prerequisite graph](/docs/backend/prerequisites/prerequisite-graph.md) is the reader that accepts a single nearest dated version for a module reference and discloses the fallback. [Representative versions and activity](/docs/backend/catalogue/representative-versions.md) states the shared candidate rule.
 
 A request may carry one explicit version identity per canonical group. It is authoritative for the groups it names and must belong to that group's eligible set. The read refuses any other identity and never substitutes a version, and a refusal fails the whole batch even when unavailable roots are collected. A group without an entry keeps the ordinary unique-candidate resolution. The map is request-local, and an entry outside the requested closure joins the batch read but is never projected.
 
@@ -40,7 +40,7 @@ An unrestricted rule names no course and no module, and a bounded rule carries i
 
 ## Resolved courses and modules
 
-A course unit rule resolves to the shared course summary of the course it names, which carries both official names, the code, the credits, the official URL, and the activity state. A course that the tree names in two places is the same course in both.
+A course unit rule resolves to the shared course summary of the course it names, which carries the displayed summary name of each interface language, the code, the credits, the official URL, and the activity state. A course that the tree names in two places is the same course in both.
 
 A module rule resolves to a nested module: the selected version's summary, its target credits, and its own projected rule tree, built the same way as the root. A module that the tree references in two separate branches is projected in each branch, and a module reference that points at a module on the path from the root is reported as a cycle instead.
 

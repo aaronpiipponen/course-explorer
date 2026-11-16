@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
-from course_explorer.curriculum import CatalogueCourse, CatalogueTeachingCourse
+from course_explorer.curriculum import (
+    CatalogueCourse,
+    CatalogueTeachingCourse,
+)
 from course_explorer.enums import (
+    OfficialTextField,
     TeachingTextField,
-    TeachingTextLanguage,
     TranslationMethod,
 )
+from course_explorer.instance import UNIVERSITIES, UniversityMetadata
 from course_explorer.teaching_text.service import (
     StaleDerivedText,
     TeachingTextOrigin,
@@ -28,6 +34,21 @@ from tests.teaching_text._support import (
 )
 
 
+def _policy(priority: dict[str, tuple[str, ...]]) -> UniversityMetadata:
+    """Build one Finnish/Swedish/English policy over the shared map entry."""
+    return replace(
+        UNIVERSITIES["hanken"],
+        official_languages=("fi", "sv", "en"),
+        display_fallback={"fi": ("fi", "sv", "en"), "en": ("en", "sv", "fi")},
+        translation_priority=priority,
+        inference_languages=(
+            ("fi", TeachingTextOrigin.OFFICIAL),
+            ("sv", TeachingTextOrigin.OFFICIAL),
+            ("en", TeachingTextOrigin.OFFICIAL),
+        ),
+    )
+
+
 def test_teaching_text_sha256_preserves_exact_official_bytes() -> None:
     """Hashing preserves exact UTF-8 bytes, including a trailing space."""
     assert teaching_text_sha256("Matriisit") == (
@@ -39,66 +60,86 @@ def test_teaching_text_sha256_preserves_exact_official_bytes() -> None:
 
 
 def test_effective_text_prefers_official_and_uses_current_derived_fallback() -> None:
-    """Official target wins, a current-hash derived target supplies provenance, prereqs absent."""
-    representative = version(
-        "course-a-v1",
-        name_fi="Lineaarialgebra",
-        content_fi="Matriisit",
-        outcomes_en="Use matrices",
+    """Official precedence holds, an accepted row from the second listed source is current, and
+    excluding its pair leaves the retained row missing rather than effective."""
+    policy = _policy({"fi": ("en", "sv"), "en": ("fi", "sv")})
+    representative = version("course-a-v1").model_copy(
+        update={
+            "texts": {
+                OfficialTextField.NAME: {"fi": "Lineaarialgebra", "sv": "Linjär algebra"},
+                OfficialTextField.CONTENT: {"fi": "Matriisit", "sv": "Matriser"},
+                OfficialTextField.OUTCOMES: {"sv": "Använd matriser"},
+            }
+        }
     )
     rows = (
         translation(
             "course-a-v1",
             TeachingTextField.NAME,
-            TeachingTextLanguage.EN,
-            TeachingTextLanguage.FI,
-            "Lineaarialgebra",
+            "en",
+            "sv",
+            "Linjär algebra",
             "Linear algebra",
         ),
         translation(
             "course-a-v1",
             TeachingTextField.CONTENT,
-            TeachingTextLanguage.EN,
-            TeachingTextLanguage.FI,
-            "Matriisit",
+            "en",
+            "sv",
+            "Matriser",
             "Matrices",
         ),
         translation(
             "course-a-v1",
             TeachingTextField.NAME,
-            TeachingTextLanguage.FI,
-            TeachingTextLanguage.EN,
-            "Unrelated English",
-            "Wrong derived Finnish",
+            "fi",
+            "sv",
+            "Linjär algebra",
+            "Väärä",
         ),
     )
-    catalogue = build((course("course-a", representative),), rows)
+    catalogue = build((course("course-a", representative),), rows, university=policy)
 
     resolved = catalogue.courses[0]
     assert [(cell.field, cell.language) for cell in resolved.texts] == [
-        (TeachingTextField.NAME, TeachingTextLanguage.FI),
-        (TeachingTextField.NAME, TeachingTextLanguage.EN),
-        (TeachingTextField.CONTENT, TeachingTextLanguage.FI),
-        (TeachingTextField.CONTENT, TeachingTextLanguage.EN),
-        (TeachingTextField.OUTCOMES, TeachingTextLanguage.EN),
+        (TeachingTextField.NAME, "fi"),
+        (TeachingTextField.NAME, "sv"),
+        (TeachingTextField.NAME, "en"),
+        (TeachingTextField.CONTENT, "fi"),
+        (TeachingTextField.CONTENT, "sv"),
+        (TeachingTextField.CONTENT, "en"),
+        (TeachingTextField.OUTCOMES, "sv"),
     ]
     by_key = {(cell.field, cell.language): cell for cell in resolved.texts}
-    official_name = by_key[(TeachingTextField.NAME, TeachingTextLanguage.FI)]
+    official_name = by_key[(TeachingTextField.NAME, "fi")]
     assert official_name.origin is TeachingTextOrigin.OFFICIAL
     assert official_name.text == "Lineaarialgebra"
     assert official_name.text_hash == official_name.source_text_hash
     assert official_name.translation_method is None
     assert official_name.translation_generated_at is None
-    derived_name = by_key[(TeachingTextField.NAME, TeachingTextLanguage.EN)]
+    derived_name = by_key[(TeachingTextField.NAME, "en")]
     assert derived_name.origin is TeachingTextOrigin.DERIVED
     assert derived_name.text == "Linear algebra"
     assert derived_name.text_hash == teaching_text_sha256("Linear algebra")
-    assert derived_name.source_text_hash == teaching_text_sha256("Lineaarialgebra")
+    assert derived_name.source_text_hash == teaching_text_sha256("Linjär algebra")
     assert derived_name.translation_method is TranslationMethod.MANUAL
     assert derived_name.translation_generated_at == GENERATED_AT
-    assert by_key[(TeachingTextField.CONTENT, TeachingTextLanguage.EN)].origin is (
-        TeachingTextOrigin.DERIVED
-    )
+    assert by_key[(TeachingTextField.CONTENT, "en")].origin is TeachingTextOrigin.DERIVED
+    # The official Finnish target keeps precedence over a retained Finnish translation row.
+    assert official_name.text == "Lineaarialgebra"
+
+    # Excluding the English target pair retains the stored row but leaves the cell missing, not
+    # stale, and never reports the retained row as an effective cell.
+    excluded = _policy({"fi": ("en", "sv")})
+    excluded_catalogue = build((course("course-a", representative),), rows, university=excluded)
+    excluded_cell = {(cell.field, cell.language) for cell in excluded_catalogue.courses[0].texts}
+    assert (TeachingTextField.NAME, "en") not in excluded_cell
+    assert (TeachingTextField.CONTENT, "en") not in excluded_cell
+    assert excluded_catalogue.coverage.stale_texts == ()
+    excluded_counts = {
+        (count.field, count.language): count for count in excluded_catalogue.coverage.fields
+    }
+    assert excluded_counts[(TeachingTextField.NAME, "en")].missing_count == 1
 
 
 def test_supplied_catalogue_reuses_resolution_without_another_course_read() -> None:
@@ -116,10 +157,24 @@ def test_supplied_catalogue_reuses_resolution_without_another_course_read() -> N
             self.reads += 1
             return super().list_teaching_courses(active_only=active_only)
 
+        def list_prompt_courses(self) -> tuple[CatalogueTeachingCourse, ...]:
+            self.reads += 1
+            return super().list_prompt_courses()
+
+    teaching_representative = version(
+        "course-a-2026", name_fi="Lineaarialgebra", content_fi="Matriisit"
+    )
+    full_representative = teaching_representative.model_copy(
+        update={
+            "texts": {
+                **teaching_representative.texts,
+                OfficialTextField.PREREQUISITE_TEXT: {"fi": "Esitietovaatimus"},
+                OfficialTextField.ADDITIONAL_INFO: {"en": "Additional information"},
+            }
+        }
+    )
     courses = (
-        course(
-            "course-a", version("course-a-2026", name_fi="Lineaarialgebra", content_fi="Matriisit")
-        ),
+        course("course-a", full_representative),
         course("course-b", None),
         course("course-c", version("course-c-2026", name_en="Programming"), is_active=False),
     )
@@ -138,8 +193,24 @@ def test_supplied_catalogue_reuses_resolution_without_another_course_read() -> N
     # An ordinary missing teaching-text cell is absent rather than fabricated.
     resolved_c = next(item for item in supplied.courses if item.group_id == "course-c")
     assert [(cell.field, cell.language) for cell in resolved_c.texts] == [
-        (TeachingTextField.NAME, TeachingTextLanguage.EN)
+        (TeachingTextField.NAME, "en")
     ]
+    # The full representative's non-teaching maps never enter the effective teaching cells.
+    resolved_a = next(item for item in supplied.courses if item.group_id == "course-a")
+    assert {cell.field for cell in resolved_a.texts} == {
+        TeachingTextField.NAME,
+        TeachingTextField.CONTENT,
+    }
+    assert {cell.text for cell in resolved_a.texts} == {"Lineaarialgebra", "Matriisit"}
+    assert all(cell.text_hash == teaching_text_sha256(cell.text) for cell in resolved_a.texts)
+    supplied_representative = courses[0].representative
+    assert supplied_representative is not None
+    assert supplied_representative.texts[OfficialTextField.PREREQUISITE_TEXT] == {
+        "fi": "Esitietovaatimus"
+    }
+    assert supplied_representative.texts[OfficialTextField.ADDITIONAL_INFO] == {
+        "en": "Additional information"
+    }
 
     embedding = embedding_settings()
     counting = CountingCurriculum(courses)
@@ -159,16 +230,16 @@ def test_effective_text_rejects_duplicate_persisted_keys() -> None:
         translation(
             "course-a-v1",
             TeachingTextField.NAME,
-            TeachingTextLanguage.EN,
-            TeachingTextLanguage.FI,
+            "en",
+            "fi",
             "Lineaarialgebra",
             "Linear algebra",
         ),
         translation(
             "course-a-v1",
             TeachingTextField.NAME,
-            TeachingTextLanguage.EN,
-            TeachingTextLanguage.FI,
+            "en",
+            "fi",
             "Lineaarialgebra",
             "Linear algebra (duplicate)",
         ),
@@ -188,16 +259,16 @@ def test_projected_coverage_matches_shared_resolution_without_full_course_reads(
         translation(
             "course-derived",
             TeachingTextField.CONTENT,
-            TeachingTextLanguage.EN,
-            TeachingTextLanguage.FI,
+            "en",
+            "fi",
             "Ohjelmointi",
             "Programming",
         ),
         translation(
             "course-stale",
             TeachingTextField.CONTENT,
-            TeachingTextLanguage.EN,
-            TeachingTextLanguage.FI,
+            "en",
+            "fi",
             "Vanha sisältö",
             "Old content",
         ),
@@ -223,10 +294,10 @@ def test_projected_coverage_matches_shared_resolution_without_full_course_reads(
     assert projected.stale_texts == (
         StaleDerivedText(
             group_id="course-stale",
-            sisu_course_unit_id="course-stale",
+            source_version_id="course-stale",
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
-            source_language=TeachingTextLanguage.FI,
+            language="en",
+            source_language="fi",
             stored_source_text_hash=teaching_text_sha256("Vanha sisältö"),
             current_source_text_hash=None,
         ),

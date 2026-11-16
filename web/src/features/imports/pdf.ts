@@ -1,10 +1,11 @@
 /**
- * Lazy PDF.js decoder from one supported Sisu plan PDF to the pure extractor's positioned pages.
+ * Static PDF.js decoder from one supported Sisu plan PDF to the pure extractor's positioned pages.
  *
- * The module imports PDF.js and its same-version worker only when the profile import accepts a PDF.
- * One array buffer and one text pass per page reach `extractSisuPdfRows`. Pages are never rendered
- * and annotations, scripts, attachments and metadata are never read. Decoder failures become the
- * safe `Invalid Sisu PDF plan` error so no source text reaches a diagnostic.
+ * The module imports PDF.js and its same-version worker with the app bundle and decodes a PDF only
+ * when the profile import reads one. One array buffer and one text pass per page reach
+ * `extractSisuPdfRows`. Pages are never rendered and annotations, scripts, attachments and metadata
+ * are never read. Decoder failures become the safe `Invalid Sisu PDF plan` error so no source text
+ * reaches a diagnostic.
  */
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -15,7 +16,7 @@ import {
   type SisuPdfRow,
   type SisuPdfTextItem,
   type SisuPdfTextPage,
-} from "./sisuPdfRows";
+} from "./pdfRows";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 

@@ -16,7 +16,7 @@ function report(
   const root: StructureModule = {
     module: {
       group_id: "module-root",
-      sisu_module_id: sisuModuleId,
+      source_version_id: sisuModuleId,
       module_type: "Module",
       code: "ROOT",
       name_fi: null,
@@ -89,7 +89,7 @@ describe("selection-qualified structure reads", () => {
       false,
       new AbortController().signal,
     );
-    expect(firstRead.reports["module-root"].root.module.sisu_module_id).toBe(
+    expect(firstRead.reports["module-root"].root.module.source_version_id).toBe(
       "root-v1",
     );
     expect(firstRead.reports["module-root"].root.rule.course?.code).toBe("V1");
@@ -116,9 +116,9 @@ describe("selection-qualified structure reads", () => {
       false,
       new AbortController().signal,
     );
-    expect(secondRead.reports["module-root"].root.module.sisu_module_id).toBe(
-      "root-v2",
-    );
+    expect(
+      secondRead.reports["module-root"].root.module.source_version_id,
+    ).toBe("root-v2");
     expect(secondRead.reports["module-root"].root.rule.course?.code).toBe("V2");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
 
@@ -130,7 +130,7 @@ describe("selection-qualified structure reads", () => {
       new AbortController().signal,
     );
     expect(
-      repeatedSecond.reports["module-root"].root.module.sisu_module_id,
+      repeatedSecond.reports["module-root"].root.module.source_version_id,
     ).toBe("root-v2");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });

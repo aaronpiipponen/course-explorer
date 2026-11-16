@@ -17,14 +17,10 @@ export function DiscoverListTabs({
   onChange: (patch: Partial<DiscoverState>) => void;
 }) {
   const { t } = useWording();
-  const { embeddings_enabled } = useWebFeatures();
-  const lists: readonly (readonly [DiscoverState["list"], UiTextKey])[] =
-    embeddings_enabled
-      ? [
-          ["next", "Next courses"],
-          ["recommended", "Recommended"],
-        ]
-      : [["next", "Next courses"]];
+  const { embeddings_enabled, prerequisites_enabled } = useWebFeatures();
+  const lists: (readonly [DiscoverState["list"], UiTextKey])[] = [];
+  if (prerequisites_enabled) lists.push(["next", "Next courses"]);
+  if (embeddings_enabled) lists.push(["recommended", "Recommended"]);
   return (
     <div
       className="discover-tabs"

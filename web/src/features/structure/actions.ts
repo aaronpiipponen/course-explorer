@@ -8,7 +8,7 @@ import type {
 import type { StudyStructureReport } from "../../api/types";
 import type { StructureEdits, StructureState } from "./state";
 import { UNPLACED_KEY } from "./state";
-import type { SisuPlan } from "./sisu";
+import type { ImportedPlan } from "../imports/plan";
 import {
   buildProgrammeForest,
   courseHolders,
@@ -44,8 +44,8 @@ export type StructureChange = {
   removedCourseIds?: readonly CourseId[];
   /** Course identities removed from selection unless they are completed. */
   discardUncompletedCourseIds?: readonly CourseId[];
-  /** A supplied value replaces the pending Sisu hierarchy. An omitted field leaves it in place. */
-  pendingSisuImport?: SisuPlan | null;
+  /** A supplied value replaces the pending study-plan hierarchy. An omitted field leaves it in place. */
+  pendingPlanImport?: ImportedPlan | null;
 };
 
 /** One programme list operation: add, replace, reset or delete the programme with `groupId`. */
@@ -539,10 +539,10 @@ export function applyStructure(
         courseHolders: next.courseHolders ?? state.structure.courseHolders,
         courseOrder: next.courseOrder.filter((id) => chosen.has(id)),
       },
-      pendingSisuImport:
-        result.pendingSisuImport === undefined
-          ? state.pendingSisuImport
-          : result.pendingSisuImport,
+      pendingPlanImport:
+        result.pendingPlanImport === undefined
+          ? state.pendingPlanImport
+          : result.pendingPlanImport,
     };
   });
 }

@@ -1,4 +1,4 @@
-"""Machine-readable "What Can I Study Next?" discovery for a selected/completed course basis.
+"""Machine-readable next-course discovery for a selected/completed course basis.
 
 Usage:
     uv run python scripts/next_courses.py --display-language {fi|en}

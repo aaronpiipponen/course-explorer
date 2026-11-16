@@ -1,6 +1,6 @@
 # Shared interface components
 
-The shared interface components provide the help drawer, the notices, the disclosure and slide motion, the phone sheet, the scrollbar, the brand mark and the course menu.
+The shared interface components provide the help drawer, the notices, the disclosure and slide motion, the phone sheet, the scrollbar, the brand mark, the assumed-credit caption and the course menu.
 
 ## Help and the help drawer
 
@@ -54,15 +54,19 @@ The sheet carries a scrim that closes it on a press and a `.phone-sheet` section
 
 `useScrollbarShift(scroll, active)` in `useScrollbarShift.ts` animates the width of a scroll container's first element child when a classic scrollbar takes or releases space. It starts the 180-millisecond transition only for that shift, applies a real panel resize at once, and throws `A scroll container holds no content element` when the container has no element child. `ProfilePanel` uses it on the profile list and `ProfileButton` on the profile menu while the menu is open.
 
+## Assumed-credit caption
+
+`web/src/shared/assumed-note.css` defines `.assumed-note`, the caption style of a value calculated with the configured assumed course credit. It sets the secondary text colour, normal weight and wrapping, and the Discover, prerequisites and structure captions use it.
+
 ## The brand mark
 
-`BrandMark` in `BrandMark.tsx` renders the product name from the `course-explorer` wording entry. With the `site` prop it adds a slash and the `tuni` entry, which names the site instance. The app top bar passes `site`, and the documentation header renders the bare product mark.
+`BrandMark` in `BrandMark.tsx` renders the product name from the `course-explorer` wording entry. With the `site` prop it adds a slash and the site's served display label. The app top bar passes `site`, and the documentation header renders the bare product mark.
 
 ## The course menu
 
 `CourseMenu` in `web/src/shared/course/CourseMenu.tsx` renders one course action menu and its dialogs. It receives the course summary, the trigger element, the open state and its setter, an optional `onInteractionChange`, and a `structureSurface` flag for a card inside the structure of studies.
 
-The menu is one Radix dropdown with `modal={false}` and the `.course-menu` class. Its trigger suppresses the pointer-down default, so a scroll gesture that starts on the card stays a scroll. The title entry shows the course code, its credits and its active or inactive state, then the full name. The actions are those of the [course menu](/docs/reference/glossary.md#browser-app), which [Shared course state](/docs/guides/README.md#shared-course-state) states, and **Open in Sisu** is an anchor to the official page.
+The menu is one Radix dropdown with `modal={false}` and the `.course-menu` class. Its trigger suppresses the pointer-down default, so a scroll gesture that starts on the card stays a scroll. The title entry shows the course code, its credits or **Credits unknown**, and its active or inactive state, then the full name. The actions are those of the [course menu](/docs/reference/glossary.md#browser-app), which [Shared course state](/docs/guides/README.md#shared-course-state) states, and **Open in study guide** is an anchor to the official page.
 
 The Unplaced studies action comes from the course state and the saved holder in `state.structure.courseHolders`: an unselected course offers **Add to Unplaced studies**, a selected course with no place offers **Remove from Unplaced studies**, and a placed course offers **Move to Unplaced studies** beside **Remove from {name}**. Each action shows its notice through `useNotice`.
 

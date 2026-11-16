@@ -6,7 +6,7 @@
  * left name and code column, a status and credit column, small body text and one print layout per
  * page. Rows are grouped by baseline, merged in document order and classified as course or module.
  */
-import { normalizeSisuName } from "./sisuNames";
+import { normalizeImportedName } from "./names";
 
 /** Safe failure message of an unsupported or unreadable Sisu PDF plan. */
 export const INVALID_SISU_PDF_PLAN = "Invalid Sisu PDF plan";
@@ -51,13 +51,18 @@ export const INDENT_TOLERANCE = 1;
 /** The gap share of the text height above which a word space is inserted. */
 const WORD_GAP_RATIO = 0.2;
 
+/** The course code that opens one name column. */
 const CODE =
   /^[A-ZÅÄÖ0-9][A-ZÅÄÖ0-9.\-]*[A-ZÅÄÖ0-9](?:\.[A-ZÅÄÖ0-9.\-]+)*(?=\s|$)/;
+/** The credit count or range and its unit in one status column. */
 const CREDIT =
   /(?<![\d-])\d+\s*(?:–\s*\d+\s*)?(?:\/\s*(?:väh\.|min\.|\d)|op\b|cr\b)/;
+/** One completion date in one status column. */
 const DATE = /\d{1,2}\.\d{1,2}\.\d{4}/;
+/** One academic year range in one status column. */
 const ACADEMIC_RANGE = /\d{4}-\d{4}/;
 
+/** The status fragments that mark one row as a module. */
 const STATUS_FRAGMENTS = [
   "Valinnat tehty",
   "Valinnat kesken",
@@ -85,6 +90,7 @@ const STATUS_FRAGMENTS = [
   "min.",
 ];
 
+/** The complete status texts that mark one row as a module. */
 const FULL_STATUSES = [
   "Valinnat tehty",
   "Valinnat kesken",
@@ -117,7 +123,7 @@ function isBodyItem(item: SisuPdfTextItem, page: number): boolean {
 function startsEntry(left: string, tail: string): boolean {
   const token = CODE.exec(left)?.[0];
   if (token === undefined) return false;
-  const rest = normalizeSisuName(left.slice(token.length));
+  const rest = normalizeImportedName(left.slice(token.length));
   // A letters-only word such as an upper-case course-name fragment starts an entry only when the
   // status cell proves the row is a module heading.
   if (!/[0-9.\-]/.test(token) && !isModuleTail(tail)) return false;
@@ -146,7 +152,7 @@ function mergeRuns(items: readonly SisuPdfTextItem[]): string {
   for (const item of [...items].sort(
     (left, right) => left.transform[4] - right.transform[4],
   )) {
-    const str = normalizeSisuName(item.str);
+    const str = normalizeImportedName(item.str);
     if (str === "") continue;
     if (
       text !== "" &&
@@ -161,7 +167,7 @@ function mergeRuns(items: readonly SisuPdfTextItem[]): string {
     previousRight = item.transform[4] + item.width;
     previousHeight = item.height;
   }
-  return normalizeSisuName(text);
+  return normalizeImportedName(text);
 }
 
 /** One baseline group before entry merging. */
@@ -245,8 +251,8 @@ function joinContinuation(entry: Entry, row: RawRow): void {
     firstWord !== "tai"
       ? ""
       : " ";
-  entry.left = normalizeSisuName(entry.left + joiner + row.left);
-  entry.tail = normalizeSisuName(`${entry.tail} ${row.tail}`);
+  entry.left = normalizeImportedName(entry.left + joiner + row.left);
+  entry.tail = normalizeImportedName(`${entry.tail} ${row.tail}`);
 }
 
 /** Merge wrapped rows, page breaks and outdented continuation rows into ordered entries. */
@@ -270,7 +276,7 @@ function entries(rows: readonly RawRow[]): Entry[] {
 /** Classify one merged entry into the plan row the matcher consumes. */
 function classify(entry: Entry): SisuPdfRow {
   const code = CODE.exec(entry.left)?.[0] ?? null;
-  const name = normalizeSisuName(
+  const name = normalizeImportedName(
     code === null ? entry.left : entry.left.slice(code.length),
   );
   const kind = isModuleTail(entry.tail) ? "module" : "course";
@@ -278,6 +284,7 @@ function classify(entry: Entry): SisuPdfRow {
     kind,
     code,
     name: name === "" && code !== null ? code : name,
+    // A course row counts as completed when its status column carries a date.
     completed: kind === "course" && DATE.test(entry.tail),
     x: entry.x,
   };

@@ -36,6 +36,8 @@ from course_explorer.inference.publication import (
     prepare_current_publication,
     publish_current_cohort,
 )
+from course_explorer.inference.scheduling_repository import InferenceSchedulingRepository
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.prerequisite.domain import (
     EquivalenceGroupMember,
     EquivalenceGroupPublication,
@@ -147,7 +149,9 @@ def test_publish_idempotent_complete_empty_and_recommended_through_the_stores(
     raw_attempts = _count(factory, InferenceModelAttempt)
     raw_proposals = _count(factory, InferenceProposal)
     with pytest.raises(RuntimeError):
-        publish_current_cohort(factory, cohort, settings, selection)
+        publish_current_cohort(
+            factory, cohort, settings, selection, university=UNIVERSITIES["example"]
+        )
     partial_repository = InferredPrerequisiteRepository(factory)
     partial_member = partial_repository.read(member_one)
     assert partial_member.state is InferredReadState.CURRENT
@@ -161,7 +165,9 @@ def test_publish_idempotent_complete_empty_and_recommended_through_the_stores(
     assert _count(factory, InferenceProposal) == raw_proposals
     monkeypatch.setattr(InferredPrerequisiteRepository, "publish", original_publish)
 
-    diagnostics = publish_current_cohort(factory, cohort, settings, selection)
+    diagnostics = publish_current_cohort(
+        factory, cohort, settings, selection, university=UNIVERSITIES["example"]
+    )
     assert diagnostics.accepted_targets == 3
     assert diagnostics.published_targets == 3
     assert diagnostics.current_equivalence_groups == 1
@@ -185,7 +191,9 @@ def test_publish_idempotent_complete_empty_and_recommended_through_the_stores(
     # An identical second publication is a no-op and appends no duplicate rows.
     set_count = _count(factory, InferredPrerequisiteSet)
     attempt_rows = _count(factory, InferenceModelAttempt)
-    second = publish_current_cohort(factory, cohort, settings, selection)
+    second = publish_current_cohort(
+        factory, cohort, settings, selection, university=UNIVERSITIES["example"]
+    )
     assert second.published_targets == 3
     assert _count(factory, InferredPrerequisiteSet) == set_count
     assert _count(factory, InferredEquivalenceGroup) == 1
@@ -201,7 +209,11 @@ def test_publish_idempotent_complete_empty_and_recommended_through_the_stores(
     }
     with pytest.raises(ValueError):
         publish_current_cohort(
-            factory, _cohort({target_one: required.proposal_id}), settings, selection
+            factory,
+            _cohort({target_one: required.proposal_id}),
+            settings,
+            selection,
+            university=UNIVERSITIES["example"],
         )
     assert _count(factory, InferredPrerequisiteSet) == published_sets
     assert _count(factory, InferredEquivalenceGroup) == published_groups
@@ -295,7 +307,9 @@ def test_retained_publication_holds_output_through_failed_work_and_rewrites_empt
     )
 
     cohort = _cohort({target_one: proposal_one.proposal_id, target_two: proposal_two.proposal_id})
-    first = publish_current_cohort(factory, cohort, settings, selection)
+    first = publish_current_cohort(
+        factory, cohort, settings, selection, university=UNIVERSITIES["example"]
+    )
     assert first.published_targets == 2
     assert first.current_equivalence_groups == 3
     assert _count(factory, InferredEquivalenceGroup) == 4
@@ -306,7 +320,9 @@ def test_retained_publication_holds_output_through_failed_work_and_rewrites_empt
     raw_proposals = _count(factory, InferenceProposal)
     raw_attempts = _count(factory, InferenceModelAttempt)
     raw_works = _count(factory, InferenceTargetWork)
-    retained = publish_current_cohort(factory, cohort, settings, selection)
+    retained = publish_current_cohort(
+        factory, cohort, settings, selection, university=UNIVERSITIES["example"]
+    )
     assert retained.accepted_targets == 2
     assert retained.published_targets == 2
     repository = InferredPrerequisiteRepository(factory)
@@ -328,6 +344,7 @@ def test_retained_publication_holds_output_through_failed_work_and_rewrites_empt
         _cohort({target_one: proposal_one.proposal_id, target_two: empty_two.proposal_id}),
         settings,
         selection,
+        university=UNIVERSITIES["example"],
     )
     assert replaced.published_targets == 2
     empty_read = repository.read(target_two)
@@ -372,6 +389,7 @@ def test_retained_publication_holds_output_through_failed_work_and_rewrites_empt
         _cohort({target_one: proposal_one.proposal_id, target_two: empty_two.proposal_id}),
         settings,
         selection,
+        university=UNIVERSITIES["example"],
     )
     assert rollover.published_targets == 2
     assert _count(factory, InferredPrerequisiteSet) == before_sets
@@ -383,6 +401,43 @@ def test_retained_publication_holds_output_through_failed_work_and_rewrites_empt
         for group in equivalence.read_for_member(target_one)
     } == stored_groups
     assert _count(factory, InferenceModelAttempt) == raw_attempts + 1
+
+    # An accepted proposal target that becomes inactive leaves active eligibility and accepted
+    # pointers, stays published through the scheduler cohort's retained inactive pointer, and keeps
+    # its final result and equivalence support.
+    with session_scope(factory) as session:
+        inactive = session.scalar(select(Course).where(Course.group_id == target_one))
+        assert inactive is not None
+        inactive.is_active = False
+    scheduler_cohort = InferenceSchedulingRepository(factory).read_publication_cohort()
+    assert target_one not in scheduler_cohort.eligible_target_group_ids
+    assert target_one not in scheduler_cohort.accepted_proposal_ids
+    assert scheduler_cohort.accepted_proposal_ids == {target_two: empty_two.proposal_id}
+    assert scheduler_cohort.retained_inactive_proposal_ids == {target_one: proposal_one.proposal_id}
+    retained = publish_current_cohort(
+        factory, scheduler_cohort, settings, selection, university=UNIVERSITIES["example"]
+    )
+    assert retained.accepted_targets == 1
+    assert retained.published_targets == 1
+    inactive_read = repository.read(target_one)
+    assert inactive_read.state is InferredReadState.CURRENT
+    assert inactive_read.current_set == stored_one
+    retained_groups = equivalence.read_for_member(target_one)
+    assert {_member_ids(group) for group in retained_groups} == {
+        tuple(sorted((target_one, member_one))),
+        tuple(sorted((target_one, member_two))),
+    }
+    assert {
+        tuple(reference.reference_id for reference in group.inference.evidence)
+        for group in retained_groups
+    } == {(str(proposal_one.proposal_id),)}
+    assert {
+        group.group_id: (group.generated_at, group.published_at) for group in retained_groups
+    } == stored_groups
+    with session_scope(factory) as session:
+        restored = session.scalar(select(Course).where(Course.group_id == target_one))
+        assert restored is not None
+        restored.is_active = True
 
     # An explicit operator done target withdraws its whole predecessor contribution through the same
     # owners: no proposal, completion, final row or equivalence supporter is fabricated and
@@ -398,6 +453,7 @@ def test_retained_publication_holds_output_through_failed_work_and_rewrites_empt
         ),
         settings,
         selection,
+        university=UNIVERSITIES["example"],
     )
     assert done.operator_done_targets == 1
     assert repository.read(target_one).state is InferredReadState.UNAVAILABLE
@@ -441,7 +497,9 @@ def test_complete_empty_v2_roundtrip_composes_and_publishes_complete_coverage(
     assert _count(factory, InferenceProposal) == 1
 
     cohort = _cohort({target: first.proposal_id})
-    diagnostics = publish_current_cohort(factory, cohort, settings, selection)
+    diagnostics = publish_current_cohort(
+        factory, cohort, settings, selection, university=UNIVERSITIES["example"]
+    )
     assert diagnostics.eligible_targets == 1
     assert diagnostics.selected_targets == 1
     assert diagnostics.processed_targets == 1
@@ -501,7 +559,9 @@ def test_prepare_retained_cohort_validates_explicit_pointers_and_preserves_mixed
         accepted_proposal_ids={"T1": current.proposal_id, "T2": historical.proposal_id},
     )
 
-    plan = prepare_current_publication(factory, cohort, settings, selection)
+    plan = prepare_current_publication(
+        factory, cohort, settings, selection, university=UNIVERSITIES["example"]
+    )
 
     assert [proposal.proposal_id for proposal in plan.proposals] == [
         current.proposal_id,
@@ -528,7 +588,9 @@ def test_prepare_retained_cohort_validates_explicit_pointers_and_preserves_mixed
         accepted_proposal_ids={"T1": current.proposal_id, "T2": historical.proposal_id},
     )
     with pytest.raises(ValueError):
-        prepare_current_publication(factory, unknown, settings, selection)
+        prepare_current_publication(
+            factory, unknown, settings, selection, university=UNIVERSITIES["example"]
+        )
 
     # A pointerless eligible target that is inactive fails read-only preparation too.
     with session_scope(factory) as session:
@@ -540,7 +602,9 @@ def test_prepare_retained_cohort_validates_explicit_pointers_and_preserves_mixed
         accepted_proposal_ids={"T1": current.proposal_id, "T2": historical.proposal_id},
     )
     with pytest.raises(ValueError):
-        prepare_current_publication(factory, inactive, settings, selection)
+        prepare_current_publication(
+            factory, inactive, settings, selection, university=UNIVERSITIES["example"]
+        )
 
     # A selected pointer with no retained proposal raises before any write.
     broken = CurrentInferenceCohort(
@@ -548,7 +612,9 @@ def test_prepare_retained_cohort_validates_explicit_pointers_and_preserves_mixed
         accepted_proposal_ids={"T1": UUID(int=999)},
     )
     with pytest.raises(ValueError):
-        prepare_current_publication(factory, broken, settings, selection)
+        prepare_current_publication(
+            factory, broken, settings, selection, university=UNIVERSITIES["example"]
+        )
 
 
 def test_batch_reads_equal_the_per_id_reads_and_fail_on_unknown_ids(
@@ -578,7 +644,7 @@ def test_batch_reads_equal_the_per_id_reads_and_fail_on_unknown_ids(
     )
     second = _build_proposal(factory, "T2", work_two, attempt_two, expression=None)
     cohort = _cohort({"T1": first.proposal_id, "T2": second.proposal_id})
-    publish_current_cohort(factory, cohort, settings, selection)
+    publish_current_cohort(factory, cohort, settings, selection, university=UNIVERSITIES["example"])
 
     proposals = InferenceProposalRepository(factory)
     ids = [first.proposal_id, second.proposal_id]
@@ -672,7 +738,9 @@ def test_exact_group_minimum_confidence_and_strict_ancestor_warning(
     )
     cohort = _cohort({"T1": proposal_one.proposal_id, "B": proposal_two.proposal_id})
 
-    plan = prepare_current_publication(factory, cohort, settings, selection)
+    plan = prepare_current_publication(
+        factory, cohort, settings, selection, university=UNIVERSITIES["example"]
+    )
 
     shared = next(
         publication
@@ -686,17 +754,33 @@ def test_exact_group_minimum_confidence_and_strict_ancestor_warning(
         (str(proposal_one.proposal_id), str(proposal_two.proposal_id))
     )
 
-    trimmed = next(
+    full_group = next(
         publication
         for publication in plan.group_publications
-        if tuple(member.course_group_id for member in publication.members) == ("C2", "T1")
+        if tuple(member.course_group_id for member in publication.members) == ("C2", "C3", "T1")
     )
-    assert tuple(member.course_group_id for member in trimmed.members) == ("C2", "T1")
-    assert all(
-        tuple(member.course_group_id for member in publication.members) != ("T1",)
+    assert tuple(member.course_group_id for member in full_group.members) == ("C2", "C3", "T1")
+    inactive_only = next(
+        publication
         for publication in plan.group_publications
+        if tuple(member.course_group_id for member in publication.members) == ("C3", "C4", "T1")
     )
-    assert plan.diagnostics.current_equivalence_groups == 2
+    assert tuple(member.course_group_id for member in inactive_only.members) == (
+        "C3",
+        "C4",
+        "T1",
+    )
+    assert (
+        len(
+            [
+                publication
+                for publication in plan.group_publications
+                if tuple(member.course_group_id for member in publication.members) == ("T1",)
+            ]
+        )
+        == 0
+    )
+    assert plan.diagnostics.current_equivalence_groups == 3
 
     from course_explorer.inference.diagnostics import strict_ancestor_warnings
 

@@ -4,11 +4,13 @@ The catalogue holds the official courses, modules, and curriculum periods that t
 
 ## Capture and normalization
 
-Ingestion runs as one stage with two steps. The capture reads the anonymous public curriculum source and stores each response unchanged, so a stored response always holds the same bytes. Normalization validates one completed capture and converts it into official courses, modules, their versions, and their rule trees in one transaction, and it reports a version whose official code is null as an exclusion. [Ingestion](/docs/backend/catalogue/ingestion.md) describes the stage, its pause and stop boundaries, and the configuration keys that steer the source reads. [Curriculum capture and replay](/docs/experiments/runtime-storage-and-serving/curriculum-capture-and-replay.md) records the scale of a full-catalogue capture and two source-free replays of it.
+Ingestion runs as one stage with two steps. The capture reads the anonymous public curriculum source and stores each response unchanged, so a stored response always holds the same bytes. The configured [source family](/docs/backend/catalogue/source-families.md) supplies discovery, fetching and a parser to the shared capture. Normalization validates one completed capture and converts it into official courses, modules, their versions, and their rule trees in one transaction, and it reports a version whose official code is null as an exclusion.
+
+[Ingestion](/docs/backend/catalogue/ingestion.md) describes the stage, its pause and stop boundaries, and the configuration keys that steer the source reads. [Source families](/docs/backend/catalogue/source-families.md) describes what each source family reads, its discovery walk and fetch variant, its failure outcomes and the university table facts it reads. [Curriculum capture and replay](/docs/experiments/runtime-storage-and-serving/curriculum-capture-and-replay.md) records the scale of a full-catalogue capture and two source-free replays of it.
 
 ## Canonical identity, versions, and activity
 
-A course and a module each have one canonical identity that all of their official versions share. Every read that needs a course reads one representative version, chosen from the versions the curriculum periods list, and the activity window stored with the course decides whether the app marks it active. [Representative versions and activity](/docs/backend/catalogue/representative-versions.md) states the selection order and the window rule that normalization and the reads share.
+A course and a module each have one canonical identity that all of their official versions share. Every read that needs a course reads one representative version, chosen from the stored versions and their curriculum-period memberships, and a course with no version carrying an eligible dated membership takes its representative from its membership-free versions. The activity window stored with the course decides whether the app marks it active. [Representative versions and activity](/docs/backend/catalogue/representative-versions.md) states the selection order and the window rule that normalization and the reads share.
 
 ## The stored catalogue
 

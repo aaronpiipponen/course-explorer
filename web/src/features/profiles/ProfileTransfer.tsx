@@ -1,11 +1,11 @@
 /**
- * Profile, whole-state and Sisu-capture transfer inside the profile menu.
+ * Profile, whole-state and study-plan transfer inside the profile menu.
  *
- * The picker and the drop area share one read and dispatch on the file's `type`. Every parsed file
- * waits in one pending import until its confirmation creates the profile, replaces the saved
- * envelope or imports the Sisu hierarchy, and the bottom row holds the help drawer, the script
- * copy and the export disclosure. The component also renders its import area alone, without that
- * row, for the empty structure tab.
+ * The picker and the drop area share one read through the site's configured import formats. A
+ * profile or whole-state file waits in its confirmation, and a plan file resolves its official
+ * identities before the generic plan dialog asks for a profile name. The bottom row holds the help
+ * drawer, the optional script copy and the export disclosure. The component also renders its
+ * import area alone, with its own heading and the same export list, for the empty structure tab.
  */
 import {
   useEffect,
@@ -16,18 +16,23 @@ import {
 } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { AnimatePresence } from "framer-motion";
-import type { BrowserImport, Profile } from "../../state/types";
-import { parseBrowserImport, type BrowserStore } from "../../state/store";
+import type { BrowserImport } from "../../state/types";
+import type { BrowserStore } from "../../state/store";
 import { useCurrentProfile } from "../../state/useCurrentProfile";
 import { useReadCache } from "../../app/useReadCache";
+import { useWebFeatures } from "../../app/useWebFeatures";
 import {
-  prepareSisuProfile,
-  type SisuImportIssue,
-  type SisuItem,
-  type SisuPlan,
-} from "../structure/sisu";
-import { itemLabel, SisuIssueItem } from "../structure/SisuImportNotice";
-import { matchSisuPdfRows } from "../structure/sisuPdfMatch";
+  formatsForStudyPlan,
+  readImportFile,
+  scriptForStudyPlan,
+} from "../imports/formats";
+import { resolveExtractedPlan } from "../imports/resolve";
+import {
+  prepareImportedProfile,
+  type ImportIssue,
+  type ImportedPlan,
+} from "../imports/plan";
+import { ImportPlanDialog } from "../imports/ImportPlanDialog";
 import { Disclosure } from "../../shared/Disclosure";
 import { ErrorNotice } from "../../shared/ErrorNotice";
 import { HelpLink, HelpTip, type HelpSection } from "../../shared/HelpTip";
@@ -37,136 +42,32 @@ import { usePhoneTabsOnClose } from "../../shared/usePhoneTabsOnClose";
 import { downloadBrowserFile } from "./files";
 import { PROFILE_NOTICE_MS, ProfileNotice } from "./ProfileNotice";
 
-/**
- * The complete console script, copied verbatim by the copy control.
- *
- * The script reads the open Sisu plan page, resolves the modules and courses it shows through
- * anonymous Kori lookups, and downloads one capture file. The text is literal and is copied
- * unchanged.
- */
-const SISU_SNIPPET = `// Paste this into the browser console on the Sisu "Structure of studies" page with every module
-// expanded. It downloads sisu-plan-capture.json: the plan tree markup and the anonymous Kori
-// lookups that resolve the shown modules and courses. It reads the open page and makes anonymous
-// GET requests to the public Kori API, nothing else.
-(async () => {
-  // Every module has to be expanded, or the markup does not hold the whole plan.
-  if (document.querySelector('plan-module .collapse[aria-expanded="false"]'))
-    throw new Error("Expand every module of the plan first.");
-
-  // One anonymous Kori GET. A 404 means Kori has no record for the id, so it counts as no result.
-  async function get(path) {
-    const response = await fetch("https://sisu.tuni.fi/kori/api/" + path, {
-      method: "GET",
-      credentials: "omit", // do not send the Sisu login cookies
-    });
-    if (response.status === 404) return [];
-    if (!response.ok) throw new Error("Kori returned HTTP " + response.status + ".");
-    return response.json();
-  }
-
-  // The education row only wraps its degrees, so no lookup is made for its own identity.
-  const own = (module, selector) =>
-    [...module.querySelectorAll(selector)].some(
-      (found) => found.closest("plan-module") === module,
-    );
-  const education = [...document.querySelectorAll("plan-module")].find(
-    (module) =>
-      module.parentElement.closest("plan-module") === null &&
-      !own(module, ".graduate") &&
-      !own(module, ".title.grouping-module") &&
-      !own(module, '[id^="module-info-modal-open-"]'),
-  );
-
-  // Resolve every shown module version id to the group id of its Kori module.
-  const statusIds = new Set();
-  for (const cell of document.querySelectorAll("plan-module .status [id]")) {
-    if (cell.closest("plan-module") !== education) statusIds.add(cell.id);
-  }
-  const modules = {};
-  for (const statusId of statusIds) {
-    const versionId = statusId.replace(/-statuscell.*$/, "");
-    const body = await get("modules?id=" + versionId);
-    modules[statusId] = body.map((module) => module.groupId);
-  }
-
-  // Resolve every shown course code to the Kori search hits for it.
-  const codes = new Set();
-  for (const code of document.querySelectorAll("course-unit-box .courseunit-code")) {
-    codes.add(code.textContent.trim());
-  }
-  const courses = {};
-  for (const code of codes) {
-    const query = new URLSearchParams({
-      fullTextQuery: code,
-      universityId: "tuni-university-root-id",
-      start: "0",
-      limit: "50",
-    });
-    const body = await get("course-unit-search?" + query);
-    if (body.truncated) throw new Error("Kori returned a partial result for " + code + ".");
-    courses[code] = body.searchResults.map((result) => ({
-      code: result.code,
-      groupId: result.groupId,
-    }));
-  }
-
-  // The plan tree markup is read by the importer to recover its hierarchy.
-  const markup = [...document.querySelectorAll("plan-module")]
-    .filter((module) => module.parentElement.closest("plan-module") === null)
-    .map((module) => module.outerHTML)
-    .join("");
-
-  const file = { type: "tuni-course-explorer/sisu/1", markup, modules, courses };
-  const blob = new Blob([JSON.stringify(file)], { type: "application/json" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = "sisu-plan-capture.json";
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 0);
-})();`;
-
 function asError(caught: unknown): Error {
   return caught instanceof Error ? caught : new Error(String(caught));
 }
 
-/**
- * One PDF plan waiting in this component: the matched plan and its transient issues. It is neither
- * a `BrowserImport` nor a persisted file variant.
- */
-type PendingSisuPdf = {
-  kind: "sisu-pdf";
-  plan: SisuPlan;
-  issues: readonly SisuImportIssue[];
+/** One resolved plan waiting in this component: the plan and its transient issues. */
+type PendingPlan = {
+  kind: "plan";
+  plan: ImportedPlan;
+  issues: readonly ImportIssue[];
 };
 
-/**
- * Return the captured items whose identity is unresolved, in capture order.
- *
- * An uncoded module carries no identity of its own, and placement resolves it by official name
- * inside its parent, so its own pre-confirmation issue is left to that placement notice. Its
- * children are still reported.
- */
-function unresolvedIssues(items: readonly SisuItem[]): SisuImportIssue[] {
-  return items.flatMap((item) => [
-    ...(item.groupId === null && !(item.kind === "module" && item.code === null)
-      ? [{ name: item.name, code: item.code, reason: "unresolved" as const }]
-      : []),
-    ...(item.kind === "module" ? unresolvedIssues(item.children) : []),
-  ]);
-}
-
-/** Render the profile export, import and Sisu capture controls. */
+/** Render the profile export, import, configured format and script controls. */
 export function ProfileTransfer({
   store,
   importOnly = false,
 }: {
   store: BrowserStore;
-  /** Render only the import area and its confirmations, without the export and copy controls. */
+  /** Render the empty Structure import area with its own heading, import-only help and the same export list. */
   importOnly?: boolean;
 }) {
   const { profiles } = useCurrentProfile();
   const { language, t } = useWording();
   const cache = useReadCache();
+  const { study_plan_script, study_plan_formats } = useWebFeatures();
+  const formats = formatsForStudyPlan(study_plan_formats);
+  const script = scriptForStudyPlan(study_plan_script);
   const { runAction, error: exportError } = useAction();
   const [exportOpen, setExportOpen] = useState(false);
   const [copyStatus, setCopyStatus] = useState(false);
@@ -176,10 +77,14 @@ export function ProfileTransfer({
   const copyButton = useRef<HTMLButtonElement>(null);
   const [fileError, setFileError] = useState<Error | null>(null);
   const [confirmError, setConfirmError] = useState<Error | null>(null);
+  // The profile panel and the empty Structure area can be mounted together, so each export list
+  // keeps its own element id.
+  const exportListId = importOnly
+    ? "structure-profile-export-list"
+    : "profile-export-list";
   const [pendingImport, setPendingImport] = useState<
-    BrowserImport | PendingSisuPdf | null
+    BrowserImport | PendingPlan | null
   >(null);
-  const [sisuName, setSisuName] = useState("");
   const [reading, setReading] = useState(false);
   const operation = useRef<AbortController | null>(null);
   usePhoneTabsOnClose(pendingImport !== null);
@@ -193,31 +98,36 @@ export function ProfileTransfer({
     };
   }, []);
 
+  const cancel = () => {
+    setPendingImport(null);
+    setConfirmError(null);
+  };
+
   const acceptFile = async (file: File) => {
     const controller = new AbortController();
     operation.current = controller;
     setReading(true);
     setFileError(null);
     try {
-      if (
-        file.type === "application/pdf" ||
-        file.name.toLowerCase().endsWith(".pdf")
-      ) {
-        const { readSisuPdf } = await import("../structure/sisuPdf");
-        const rows = await readSisuPdf(file, controller.signal);
-        if (controller.signal.aborted) return;
-        const matched = await matchSisuPdfRows(rows, cache, controller.signal);
+      const result = await readImportFile(file, formats, controller.signal);
+      if (controller.signal.aborted) return;
+      if ("programmes" in result) {
+        const resolved = await resolveExtractedPlan(
+          result,
+          cache,
+          controller.signal,
+        );
         if (controller.signal.aborted) return;
         setConfirmError(null);
-        setSisuName("");
-        setPendingImport({ kind: "sisu-pdf", ...matched });
+        setPendingImport({
+          kind: "plan",
+          plan: resolved.plan,
+          issues: resolved.issues,
+        });
         return;
       }
-      const parsed = parseBrowserImport(await file.text());
-      if (controller.signal.aborted) return;
       setConfirmError(null);
-      setSisuName("");
-      setPendingImport(parsed);
+      setPendingImport(result);
     } catch (caught) {
       if (controller.signal.aborted) return;
       setFileError(asError(caught));
@@ -246,13 +156,14 @@ export function ProfileTransfer({
   };
 
   /**
-   * Copy the literal script through one path that works on a plain HTTP origin: select it in a
+   * Copy the committed script through one path that works on a plain HTTP origin: select it in a
    * temporary textarea and copy the selection during the click. The element sits inside the open
    * panel, so the menu does not read its focus as a dismissal, and the element, the focus and the
    * previous selection are restored before the status is reported. A successful copy restarts the
    * notice lifetime.
    */
   const copySnippet = () => {
+    if (!script) return;
     copyOpener.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -266,7 +177,7 @@ export function ProfileTransfer({
     const hold = document.createElement("textarea");
     hold.className = "profile-snippet-hold";
     hold.setAttribute("readonly", "");
-    hold.value = SISU_SNIPPET;
+    hold.value = script.text;
     (copyButton.current?.parentElement ?? document.body).append(hold);
     hold.select();
     let copied = false;
@@ -280,9 +191,7 @@ export function ProfileTransfer({
     previous.forEach((range) => selection?.addRange(range));
     copyOpener.current?.focus();
     setCopyStatus(copied);
-    setCopyError(
-      copied ? null : new Error("Could not copy Sisu import script"),
-    );
+    setCopyError(copied ? null : new Error("Could not copy import script"));
     if (copyTimer.current !== null) clearTimeout(copyTimer.current);
     copyTimer.current = copied
       ? setTimeout(() => setCopyStatus(false), PROFILE_NOTICE_MS)
@@ -290,126 +199,98 @@ export function ProfileTransfer({
   };
 
   const confirm = () => {
-    if (!pendingImport) return;
+    if (!pendingImport || "kind" in pendingImport) return;
     try {
-      let target: Profile;
-      if ("kind" in pendingImport) {
-        target = prepareSisuProfile(pendingImport.plan, sisuName, language);
-      } else if (pendingImport.type === "tuni-course-explorer/profile/3") {
-        target = pendingImport.profile;
-      } else if (pendingImport.type === "tuni-course-explorer/sisu/1") {
-        target = prepareSisuProfile(pendingImport, sisuName, language);
-      } else {
+      if (pendingImport.type === "course-explorer/state/3") {
         store.restoreState(pendingImport.state);
         window.location.reload();
         return;
       }
       if (overwrite && existingProfileId !== null)
+        store.overwriteProfile(existingProfileId, pendingImport.profile.state);
+      else store.importProfile(pendingImport.profile);
+    } catch (caught) {
+      setConfirmError(asError(caught));
+      return;
+    }
+    cancel();
+  };
+
+  const importPlan = (name: string, existingProfileId: string | null) => {
+    if (!pendingImport || !("kind" in pendingImport)) return;
+    try {
+      const target = prepareImportedProfile(pendingImport.plan, name, language);
+      if (existingProfileId !== null)
         store.overwriteProfile(existingProfileId, target.state);
       else store.importProfile(target);
     } catch (caught) {
       setConfirmError(asError(caught));
       return;
     }
-    setPendingImport(null);
-    setConfirmError(null);
-    setSisuName("");
+    cancel();
   };
 
+  const pendingPlan =
+    pendingImport !== null && "kind" in pendingImport ? pendingImport : null;
   const pendingProfile =
     pendingImport !== null &&
     "type" in pendingImport &&
-    pendingImport.type === "tuni-course-explorer/profile/3"
+    pendingImport.type === "course-explorer/profile/3"
       ? pendingImport.profile
       : null;
-  const pendingPdf =
-    pendingImport !== null && "kind" in pendingImport ? pendingImport : null;
-  const pendingCapture =
+  const pendingState =
     pendingImport !== null &&
     "type" in pendingImport &&
-    pendingImport.type === "tuni-course-explorer/sisu/1"
+    pendingImport.type === "course-explorer/state/3"
       ? pendingImport
       : null;
-  const pendingSisu = pendingPdf
-    ? { plan: pendingPdf.plan, issues: pendingPdf.issues }
-    : pendingCapture
-      ? {
-          plan: pendingCapture as SisuPlan,
-          issues: unresolvedIssues(pendingCapture.programmes),
-        }
-      : null;
-  const pendingName = pendingProfile
-    ? pendingProfile.name.trim()
-    : pendingSisu
-      ? sisuName.trim()
-      : "";
+  const pendingName = pendingProfile ? pendingProfile.name.trim() : "";
   const existingProfileId = pendingName
     ? (Object.entries(profiles).find(
         ([, profile]) => profile.name === pendingName,
       )?.[0] ?? null)
     : null;
-  const overwrite =
-    existingProfileId !== null &&
-    (pendingProfile !== null || pendingSisu !== null);
-  const waiting =
-    pendingSisu?.issues.filter(
-      (issue) => issue.reason === "version_choice_pending",
-    ) ?? [];
-  const omitted =
-    pendingSisu?.issues.filter(
-      (issue) => issue.reason !== "version_choice_pending",
-    ) ?? [];
+  const overwrite = existingProfileId !== null && pendingProfile !== null;
+
+  const importSection: HelpSection = {
+    heading: t("Import"),
+    items: [
+      {
+        term: (
+          <HelpLink href="/docs#guide-profiles/importing-a-file">
+            {t("Import")}
+          </HelpLink>
+        ),
+        text: t(
+          "Choose or drop one file. A profile file creates a separate profile after confirmation, or overwrites the profile that already has its name. All saved data replaces every profile in this browser after confirmation. A plan file asks for a profile name, then places its choices and completions when Structure of studies loads its programmes. Cancel leaves saved data unchanged.",
+        ),
+      },
+    ],
+  };
+  const formatSections: HelpSection[] = formats.map((format) => ({
+    heading: t(format.label),
+    items: [
+      {
+        term: <HelpLink href={format.guide}>{t(format.label)}</HelpLink>,
+        text: t(format.help),
+      },
+    ],
+  }));
+  const scriptSection: HelpSection | null = script
+    ? {
+        heading: t(script.label),
+        items: [
+          {
+            term: <HelpLink href={script.guide}>{t(script.label)}</HelpLink>,
+            text: t(script.help),
+          },
+        ],
+      }
+    : null;
   const importHelp: readonly HelpSection[] = [
-    {
-      heading: t("Import"),
-      items: [
-        {
-          term: (
-            <HelpLink href="/docs#guide-profiles/importing-a-file">
-              {t("Import")}
-            </HelpLink>
-          ),
-          text: t(
-            "Choose or drop one .json or .pdf file. A profile file creates a separate profile after confirmation, or overwrites the profile that already has its name. All saved data replaces every profile in this browser after confirmation. A Sisu capture or a supported Sisu plan PDF asks for a profile name, then places its choices and completions when Structure of studies loads its programmes. Cancel leaves saved data unchanged.",
-          ),
-        },
-        {
-          term: (
-            <HelpLink href="/docs#guide-sisu-import/printing-the-plan">
-              {t("Sisu plan")}
-            </HelpLink>
-          ),
-          text: t(
-            "A supported Sisu plan PDF imports the same way. In Sisu, open Structure of studies, choose ⋯ beside New study plan, choose Print study plan and save as PDF. The PDF is read in this browser. Official catalogue and structure reads use this site. Omitted items and their candidates are listed for you to check. Some modules may ask you to choose a version. The PDF contains personal identity data, so do not share it casually.",
-          ),
-        },
-      ],
-    },
-    {
-      heading: t("Sisu plan"),
-      items: [
-        {
-          term: (
-            <HelpLink href="/docs#guide-sisu-import/capturing-the-plan">
-              {t("Import Sisu plan")}
-            </HelpLink>
-          ),
-          text: (
-            <>
-              {t(
-                "Open your plan in Sisu's Structure of studies and expand every module. Copy Sisu import script copies a browser-console script. Read the",
-              )}{" "}
-              <HelpLink href="/docs#guide-sisu-import/the-script">
-                {t("whole script")}
-              </HelpLink>{" "}
-              {t(
-                "before running it in that Sisu tab. It reads the open page and makes anonymous requests to the public Kori interface without Sisu login cookies. Import the downloaded sisu-plan-capture.json here and name the new profile. The file is read in this browser, not uploaded. Check the import's notices for items it could not place.",
-              )}
-            </>
-          ),
-        },
-      ],
-    },
+    importSection,
+    ...formatSections,
+    ...(scriptSection ? [scriptSection] : []),
   ];
   const help: readonly HelpSection[] = importOnly
     ? importHelp
@@ -446,6 +327,19 @@ export function ProfileTransfer({
         },
         ...importHelp,
       ];
+  const fileLabels = [
+    t("a JSON profile export"),
+    ...formats.map((format) => t(format.label)),
+  ];
+  const files =
+    fileLabels.length === 1
+      ? fileLabels[0]
+      : `${fileLabels.slice(0, -1).join(", ")} ${t("or")} ${
+          fileLabels[fileLabels.length - 1]
+        }`;
+  const accept = [
+    ...new Set([".json", ...formats.flatMap((f) => f.suffixes)]),
+  ].join(",");
 
   return (
     <div className="profile-transfer">
@@ -458,39 +352,42 @@ export function ProfileTransfer({
         onDragOver={(event) => event.preventDefault()}
       >
         <span className="profile-drop-text">
-          <span className="profile-choose">
-            {t(importOnly ? "Choose" : "Choose file")}
-          </span>{" "}
+          <span className="profile-choose">{t("Choose file")}</span>{" "}
           <span className="profile-drop-note">
-            {t(
-              importOnly
-                ? "or drop a PDF print of your Sisu study plan or a JSON profile export"
-                : "or drop a .json or .pdf file",
-            )}
+            {t("or drop {files}", { files })}
           </span>
         </span>
         <input
           className="profile-file"
           type="file"
-          accept=".json,application/json,.pdf,application/pdf"
+          accept={accept}
           aria-label={t("Import")}
           disabled={importDisabled}
           onChange={pick}
         />
       </label>
-      {!importOnly && exportError && (
-        <ErrorNotice error={exportError} language={language} />
-      )}
+      {exportError && <ErrorNotice error={exportError} language={language} />}
       {fileError && <ErrorNotice error={fileError} language={language} />}
       {importOnly ? (
         <div className="profile-transfer-actions profile-transfer-actions-import">
+          {script && (
+            <button
+              className="profile-transfer-toggle"
+              type="button"
+              ref={copyButton}
+              onClick={copySnippet}
+            >
+              {t("Copy import script")}
+            </button>
+          )}
           <button
             className="profile-transfer-toggle"
             type="button"
-            ref={copyButton}
-            onClick={copySnippet}
+            aria-expanded={exportOpen}
+            aria-controls={exportListId}
+            onClick={() => setExportOpen((open) => !open)}
           >
-            {t("Copy Sisu import script")}
+            {t("Export")}
           </button>
           <HelpTip
             title={t("Import")}
@@ -506,19 +403,21 @@ export function ProfileTransfer({
             sections={help}
           />
           <div className="profile-transfer-controls">
-            <button
-              className="profile-transfer-toggle"
-              type="button"
-              ref={copyButton}
-              onClick={copySnippet}
-            >
-              {t("Copy Sisu import script")}
-            </button>
+            {script && (
+              <button
+                className="profile-transfer-toggle"
+                type="button"
+                ref={copyButton}
+                onClick={copySnippet}
+              >
+                {t("Copy import script")}
+              </button>
+            )}
             <button
               className="profile-transfer-toggle"
               type="button"
               aria-expanded={exportOpen}
-              aria-controls="profile-export-list"
+              aria-controls={exportListId}
               onClick={() => setExportOpen((open) => !open)}
             >
               {t("Export")}
@@ -530,49 +429,45 @@ export function ProfileTransfer({
         {copyStatus && (
           <ProfileNotice key="profile-copy-status">
             <p className="error-notice profile-copy-notice" role="status">
-              {t("Sisu import script copied")}
+              {t("Import script copied")}
             </p>
           </ProfileNotice>
         )}
       </AnimatePresence>
       {copyError && <ErrorNotice error={copyError} language={language} />}
-      {!importOnly && (
-        <Disclosure open={exportOpen}>
-          <div className="profile-export" id="profile-export-list">
-            <p className="profile-export-hint">
-              {t("Select which file to export")}
-            </p>
-            {Object.entries(profiles).map(([id, profile]) => (
-              <button
-                className="profile-export-item"
-                key={id}
-                type="button"
-                onClick={() =>
-                  runAction(() => downloadBrowserFile(store.exportProfile(id)))
-                }
-              >
-                {profile.name}
-              </button>
-            ))}
+      <Disclosure open={exportOpen}>
+        <div className="profile-export" id={exportListId}>
+          <p className="profile-export-hint">
+            {t("Select which file to export")}
+          </p>
+          {Object.entries(profiles).map(([id, profile]) => (
             <button
               className="profile-export-item"
+              key={id}
               type="button"
               onClick={() =>
-                runAction(() => downloadBrowserFile(store.exportState()))
+                runAction(() => downloadBrowserFile(store.exportProfile(id)))
               }
             >
-              {t("All saved data")}
+              {profile.name}
             </button>
-          </div>
-        </Disclosure>
-      )}
+          ))}
+          <button
+            className="profile-export-item"
+            type="button"
+            onClick={() =>
+              runAction(() => downloadBrowserFile(store.exportState()))
+            }
+          >
+            {t("All saved data")}
+          </button>
+        </div>
+      </Disclosure>
       <Dialog.Root
-        open={pendingImport !== null}
+        open={pendingProfile !== null || pendingState !== null}
         onOpenChange={(open) => {
           if (open) return;
-          setPendingImport(null);
-          setConfirmError(null);
-          setSisuName("");
+          cancel();
         }}
       >
         <Dialog.Portal>
@@ -599,85 +494,6 @@ export function ProfileTransfer({
                         { name: pendingProfile.name },
                       )}
                 </p>
-              </>
-            ) : pendingSisu ? (
-              <>
-                <Dialog.Title>{t("Import Sisu plan")}</Dialog.Title>
-                <label htmlFor="sisu-profile-name">{t("Profile name")}</label>
-                <input
-                  id="sisu-profile-name"
-                  className="profile-rename-input"
-                  value={sisuName}
-                  autoComplete="off"
-                  autoFocus
-                  onChange={(event) => setSisuName(event.target.value)}
-                />
-                <p>
-                  {overwrite
-                    ? t(
-                        "This replaces the saved data of the profile “{name}” with these programmes: {names}.",
-                        {
-                          name: pendingName,
-                          names: pendingSisu.plan.programmes
-                            .map((programme) => programme.name)
-                            .join(", "),
-                        },
-                      )
-                    : t(
-                        "This creates a new profile with these programmes: {names}.",
-                        {
-                          names: pendingSisu.plan.programmes
-                            .map((programme) => programme.name)
-                            .join(", "),
-                        },
-                      )}
-                </p>
-                {waiting.length > 0 && (
-                  <ul className="sisu-omitted">
-                    {waiting.map((issue, index) => (
-                      <li
-                        key={`waiting:${issue.code ?? ""}:${issue.name}:${index}`}
-                      >
-                        <SisuIssueItem
-                          label={itemLabel(issue)}
-                          reason={issue.reason}
-                        />
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {omitted.length > 0 && (
-                  <>
-                    <p>{t("Left out of the import:")}</p>
-                    <ul className="sisu-omitted">
-                      {omitted.map((issue, index) => (
-                        <li key={`${issue.code ?? ""}:${issue.name}:${index}`}>
-                          <SisuIssueItem
-                            label={itemLabel(issue)}
-                            reason={issue.reason}
-                          >
-                            {issue.candidates &&
-                              issue.candidates.length > 0 && (
-                                <div>
-                                  <p>{t("Matching official items:")}</p>
-                                  <ul>
-                                    {issue.candidates.map((candidate) => (
-                                      <li key={candidate.groupId}>
-                                        {candidate.code
-                                          ? `${candidate.code} `
-                                          : ""}
-                                        {candidate.name} ({candidate.groupId})
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              )}
-                          </SisuIssueItem>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                )}
               </>
             ) : (
               <>
@@ -713,12 +529,11 @@ export function ProfileTransfer({
               <button
                 className="dialog-confirm"
                 type="button"
-                disabled={pendingSisu !== null && sisuName.trim() === ""}
                 onClick={confirm}
               >
                 {overwrite
                   ? t("Overwrite")
-                  : pendingProfile || pendingSisu
+                  : pendingProfile
                     ? t("Import")
                     : t("Replace")}
               </button>
@@ -726,6 +541,16 @@ export function ProfileTransfer({
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+      {pendingPlan && (
+        <ImportPlanDialog
+          plan={pendingPlan.plan}
+          issues={pendingPlan.issues}
+          profiles={profiles}
+          confirmError={confirmError}
+          onImport={importPlan}
+          onCancel={cancel}
+        />
+      )}
     </div>
   );
 }

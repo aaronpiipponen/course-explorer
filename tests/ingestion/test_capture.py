@@ -14,13 +14,16 @@ from course_explorer.enums import (
     SourceObjectType,
 )
 from course_explorer.ingestion.capture import capture_curriculum
-from course_explorer.ingestion.manifest import RawCaptureStore
+from course_explorer.ingestion.manifest import CaptureManifest, RawCaptureStore
+from tests.ingestion._capture_repository_support import capture_manifest
 from tests.ingestion._capture_support import (
+    SISU_PARSER,
     FixtureSource,
     RecordingCapturePersistence,
     fixture,
     new_store,
     parsed,
+    sisu_capture,
 )
 
 
@@ -30,7 +33,9 @@ def test_capture_writes_deterministic_gzip_manifest_and_replays_raw_positions(
     """Exact bytes, canonical paths, atomic manifests, and raw positions survive replay."""
     store = new_store(tmp_path)
     repository = RecordingCapturePersistence()
-    report = capture_curriculum(FixtureSource(), store, repository, checkpoint_response_count=100)
+    report = capture_curriculum(
+        sisu_capture(FixtureSource()), store, repository, checkpoint_response_count=100
+    )
 
     assert report.status is IngestionRunStatus.COMPLETED
     assert report.manifest_path == store.manifest_relative_path
@@ -85,7 +90,7 @@ def test_capture_closes_each_typed_group_once_and_records_unresolved_groups(
     source = FixtureSource()
     store = new_store(tmp_path)
     persistence = RecordingCapturePersistence()
-    capture_curriculum(source, store, persistence, checkpoint_response_count=2)
+    capture_curriculum(sisu_capture(source), store, persistence, checkpoint_response_count=2)
 
     assert [value for method, value in source.calls if method == "course_group"] == [
         "course-group-empty",
@@ -108,7 +113,7 @@ def test_capture_pause_stops_before_network_pull_and_keeps_running_manifest(tmp_
     persistence = RecordingCapturePersistence()
     calls: list[tuple[str, int, int | None]] = []
     report = capture_curriculum(
-        source,
+        sisu_capture(source),
         store,
         persistence,
         checkpoint_response_count=100,
@@ -124,9 +129,9 @@ def test_capture_pause_stops_before_network_pull_and_keeps_running_manifest(tmp_
 
     # The same store resumes normally and completes with the collected evidence.
     resumed_source = FixtureSource()
-    resumed = RawCaptureStore.open(tmp_path / "raw", store.manifest_path)
+    resumed = RawCaptureStore.open(tmp_path / "raw", store.manifest_path, parser=SISU_PARSER)
     completed_report = capture_curriculum(
-        resumed_source, resumed, persistence, checkpoint_response_count=100
+        sisu_capture(resumed_source), resumed, persistence, checkpoint_response_count=100
     )
     assert completed_report is not None
     assert completed_report.status is IngestionRunStatus.COMPLETED
@@ -136,14 +141,18 @@ def test_completed_capture_rejects_unexpected_response_file(tmp_path: Path) -> N
     """A completed capture refuses a regular non-envelope file without deleting it."""
     store = new_store(tmp_path)
     persistence = RecordingCapturePersistence()
-    capture_curriculum(FixtureSource(), store, persistence, checkpoint_response_count=100)
+    capture_curriculum(
+        sisu_capture(FixtureSource()), store, persistence, checkpoint_response_count=100
+    )
     manifest_bytes = store.manifest_path.read_bytes()
     unexpected = store.run_root / "responses" / "unexpected.txt"
     unexpected.write_text("orphan", encoding="utf-8")
 
-    resumed = RawCaptureStore.open(tmp_path / "raw", store.manifest_path)
+    resumed = RawCaptureStore.open(tmp_path / "raw", store.manifest_path, parser=SISU_PARSER)
     with pytest.raises(ValueError):
-        capture_curriculum(FixtureSource(), resumed, persistence, checkpoint_response_count=100)
+        capture_curriculum(
+            sisu_capture(FixtureSource()), resumed, persistence, checkpoint_response_count=100
+        )
 
     assert unexpected.read_text(encoding="utf-8") == "orphan"
     assert store.manifest_path.read_bytes() == manifest_bytes
@@ -171,7 +180,7 @@ def test_completed_manifest_checkpoint_can_stop_before_finalization(
         return True
 
     report = capture_curriculum(
-        FixtureSource(),
+        sisu_capture(FixtureSource()),
         store,
         persistence,
         checkpoint_response_count=100,
@@ -187,10 +196,28 @@ def test_completed_manifest_checkpoint_can_stop_before_finalization(
 
     # The same store continues into the retained verification/normalization path with no source work.
     resumed_source = FixtureSource()
-    resumed = RawCaptureStore.open(tmp_path / "raw", store.manifest_path)
+    resumed = RawCaptureStore.open(tmp_path / "raw", store.manifest_path, parser=SISU_PARSER)
     completed_report = capture_curriculum(
-        resumed_source, resumed, persistence, checkpoint_response_count=100
+        sisu_capture(resumed_source), resumed, persistence, checkpoint_response_count=100
     )
     assert completed_report is not None
     assert completed_report.status is IngestionRunStatus.COMPLETED
     assert resumed_source.calls == []
+
+
+def test_manifest_refuses_one_object_identity_with_conflicting_hashes() -> None:
+    """One source object identity may carry only one source hash across a manifest."""
+    manifest = capture_manifest()
+    first = manifest.responses[0]
+    conflicting = first.model_copy(
+        update={
+            "request_params": (("id", "other"),),
+            "response_path": "responses/" + "1" * 64 + "-" + "2" * 64 + ".json.gz",
+            "body_sha256": "3" * 64,
+            "objects": (first.objects[0].model_copy(update={"source_hash": "4" * 64}),),
+        }
+    )
+    payload = manifest.model_dump()
+    payload["responses"] = [*payload["responses"], conflicting.model_dump()]
+    with pytest.raises(ValueError, match="object identity has conflicting source hashes"):
+        CaptureManifest.model_validate(payload)

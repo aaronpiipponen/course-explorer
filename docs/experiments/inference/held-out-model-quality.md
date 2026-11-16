@@ -93,9 +93,40 @@ Over ByteShape's 150 targets, 47 results were structurally equal. The mean was 1
 
 Required is the weak category for every model. The table gives the counts. MIX had no unsupported recommended finding at all, and its recommended share was 0.81.
 
-The category difference is observed, not a decomposition of why. A `partly` verdict can mean a wrong category, and the local `partly` findings were not split into wrong-category and partial-AND cases. Whether a specific finding belongs in required or recommended is therefore measured only through the four verdicts, not separately.
+The four verdicts measure the category difference, and no finding was re-judged for its category alone. [Reasons for partly and unsupported required findings](#reasons-for-partly-and-unsupported-required-findings) groups the reasons the judge recorded for MIX's `partly` and `unsupported` required findings.
 
 A recommendation-skip option was available: publish the recommended set empty as a complete result. The selected policy publishes recommendations as emitted. MIX's recommended findings were supported at 0.81 and none was outright unsupported. No skip applied.
+
+## Reasons for partly and unsupported required findings
+
+Of MIX's 100 required findings, 31 were `partly` and 15 were `unsupported`. Each of those 46 findings is a single-course option, so none of them is a partial AND option. The judge recorded a reason of one or two sentences with each verdict.
+
+The 46 reasons were grouped by what each one states about the candidate course. The grouping read the recorded reasons alone. It did not read the teaching text again, and no finding was re-judged.
+
+| What the reason states | Partly | Unsupported | Findings |
+|---|---:|---:|---:|
+| Related background, requirement not shown | 28 | 0 | 28 |
+| Same content as the target | 3 | 11 | 14 |
+| Parallel course at the same level | 0 | 2 | 2 |
+| More advanced than the target | 0 | 1 | 1 |
+| Part of the target | 0 | 1 | 1 |
+| Total | 31 | 15 | 46 |
+
+The groups are these:
+
+- Related background, requirement not shown: the reason states that the candidate is relevant to the target, and that the text does not show the target requires it.
+- Same content as the target: the reason states that the candidate covers the same content as the target, as an equivalent course, an earlier version or an overlapping course.
+- Parallel course at the same level: the reason states that the two courses stand side by side and neither precedes the other.
+- More advanced than the target: the reason states that the candidate sits above the entry level of the target.
+- Part of the target: the reason states that the candidate is content of the target itself.
+
+A reason that names two possibilities of one group, such as an equivalent course or an earlier version, was counted once in that group.
+
+Observed: no reason describes the candidate as unrelated to the target. All 28 related-background reasons belong to `partly` findings. Of the 15 `unsupported` findings, 11 name a course with the same content as the target. The 15 fall on nine target courses, and three of those targets carry nine of them, with four, three and two findings.
+
+Interpreted: the two verdicts separate two kinds of miss. A `partly` required finding is mostly a related course in too strong a category, which is the second place in the quality ordering this report uses. An `unsupported` required finding is mostly a course that belongs in an equivalence group or in no finding, and three targets with several same-content courses among their candidates produced nine of the 15.
+
+The grouping carries the limits of the verdicts it reads. The reasons come from the one judge, and no human read the 46 findings. ByteShape's and Qwen3.6's reasons were not grouped.
 
 ## Confidence and flags as a filter
 
@@ -131,7 +162,7 @@ The model and policy below were selected on 2026-09-29 and applied to the full-c
 
 The two local keys are on [the hardware report](/docs/experiments/inference/local-model-hardware-and-throughput.md), and [the fit rule](/docs/backend/inference/inference-scheduling.md#the-fit-rule) states the rule the product applies. The product routing policy supplies no fallback route. A caller can supply one explicit oversize route, and this run supplied one.
 
-The 15 unsupported required findings are the part of the result a reader can act on in the product. A reader who finds an inferred course wrong can mark it [Excluded](/docs/guides/prerequisites.md#exclude-a-course-or-a-requirement), and the route then does not pass through it. That remedy does not make the remaining inferred output official data. The 15 findings are findings whose supplied text did not support the claim, not proof that the courses are not prerequisites.
+The 15 unsupported required findings are the part of the result a reader can act on in the product. A reader who finds an inferred course wrong can mark it [Excluded](/docs/guides/prerequisites.md#exclude-a-course-or-a-requirement), and the route then does not pass through it. That remedy does not make the remaining inferred output official data. The 15 findings are findings whose supplied text did not support the claim, not proof that the courses are not prerequisites. Of the 15, 11 name a course with the same content as the target, as [Reasons for partly and unsupported required findings](#reasons-for-partly-and-unsupported-required-findings) states.
 
 The full-catalogue run applied this configuration with one explicit capacity route that sent a packet fitting neither local key whole to DeepSeek V4.1 Flash. [The full-catalogue inference run](/docs/experiments/inference/full-catalogue-inference-run.md) records that route and its count. That route is an example of the caller-supplied route, not a product fallback.
 
@@ -144,6 +175,7 @@ The full-catalogue run applied this configuration with one explicit capacity rou
 - No confidence or flag rule improved either ByteShape cohort, and no low-confidence target was harmful.
 - Every MIX result had at most one requirement set per category.
 - gpt-oss produced no valid answer, and Nemotron was dropped before the comparison.
+- No recorded reason for MIX's 46 `partly` and `unsupported` required findings describes the candidate as unrelated to the target. In 28 the reason states related background, and in 14 it states the same content as the target.
 
 ### Interpreted
 
@@ -181,7 +213,7 @@ The 50 comparison targets are deterministic size quantiles of the 150, chosen to
 
 ### One judge and fixed cohorts rank the models
 
-The ranking is a comparison on fixed cohorts under one judge. The judge is one model with one rubric, and no human re-read exists, so the judge's error rate is unknown. No second judge or cohort was run, so the order is relative to this judge and these cohorts.
+The ranking is a comparison on fixed cohorts under one judge. The judge is one model with one rubric, and no human re-read exists, so the judge's error rate is unknown. No second judge or cohort was run, so the order is relative to this judge and these cohorts. The grouping of MIX's 46 reasons reads that judge's reasons and adds no second reading of the teaching text.
 
 ### Validity was schema-only
 
@@ -207,3 +239,4 @@ The category overview lists the shared follow-ups for a second sample, a human r
 1. A second judge, or a human re-read of the same findings, would test whether the model order depends on this judge. No such measurement exists.
 2. Running Qwen3.6-35B-A3B on the other 100 targets would test whether its 0.23 share is a property of the model or of the shared 50. It was measured on the 50 only.
 3. A prompt comparison on the 150 would test whether the v9 shares hold under a different prompt. No second prompt was measured on the 150.
+4. A rule that keeps a candidate with the same content as the target out of the required options would test whether the 14 same-content findings can be removed without removing supported findings. No such rule was measured.

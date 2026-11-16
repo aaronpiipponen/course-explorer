@@ -22,6 +22,7 @@ import {
   sumCredits,
   formatCredits,
 } from "./presentation";
+import { coursesUseAssumedCredits } from "../../solver/credits";
 import {
   indexResolved,
   type ResolvedNode,
@@ -42,6 +43,7 @@ import type { PulledCourse, PulledModule } from "./edits";
 import { scopeHoldsCompletion } from "./edits";
 import { useReducedMotion } from "../../shared/useReducedMotion";
 import { useWording } from "../../shared/useWording";
+import { useWebFeatures } from "../../app/useWebFeatures";
 import { useMediaQuery } from "../../shared/useMediaQuery";
 import { PHONE_SHELL_QUERY } from "../../shared/viewport";
 
@@ -857,15 +859,22 @@ function CreditSummary({
   completed: ReadonlySet<string>;
 }) {
   const { t } = useWording();
+  const { assumed_course_credits } = useWebFeatures();
   return (
     <span className="credit-summary">
-      <b>{formatCredits(sumCredits(courses))}</b> {t("selected")} |{" "}
+      <b>{formatCredits(sumCredits(courses, assumed_course_credits))}</b>{" "}
+      {t("selected")} |{" "}
       <b>
         {formatCredits(
-          sumCredits(courses, (course) => completed.has(course.group_id)),
+          sumCredits(courses, assumed_course_credits, (course) =>
+            completed.has(course.group_id),
+          ),
         )}
       </b>{" "}
       {t("completed")} {t("cr")}
+      {coursesUseAssumedCredits(courses) && (
+        <span className="assumed-note"> · {t("Assumed credits used")}</span>
+      )}
     </span>
   );
 }

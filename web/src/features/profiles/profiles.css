@@ -232,17 +232,6 @@
   border: 0;
   opacity: 0;
 }
-.sisu-omitted {
-  max-height: 180px;
-  margin: 0 0 18px;
-  padding-left: 18px;
-  overflow-y: auto;
-  color: rgb(255 255 255 / 75%);
-  font:
-    11.5px "JetBrains Mono",
-    ui-monospace,
-    monospace;
-}
 .profile-transfer-toggle {
   justify-self: start;
   padding: 4px 10px;
@@ -459,21 +448,26 @@
     min-height: 44px;
     padding-inline: 18px;
   }
-  .phone-more-sheet .profile-drop {
+  .phone-more-sheet .profile-drop,
+  .structure-empty-import .profile-drop {
     min-height: 48px;
   }
-  .phone-more-sheet .profile-transfer-actions {
+  .phone-more-sheet .profile-transfer-actions,
+  .structure-empty-import .profile-transfer-actions {
     flex-wrap: wrap;
   }
-  .phone-more-sheet .profile-transfer-toggle {
+  .phone-more-sheet .profile-transfer-toggle,
+  .structure-empty-import .profile-transfer-toggle {
     min-height: 44px;
     font-size: 13px;
   }
-  .phone-more-sheet .profile-transfer-actions .help-tip {
+  .phone-more-sheet .profile-transfer-actions .help-tip,
+  .structure-empty-import .profile-transfer-actions .help-tip {
     width: 44px;
     height: 44px;
   }
-  .phone-more-sheet .profile-export-item {
+  .phone-more-sheet .profile-export-item,
+  .structure-empty-import .profile-export-item {
     min-height: 44px;
     padding: 10px 12px;
     white-space: normal;

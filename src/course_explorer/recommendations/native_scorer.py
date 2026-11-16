@@ -144,7 +144,7 @@ def score_candidates(
     index_rows: list[numpy.ndarray] = []
     for record in candidates:
         span = chunk_rows.chunk_span(
-            (record.summary.group_id, record.sisu_course_unit_id, record.source_hash)
+            (record.summary.group_id, record.source_version_id, record.source_hash)
         )
         start, count = span if span is not None else (0, 0)
         index_rows.append(numpy.arange(start, start + count, dtype=numpy.intp))

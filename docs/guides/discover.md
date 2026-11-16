@@ -4,12 +4,12 @@ The Discover tab proposes courses to study next and, on a site that serves the e
 
 ## The two lists
 
-The tab opens on the list the profile last showed, which is **Next courses** for a profile that has not chosen one. On a desktop screen the list is chosen by the tabs above the results. On a phone the **Next courses** and **Recommended** buttons sit in the sticky header above the results.
+The tab opens on the list the profile last showed, which is **Next courses** for a profile that has not chosen one, or **Recommended** where the prerequisites switch is off. On a desktop screen the list is chosen by the tabs above the results. On a phone the **Next courses** and **Recommended** buttons sit in the sticky header above the results.
 
 - **Next courses** lists courses whose prerequisites your own courses cover.
 - **Recommended**, on a site that serves the embedding features, lists courses whose teaching text is close to your courses, ranked by how close they are. A course that overlaps one of your own courses too closely is left out.
 
-A site that serves no embedding features serves **Next courses** alone.
+A site with prerequisites off and embeddings on serves **Recommended** alone and sends no next-course read. A site with both switches off serves no **Discover** tab.
 
 The **Next courses** list opens with a header holding its name and the number of results, and the **Recommended** list opens with a header reading "recommended for you" and the same count. The **Recommended** header carries the note "Similarity analysis is based on official teaching text and derived translations" to the right of its rule.
 
@@ -38,7 +38,7 @@ The **?** button beside the desktop controls, or in the **Discover options** she
 
 ## Read a result row
 
-Every row is a course card with its code, its name, its credits, an **active** or **inactive** label, and a **completed** or **selected** badge when the course is in your own sets. The rows fill one wide column, and each course name is shown on one line.
+Every row is a course card with its code, its name, its credits or **Credits unknown**, an **active** or **inactive** label, and a **completed** or **selected** badge when the course is in your own sets. The rows fill one wide column, and each course name is shown on one line.
 
 A row that carries meters shows the card and the meters side by side at a wide window, with the meters in their own column. In a narrower window the card and the meters stack in one column, and the code, the name and each meter label share one left edge.
 
@@ -48,6 +48,7 @@ The course card and its meters stack in one column inside the row's border. The 
 
 - A next course row carries a coverage meter for each category that holds course prerequisites. **Required** is the share of the courses of the required prerequisite option your basis covers best, and **Recommended** does the same over its recommended options. Each is shown as a whole percentage, and a category with no course prerequisites shows no meter at all.
 - Under **All** a row carries no coverage meter, because that list shows only courses whose prerequisite requirements your basis satisfies, and a numeric choice requirement can be satisfied by fewer than all of its options. The freed width goes to the course name.
+- A next-course list whose eligibility used the configured assumed credit value shows one **Assumed credits used** caption beside its heading, and the basis total shows the same caption when the shown total counts a course with no official credit amount.
 - A next course that is listed only because of inferred prerequisites carries the **inferred** mark in its row, beside the code on a phone and with the credits and activity on a wider screen, on a site that serves the inference features.
 - A recommended row carries one meter, **Similarity**, with the percentage of how close its teaching text is to your whole basis. Hovering the meter shows the note "Teaching text includes derived translations" when the text compared on either side comes from a translation rather than from official text.
 
@@ -56,13 +57,13 @@ The course card and its meters stack in one column inside the row's border. The 
 
 The similarity ranking and the rule that leaves out courses overlapping your own are described in [Recommendations](/docs/backend/search-and-discovery/recommendations.md).
 
-![The Recommended list with a basis of one completed course, the recommended for you header with its count, and one result row showing the course and its Similarity meter at 41%.](/docs/screenshots/discover-recommended.png)
+![The Recommended list with a basis of one completed course, the recommended for you header with its count and the note Similarity analysis is based on official teaching text and derived translations beside it, and one result row showing the course and its Similarity meter at 41%.](/docs/screenshots/discover-recommended.png)
 
 ## Act on a result
 
 Select anywhere in the row. On a desktop screen the [course menu](/docs/guides/README.md#shared-course-state) opens below the complete row when the screen has room below it, and above the row when the space below cannot hold it. On a phone it opens as a sheet above the bottom bar. [Shared course state](/docs/guides/README.md#shared-course-state) lists the menu's entries, the bottom notices they show and the **Mark completed?** dialog.
 
-**Open prerequisite graph** switches to the Prerequisites tab with that course at the top of the drawing, described in [Exploring prerequisites](/docs/guides/prerequisites.md).
+On a site that serves the prerequisite graph, **Open prerequisite graph** switches to the Prerequisites tab with that course at the top of the drawing, described in [Exploring prerequisites](/docs/guides/prerequisites.md).
 
 **Add to comparison** gives the course its slot letter on the card and starts no Discover read. The result rows hold their place, with no loading placeholder.
 

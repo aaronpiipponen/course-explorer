@@ -29,7 +29,14 @@ const COURSE: CourseSummary = {
 const FEATURES = {
   embeddings_enabled: false,
   inference_enabled: false,
+  prerequisites_enabled: true,
   dataset_identity: "test-dataset",
+  display_label: "example-uni",
+  university_names: { en: "Example University", fi: "Esimerkkiyliopisto" },
+  source_attribution: { en: "Source attribution", fi: "Lähdemerkintä" },
+  assumed_course_credits: "5",
+  study_plan_script: null,
+  study_plan_formats: [],
 };
 
 /** Let the menu mount and its deferred write settle. */
@@ -122,6 +129,9 @@ describe("course menu remove from holder", () => {
     });
     await settle();
 
+    // The prerequisites switch adds the divider above its action.
+    expect(document.querySelectorAll('[role="separator"]')).toHaveLength(3);
+
     // The card sits on a surface without Structure's flag, which must still offer the holder.
     const remove = [
       ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
@@ -146,5 +156,49 @@ describe("course menu remove from holder", () => {
     expect(container.querySelector(".toast")?.textContent).toContain(
       COURSE.code,
     );
+
+    // A site whose prerequisites switch is off does not offer the hidden graph.
+    await act(async () => {
+      root.render(
+        createElement(
+          StoreContext.Provider,
+          { value: store },
+          createElement(
+            WebFeaturesContext.Provider,
+            { value: { ...FEATURES, prerequisites_enabled: false } },
+            createElement(
+              NoticeProvider,
+              null,
+              createElement(CourseMenu, {
+                course: COURSE,
+                open: true,
+                onOpenChange: () => {},
+                children: createElement(
+                  "button",
+                  { type: "button" },
+                  "Open menu",
+                ),
+              }),
+              createElement(NoticeStack, { tab: "search" }),
+            ),
+          ),
+        ),
+      );
+    });
+    await settle();
+    // Both switches are off, so the divider above the Unplaced action and the one above the guide remain.
+    expect(document.querySelectorAll('[role="separator"]')).toHaveLength(2);
+    const offered = [
+      ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ].map((item) => item.textContent ?? "");
+    // The same render produced the menu, so the missing graph is the switch and not an empty menu.
+    expect(
+      offered.some((text) => text.includes(uiText("en", "Mark completed"))),
+    ).toBe(true);
+    expect(
+      offered.some((text) =>
+        text.includes(uiText("en", "Open prerequisite graph")),
+      ),
+    ).toBe(false);
   });
 });

@@ -70,9 +70,9 @@ The presentation-only view of a resolved tree lives in `web/src/features/structu
 
 `contentSource(resolved, kind, id)` in `display.ts` walks the displayed children of each visited node once and returns the node that displays one course or one child module, or `null` when none does. A course inside a chosen option or a transparent wrapper is therefore attributed to its displayed holder, and a module identity to its displayed parent. `moduleSource(resolved, moduleId)` wraps it for a module, and `courseSource(resolved, courseId)` wraps it for a course. The placement code uses `courseSource` for the holder name of a move, and no caller infers an ancestor from a key prefix.
 
-## Placement edits, the pane and the Sisu capture
+## Placement edits, the pane and the study plan
 
-The placement records and the shared course sets are described in [Structure edits](/docs/frontend/structure-edits.md). The pane's display input, hydration, dialogs and programme operations are described in [Structure pane](/docs/frontend/structure-pane.md). The capture and PDF import, their parsing and their shared pending placement are described in [Sisu import](/docs/frontend/sisu-capture.md).
+The placement records and the shared course sets are described in [Structure edits](/docs/frontend/structure-edits.md). The pane's display input, hydration, dialogs and programme operations are described in [Structure pane](/docs/frontend/structure-pane.md). The study-plan import, its readers and its shared pending placement are described in [Study-plan import](/docs/frontend/study-plan-import.md).
 
 ## Where a change belongs
 

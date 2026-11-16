@@ -21,12 +21,19 @@ from course_explorer.config import (
     FeedbackIntakeSettings,
     FeedbackSenderSettings,
     FeedbackSettings,
+    InferenceContextSettings,
+    KoriSettings,
+    NormalizationSettings,
     SearchSettings,
+    SharedStorageSettings,
     UsageSettings,
     WebSettings,
     WorkerConnectionSettings,
     load_administrative_site_settings,
+    load_inference_context_settings,
 )
+from course_explorer.enums import OfficialTextField
+from course_explorer.instance import UNIVERSITIES
 from course_explorer_admin import compose
 from tests.config._support import FIXTURE_VALUES
 from tests.support import write_example_config_tree
@@ -45,7 +52,8 @@ def test_loads_automatic_configuration_and_applies_override_precedence(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The example TOML values load without sourcing, the environment file supplies the database
-    password, and an explicit process value wins.
+    password, an explicit process value wins, and an instance-key override selects that
+    university's mapped source facts.
     """
     root = tmp_path / "checkout"
     write_example_config_tree(root)
@@ -66,11 +74,17 @@ def test_loads_automatic_configuration_and_applies_override_precedence(
     assert WebSettings().web_port == 8037
     assert WebSettings().embeddings_enabled is True
     assert WebSettings().inference_enabled is True
+    assert WebSettings().prerequisites_enabled is True
+    # The one configured instance key selects the site's university metadata.
+    assert WebSettings().instance_key == "example"
+    assert WebSettings().display_label == UNIVERSITIES["example"].display_label
+    assert WebSettings().university.name_en == UNIVERSITIES["example"].name_en
+    assert WebSettings().university.name_fi == UNIVERSITIES["example"].name_fi
     # The six site and worker identities load from their owning subsystem files.
     worker = WorkerConnectionSettings()
     assert worker.ssh_target == "replace-with-ssh-target"
     assert worker.wsl_distribution == "replace-with-wsl-distribution"
-    assert worker.worker_project_root == Path("/home/replace-with-user/tuni-course-explorer")
+    assert worker.worker_project_root == Path("/home/replace-with-user/course-explorer")
     site = load_administrative_site_settings()
     assert site.web_service_unit == "replace-with-web.service"
     assert site.admin_service_unit == "replace-with-admin.service"
@@ -83,6 +97,15 @@ def test_loads_automatic_configuration_and_applies_override_precedence(
     assert feedback.feedback_postgres_port == 5433
     assert feedback.feedback_attachments_root == Path("data/attachments")
     assert feedback.feedback_postgres_password.get_secret_value() == "synthetic-feedback-secret"
+    # The shared directory is one machine-wide path, and a home-prefixed value expands.
+    shared = SharedStorageSettings()
+    assert shared.shared_root == Path.home() / ".local/share/course-explorer"
+    assert shared.models_root == shared.shared_root / "models"
+    assert shared.locks_root == shared.shared_root / "locks"
+    relative = Path("models/bge-m3-q8_0.gguf")
+    assert shared.resolve_embedding_artifact(relative) == shared.shared_root / relative
+    absolute = Path("/srv/models/bge-m3-q8_0.gguf")
+    assert shared.resolve_embedding_artifact(absolute) == absolute
     intake = FeedbackIntakeSettings()
     assert intake.web_app_url == "http://localhost:8037/"
     assert intake.web_app_origin == "http://localhost:8037"
@@ -108,12 +131,17 @@ def test_loads_automatic_configuration_and_applies_override_precedence(
     monkeypatch.setenv("SEARCH_EMBEDDING_MAX_ATTEMPTS", "2")
     monkeypatch.setenv("WEB_PORT", "18028")
     monkeypatch.setenv("WEB_APP_URL", "http://localhost:18037/")
+    monkeypatch.setenv("INSTANCE_DISPLAY_LABEL", "custom-label")
     monkeypatch.setenv("WEB_EMBEDDINGS_ENABLED", "0")
     monkeypatch.setenv("WEB_INFERENCE_ENABLED", "0")
+    monkeypatch.setenv("WEB_PREREQUISITES_ENABLED", "0")
+    monkeypatch.setenv("INFERENCE_TARGET_FIELDS", '["name","content"]')
+    monkeypatch.setenv("INFERENCE_POOL_FIELDS", '["name","outcomes"]')
     monkeypatch.setenv("USAGE_RETENTION_DAYS", "7")
     monkeypatch.setenv("FEEDBACK_POSTGRES_PORT", "15432")
     monkeypatch.setenv("FEEDBACK_BROWSER_SUBMISSIONS_PER_HOUR", "9")
     monkeypatch.setenv("FEEDBACK_GITHUB_TIMEOUT_SECONDS", "45")
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", "/synthetic/shared")
     monkeypatch.setenv("ADMIN_SITE_WEB_SERVICE_UNIT", "synthetic-site-web.service")
     monkeypatch.setenv("ADMIN_SITE_ADMIN_SERVICE_UNIT", "synthetic-site-admin.service")
     monkeypatch.setenv("ADMIN_SITE_WEB_SERVICE_SCOPE", "system")
@@ -126,20 +154,74 @@ def test_loads_automatic_configuration_and_applies_override_precedence(
     assert SearchSettings().search_embedding_max_attempts == 2
     assert WebSettings().web_port == 18028
     assert WebSettings().web_app_url == "http://localhost:18037/"
+    assert WebSettings().display_label == "custom-label"
     assert AdminWebSettings().web_app_url == "http://localhost:18037/"
+    assert AdminWebSettings().display_label == "custom-label"
     assert FeedbackIntakeSettings().web_app_origin == "http://localhost:18037"
     assert WebSettings().embeddings_enabled is False
     assert WebSettings().inference_enabled is False
+    assert WebSettings().prerequisites_enabled is False
+    # The two optional prompt-field keys resolve through the same composition on the class and
+    # its loader, and an override differs from the teaching-field baseline.
+    context = InferenceContextSettings()
+    loaded = load_inference_context_settings()
+    university = WebSettings().university
+    for family in (context, loaded):
+        assert family.resolved_target_fields(university) == (
+            OfficialTextField.NAME,
+            OfficialTextField.CONTENT,
+        )
+        assert family.resolved_pool_fields(university) == (
+            OfficialTextField.NAME,
+            OfficialTextField.OUTCOMES,
+        )
+        assert family.prompt_field_policy(university) == {
+            "target": ["name", "content"],
+            "pool": ["name", "outcomes"],
+        }
     assert UsageSettings().usage_retention_days == 7
     assert FeedbackSettings().feedback_postgres_port == 15432
     assert FeedbackIntakeSettings().feedback_browser_submissions_per_hour == 9
     assert FeedbackSenderSettings().feedback_github_timeout_seconds == 45.0
+    assert SharedStorageSettings().shared_root == Path("/synthetic/shared")
     assert AdminWebSettings().admin_web_port == 18027
     assert AdminWebSettings().admin_web_session_idle_minutes == 5
     assert AdminWebSettings().admin_web_poll_seconds == 3
     assert load_administrative_site_settings().web_service_unit == "synthetic-site-web.service"
     assert load_administrative_site_settings().admin_service_unit == "synthetic-site-admin.service"
     assert load_administrative_site_settings().web_service_scope == "system"
+
+    # An instance-key override selects that university's mapped source facts, so the Kori and
+    # normalization families read one source base, root, first year and guide base.
+    monkeypatch.setenv("INSTANCE_KEY", "aalto")
+    assert WebSettings().instance_key == "aalto"
+    aalto_sisu = UNIVERSITIES["aalto"].sisu
+    assert aalto_sisu is not None
+    assert str(KoriSettings().kori_base_url) == aalto_sisu.kori_base_url
+    assert KoriSettings().university_id == aalto_sisu.university_id
+    assert KoriSettings().kori_first_academic_year == aalto_sisu.first_academic_year
+    assert str(NormalizationSettings().course_guide_base_url) == (aalto_sisu.course_guide_base_url)
+
+    # A Peppi legacy university reads its own first year and guide base, and its missing Sisu block
+    # refuses the Kori read.
+    monkeypatch.setenv("INSTANCE_KEY", "turku")
+    assert WebSettings().instance_key == "turku"
+    turku_legacy = UNIVERSITIES["turku"].peppi_legacy
+    assert turku_legacy is not None
+    assert KoriSettings().first_academic_year_start == turku_legacy.periods[0].start_year
+    assert str(NormalizationSettings().course_guide_base_url) == (f"{turku_legacy.guide_base_url}/")
+    with pytest.raises(ValueError, match="has no Sisu source block"):
+        KoriSettings().kori_base_url
+
+    # A guide university reads its own first year, guide base and fetch variant.
+    monkeypatch.setenv("INSTANCE_KEY", "diak")
+    assert WebSettings().instance_key == "diak"
+    diak_guide = UNIVERSITIES["diak"].guide
+    assert diak_guide is not None
+    assert KoriSettings().first_academic_year_start == diak_guide.periods[0].start_year
+    assert str(NormalizationSettings().course_guide_base_url) == (f"{diak_guide.guide_base_url}/")
+    assert diak_guide.fetch_variant == "plain_http"
+    monkeypatch.delenv("INSTANCE_KEY")
 
     # A candidate configuration supplies its own WebSettings port in front of both files and in
     # front of the process override the handoff marker would otherwise admit.
@@ -204,11 +286,14 @@ def test_compose_bridge_carries_interpolation_aliases_and_cleans_up(
         embedding_context_size=2048,
         embedding_pooling="cls",
         embedding_normalization=2,
-        embedding_artifact_path="models/synthetic.gguf",
+        embedding_artifact_path=Path("models/synthetic.gguf"),
     )
+    instance = SimpleNamespace(instance_key="example")
     monkeypatch.setattr(compose, "load_raw_database_settings", lambda: database)
     monkeypatch.setattr(compose, "load_embedding_runtime_settings", lambda: embedding)
+    monkeypatch.setattr(compose, "load_instance_settings", lambda: instance)
     monkeypatch.setattr(administration, "repository_root", lambda: tmp_path)
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(tmp_path / "shared"))
     monkeypatch.delenv(compose.COMPOSE_PROJECT_NAME_ALIAS, raising=False)
 
     captures: list[dict[str, object]] = []
@@ -246,6 +331,10 @@ def test_compose_bridge_carries_interpolation_aliases_and_cleans_up(
         key, _, quoted = line.partition("=")
         values[key] = quoted
     assert values["POSTGRES_PASSWORD"] == "'syn\\'thetic-password'"
+    assert values["COURSE_EXPLORER_PROJECT_NAME"] == "'course-explorer-example'"
+    assert values["EMBEDDING_ARTIFACT_PATH"] == (
+        "'" + str(tmp_path / "shared" / "models" / "synthetic.gguf") + "'"
+    )
     assert first["file_mode"] == 0o600
     assert first["directory_mode"] == 0o700
     assert first["directory"] is not second["directory"]
@@ -290,7 +379,7 @@ def test_unsourced_cli_loads_policy(tmp_path: Path) -> None:
     assert exported["TRANSLATION_CONTROLLER_WSL_DISTRIBUTION"] == "replace-with-wsl-distribution"
     assert (
         exported["TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT"]
-        == "/home/replace-with-user/tuni-course-explorer"
+        == "/home/replace-with-user/course-explorer"
     )
     assert exported["ADMIN_SITE_WEB_SERVICE_UNIT"] == "replace-with-web.service"
     assert exported["ADMIN_SITE_ADMIN_SERVICE_UNIT"] == "replace-with-admin.service"

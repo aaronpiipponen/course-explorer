@@ -42,14 +42,21 @@ std::vector<std::string> keys(const char *blob, const int64_t *offsets, int coun
 
 extern "C" {
 
-/* Open one libpq connection and return the handle that names it, or -1 with the error text set. */
-int course_prerequisite_open(const char *conninfo)
+/* Open one libpq connection and return the handle that names it, or -1 with the error text set.
+ *
+ * ``display_fi`` and ``display_en`` are PostgreSQL text-array literals holding each interface
+ * language's configured official-language fallback order. The compiled name queries consume them
+ * only for the loaded versions. Missing arguments fail here without echoing them or the connection
+ * string.
+ */
+int course_prerequisite_open(const char *conninfo, const char *display_fi,
+                             const char *display_en)
 {
-    if (conninfo == nullptr) {
-        tce::set_error("native database loader needs a connection string");
+    if (conninfo == nullptr || display_fi == nullptr || display_en == nullptr) {
+        tce::set_error("native database loader needs a connection string and display policy");
         return -1;
     }
-    return tce::open_database_handle(conninfo);
+    return tce::open_database_handle(conninfo, display_fi, display_en);
 }
 
 /* Close one open handle and release its connection. An unknown handle is ignored. */
@@ -59,14 +66,17 @@ void course_prerequisite_close(int handle) { tce::close_database_handle(handle);
  *
  * ``basis_blob`` packs ``basis_count`` keys as bytes and ``basis_offsets`` holds
  * ``basis_count + 1`` byte offsets, so key i spans offsets[i] to offsets[i + 1]. ``outcomes`` holds
- * ``capacity`` records. The call returns -1 with the error text set when the bundle is null or not
- * open, when the bundle holds more structures than ``capacity``, or when a course summary is
- * absent. ``mode`` 0 keeps a structure whose requirements are all covered and 1 keeps one with any
- * requirement covered. The return value is the number of records written.
+ * ``capacity`` records. ``assumed_course_credits`` is a positive cost in hundredths of a credit
+ * substituted for a missing source-course minimum. The call returns -1 with the error text set when
+ * the bundle is null or not open, when the bundle holds more structures than ``capacity``, when a
+ * course summary is absent, or when the assumed cost is nonpositive. ``mode`` 0 keeps a structure
+ * whose requirements are all covered and 1 keeps one with any requirement covered. The return value
+ * is the number of records written.
  */
 int course_prerequisite_evaluate(const void *pointer, const char *basis_blob,
                                  const int64_t *basis_offsets, int basis_count, int mode,
-                                 NativeOutcome *outcomes, int capacity)
+                                 int64_t assumed_course_credits, NativeOutcome *outcomes,
+                                 int capacity)
 {
     auto holder = static_cast<const tce::StructureBundle *>(pointer);
     if (holder == nullptr || holder->compiled == nullptr) {
@@ -76,7 +86,7 @@ int course_prerequisite_evaluate(const void *pointer, const char *basis_blob,
     std::unordered_set<std::string> basis;
     for (int index = 0; index < basis_count; ++index)
         basis.emplace(tce::decode_key(basis_blob, basis_offsets, index));
-    return tce::evaluate_bundle(*holder, basis, mode, outcomes, capacity);
+    return tce::evaluate_bundle(*holder, basis, mode, assumed_course_credits, outcomes, capacity);
 }
 
 /* Load the fact closure for one candidate array and return a new structure bundle.

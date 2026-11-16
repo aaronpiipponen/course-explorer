@@ -180,12 +180,15 @@ button.discover-chip {
 .discover-results {
   margin-top: 28px;
 }
-.discover-tier {
+.discover-tier-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 14px;
   margin: 24px 0 8px;
+}
+.discover-tier {
+  margin: 0;
   color: rgb(255 255 255 / 50%);
   font:
     500 12px "JetBrains Mono",
@@ -194,10 +197,7 @@ button.discover-chip {
   letter-spacing: 0.08em;
   text-transform: lowercase;
 }
-.discover-tier-label {
-  flex: none;
-}
-.discover-tier::after {
+.discover-tier-row::after {
   height: 1px;
   flex: 1;
   background: rgb(255 255 255 / 12%);
@@ -207,6 +207,7 @@ button.discover-chip {
 .discover-tier-note {
   order: 1;
   flex: 0 1 auto;
+  margin: 0;
   color: rgb(255 255 255 / 45%);
   font-size: 11px;
   letter-spacing: 0;

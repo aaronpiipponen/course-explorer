@@ -27,6 +27,7 @@ from course_explorer.config import (
     SearchSettings,
     load_database_settings,
     load_embedding_runtime_settings,
+    load_instance_settings,
     load_search_settings,
 )
 from course_explorer.curriculum import CourseSummary
@@ -83,8 +84,9 @@ def run_course_comparison_command(
     resolved_settings = (
         database_settings if database_settings is not None else load_database_settings()
     )
+    university = load_instance_settings().university
     with _database_context(resolved_settings, factory=session_factory) as factory:
-        curriculum = CurriculumRepository(factory)
+        curriculum = CurriculumRepository(factory, university=university)
         resolver = CourseResolver(curriculum, projection=projection)
         resolved = resolver.resolve_courses((course_a, course_b))
         chunks = TeachingEmbeddingRepository(factory).get_chunks(
@@ -105,6 +107,7 @@ def run_course_comparison_command(
         settings=search_settings,
         hub=hub,
         outcomes_hub=outcomes_hub,
+        official_languages=university.official_languages,
     )
     verdict = comparison_verdict(meters, settings=search_settings)
     uses_derived_text = any(

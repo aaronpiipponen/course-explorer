@@ -272,7 +272,7 @@ class ScriptedWorkerRunner:
                 return subprocess.CompletedProcess(list(command), 0, stdout=b"")
             if "config" in command:
                 return subprocess.CompletedProcess(
-                    list(command), 0, stdout=b"pgvector/pgvector:0.8.6-pg18-trixie\n"
+                    list(command), 0, stdout=b"course-explorer-synthetic-db\n"
                 )
             if command[-2:] == ("build", "db"):
                 self.db_image_prepared = True
@@ -382,7 +382,9 @@ def _wire_present_resources(
 def test_worker_check_is_read_only_and_reports_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Check names fixed components without installing, downloading, or starting."""
+    """Check names fixed components without installing, downloading, starting or creating files."""
+    shared = tmp_path / "check-shared"
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(shared))
     runner = ScriptedWorkerRunner(missing_package="cmake", docker_ready=False)
     _wire_resources(
         monkeypatch,
@@ -419,16 +421,16 @@ def test_worker_check_is_read_only_and_reports_missing(
     assert present.missing == []
     assert present_runner.interactive_calls == []
 
-    # The stock base image shares the configured tag but carries no extension capability. A
-    # read-only check reports the missing image and never builds or pulls it.
-    stock_runner = ScriptedWorkerRunner(db_image_prepared=False)
-    stock = provisioning_worker.check_worker_resources(runner=stock_runner)
-    assert stock.ready is False
-    assert stock.missing == ["db-image"]
-    assert stock_runner.interactive_calls == []
-    assert not any(command[-2:] == ("build", "db") for command in stock_runner.calls)
+    # An image without the extension capability is not ready. A read-only check reports the
+    # missing image and never builds or pulls it.
+    unprepared_runner = ScriptedWorkerRunner(db_image_prepared=False)
+    unprepared = provisioning_worker.check_worker_resources(runner=unprepared_runner)
+    assert unprepared.ready is False
+    assert unprepared.missing == ["db-image"]
+    assert unprepared_runner.interactive_calls == []
+    assert not any(command[-2:] == ("build", "db") for command in unprepared_runner.calls)
     assert not any(
-        command[:4] == ("sudo", "-n", "docker", "pull") for command in stock_runner.calls
+        command[:4] == ("sudo", "-n", "docker", "pull") for command in unprepared_runner.calls
     )
 
     # A runtime file that exists but cannot be executed is not ready, and check never builds.
@@ -439,12 +441,17 @@ def test_worker_check_is_read_only_and_reports_missing(
     assert non_executable.ready is False
     assert non_executable.missing == ["inference-runtime"]
     assert non_executable_runner.interactive_calls == []
+    assert not shared.exists()
 
 
 def test_artifact_preparation_verifies_before_publish_and_preserves_mismatch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A bad download is never published and a mismatching installed artifact is left untouched."""
+    """Prepare creates the shared layout, leaves a mismatching installed artifact in place and
+    refuses a bad download.
+    """
+    shared = tmp_path / "worker-shared"
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(shared))
     installed = tmp_path / "translation.gguf"
     installed.write_bytes(b"installed-mismatch")
     runner = ScriptedWorkerRunner()
@@ -459,6 +466,9 @@ def test_artifact_preparation_verifies_before_publish_and_preserves_mismatch(
     with pytest.raises(ValueError):
         provisioning_worker.prepare_worker_resources(runner=runner)
     assert installed.read_bytes() == b"installed-mismatch"
+    assert sorted(path.name for path in shared.iterdir()) == ["locks", "models"]
+    assert oct((shared / "models").stat().st_mode & 0o777) == "0o700"
+    assert oct((shared / "locks").stat().st_mode & 0o777) == "0o700"
 
     class DownloadRunner(ScriptedWorkerRunner):
         def __init__(

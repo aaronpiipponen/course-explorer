@@ -1,0 +1,6 @@
+/* The assumed-credit note shared by every feature that shows an assumed credit value. */
+.assumed-note {
+  color: rgb(255 255 255 / 55%);
+  font-weight: 400;
+  white-space: normal;
+}

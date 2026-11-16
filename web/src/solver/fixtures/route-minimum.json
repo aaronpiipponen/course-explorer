@@ -154,7 +154,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-trivial-v1",
           "name_fi": null,
-          "sisu_module_id": "module-trivial-v1"
+          "source_version_id": "module-trivial-v1"
         }
       ],
       "pieces": [
@@ -526,7 +526,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-outer-v1",
           "name_fi": null,
-          "sisu_module_id": "module-outer-v1"
+          "source_version_id": "module-outer-v1"
         }
       ],
       "pieces": [
@@ -806,7 +806,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-siblings-v1",
           "name_fi": null,
-          "sisu_module_id": "module-siblings-v1"
+          "source_version_id": "module-siblings-v1"
         }
       ],
       "pieces": [
@@ -1857,7 +1857,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-unknown-v1",
           "name_fi": null,
-          "sisu_module_id": "module-unknown-v1"
+          "source_version_id": "module-unknown-v1"
         }
       ],
       "pieces": [
@@ -2195,7 +2195,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-known-v1",
           "name_fi": null,
-          "sisu_module_id": "module-known-v1"
+          "source_version_id": "module-known-v1"
         },
         {
           "code": null,
@@ -2203,7 +2203,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-known-outer-v1",
           "name_fi": null,
-          "sisu_module_id": "module-known-outer-v1"
+          "source_version_id": "module-known-outer-v1"
         }
       ],
       "pieces": [
@@ -2647,7 +2647,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-known-v1",
           "name_fi": null,
-          "sisu_module_id": "module-known-v1"
+          "source_version_id": "module-known-v1"
         },
         {
           "code": null,
@@ -2655,7 +2655,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-known-outer-v1",
           "name_fi": null,
-          "sisu_module_id": "module-known-outer-v1"
+          "source_version_id": "module-known-outer-v1"
         }
       ],
       "pieces": [
@@ -9134,7 +9134,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-bounded-v1",
           "name_fi": null,
-          "sisu_module_id": "module-bounded-v1"
+          "source_version_id": "module-bounded-v1"
         }
       ],
       "pieces": [
@@ -9399,7 +9399,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-blank-v1",
           "name_fi": null,
-          "sisu_module_id": "module-blank-v1"
+          "source_version_id": "module-blank-v1"
         }
       ],
       "pieces": [
@@ -9642,7 +9642,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-member-v1",
           "name_fi": null,
-          "sisu_module_id": "module-member-v1"
+          "source_version_id": "module-member-v1"
         }
       ],
       "pieces": [
@@ -9826,7 +9826,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-unknown-v1",
           "name_fi": null,
-          "sisu_module_id": "module-unknown-v1"
+          "source_version_id": "module-unknown-v1"
         }
       ],
       "pieces": [
@@ -10071,7 +10071,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-trivial-v1",
           "name_fi": null,
-          "sisu_module_id": "module-trivial-v1"
+          "source_version_id": "module-trivial-v1"
         }
       ],
       "pieces": [
@@ -10481,7 +10481,7 @@
           "module_type": "StudyModule",
           "name_en": "Module module-trivial-v1",
           "name_fi": null,
-          "sisu_module_id": "module-trivial-v1"
+          "source_version_id": "module-trivial-v1"
         }
       ],
       "pieces": [

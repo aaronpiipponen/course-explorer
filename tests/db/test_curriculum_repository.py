@@ -18,7 +18,6 @@ from course_explorer.curriculum import (
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.db.models import (
     Course,
-    CourseText,
     CourseVersion,
     CourseVersionCurriculumPeriod,
     CurriculumPeriod,
@@ -26,14 +25,22 @@ from course_explorer.db.models import (
     ModuleRuleNode,
     ModuleVersion,
     ModuleVersionCurriculumPeriod,
+    OfficialCourseText,
+    OfficialModuleText,
     OfficialPrerequisiteOption,
     OfficialSubstitutionOption,
     SourceSnapshot,
 )
-from course_explorer.enums import ModuleRuleType, ModuleType
+from course_explorer.enums import (
+    ModuleRuleType,
+    ModuleType,
+    OfficialTextField,
+    TeachingTextField,
+)
 from course_explorer.ingestion.normalization import normalize_curriculum
 from course_explorer.ingestion.normalization_repository import NormalizationRepository
 from course_explorer.ingestion.repository import CaptureRepository
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.next_courses.service import NextCourseMode, evaluate_next_course_outcomes
 from course_explorer.prerequisite import commands as prerequisite_command_module
 from course_explorer.prerequisite import native_compiler, native_handle
@@ -43,8 +50,14 @@ from course_explorer.prerequisite.graph import (
 from course_explorer.search import lookup_commands as lookup_command_module
 from course_explorer.search.resolver import CourseResolver
 from course_explorer.study_structure import commands as study_structure_command_module
+from course_explorer.study_structure.service import StudyStructureService
+from course_explorer.teaching_text.repository import DerivedTranslationRepository
+from course_explorer.teaching_text.service import (
+    TeachingTextService,
+    official_teaching_text,
+    teaching_text_sha256,
+)
 from tests.ingestion._normalization_repository_support import (
-    GUIDE_URL,
     build_completed_fixture_store,
     fixture_bytes,
 )
@@ -65,13 +78,12 @@ def test_curriculum_repository_reads_representatives_text_and_official_structure
     store = build_completed_fixture_store(tmp_path, capture_repository)
     normalize_curriculum(
         store,
-        NormalizationRepository(factory),
+        NormalizationRepository(factory, university=UNIVERSITIES["example"]),
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
 
-    repository = CurriculumRepository(factory)
+    repository = CurriculumRepository(factory, university=UNIVERSITIES["example"])
     courses = repository.list_courses()
     assert [course.group_id for course in courses] == [
         "course-group-a",
@@ -81,9 +93,20 @@ def test_curriculum_repository_reads_representatives_text_and_official_structure
     ]
     course_a = courses[0]
     assert course_a.representative is not None
-    assert course_a.representative.sisu_course_unit_id == "course-a-v2"
-    assert course_a.representative.teaching_text.content_en == "Revised content"
-    assert not hasattr(course_a.representative.teaching_text, "prerequisite_text_en")
+    assert course_a.representative.source_version_id == "course-a-v2"
+    assert course_a.representative.texts[OfficialTextField.CONTENT]["en"] == "Revised content"
+    assert OfficialTextField.PREREQUISITE_TEXT in course_a.representative.texts
+    teaching_a = next(
+        course
+        for course in repository.list_teaching_courses()
+        if course.group_id == "course-group-a"
+    )
+    assert teaching_a.representative is not None
+    assert set(teaching_a.representative.texts) == {
+        OfficialTextField.NAME,
+        OfficialTextField.CONTENT,
+        OfficialTextField.OUTCOMES,
+    }
     assert repository.list_courses(active_only=True) == (course_a,)
     assert [course.group_id for course in repository.list_courses(active_only=False)] == [
         "course-group-future",
@@ -99,7 +122,7 @@ def test_curriculum_repository_reads_representatives_text_and_official_structure
         "module-group-study",
     ]
     grouping = modules[1].versions[0]
-    assert grouping.sisu_module_id == "module-group-grouping-v1"
+    assert grouping.source_version_id == "module-group-grouping-v1"
     assert grouping.curriculum_periods == (
         CatalogueCurriculumPeriod(id="period-2027", academic_year_start=2027),
     )
@@ -127,10 +150,9 @@ def normalized_curriculum(
     store = build_completed_fixture_store(tmp_path, capture_repository)
     normalize_curriculum(
         store,
-        NormalizationRepository(factory),
+        NormalizationRepository(factory, university=UNIVERSITIES["example"]),
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
 
     monkeypatch.setattr(
@@ -138,7 +160,7 @@ def normalized_curriculum(
         "load_normalization_settings",
         lambda: settings_factory(NormalizationSettings),
     )
-    return engine, factory, CurriculumRepository(factory)
+    return engine, factory, CurriculumRepository(factory, university=UNIVERSITIES["example"])
 
 
 def test_represented_summary_projection_matches_full_read(normalized_curriculum) -> None:
@@ -148,15 +170,15 @@ def test_represented_summary_projection_matches_full_read(normalized_curriculum)
     summaries = repository.list_represented_summaries()
     expected = tuple(
         (
-            course_summary(course),
-            course.representative.sisu_course_unit_id,
+            course_summary(course, display_fallback=UNIVERSITIES["example"].display_fallback),
+            course.representative.source_version_id,
             course.representative.source_hash,
         )
         for course in courses
         if course.representative is not None
     )
     assert [
-        (record.summary, record.sisu_course_unit_id, record.source_hash) for record in summaries
+        (record.summary, record.source_version_id, record.source_hash) for record in summaries
     ] == list(expected)
     assert [record.summary.group_id for record in summaries] == sorted(
         record.summary.group_id for record in summaries
@@ -236,14 +258,13 @@ def test_module_lookup_identity_projection_matches_full_versions(normalized_curr
     modules_by_group = {module.group_id: module for module in modules}
     for projected in module_lookup:
         full = modules_by_group[projected.group_id]
-        assert [version.sisu_module_id for version in projected.versions] == [
-            version.sisu_module_id for version in full.versions
+        assert [version.source_version_id for version in projected.versions] == [
+            version.source_version_id for version in full.versions
         ]
         for projected_version, full_version in zip(projected.versions, full.versions, strict=True):
             assert projected_version.module_type == full_version.module_type
             assert projected_version.code == full_version.code
-            assert projected_version.name_fi == full_version.name_fi
-            assert projected_version.name_en == full_version.name_en
+            assert projected_version.names == full_version.names
             assert projected_version.validity_start == full_version.validity_start
             assert projected_version.validity_end == full_version.validity_end
             assert projected_version.curriculum_periods == full_version.curriculum_periods
@@ -259,12 +280,12 @@ def test_teaching_inputs_match_scoped_representative_texts(normalized_curriculum
     inputs = repository.list_teaching_text_inputs()
     assert [entry.group_id for entry in inputs] == sorted(course.group_id for course in courses)
     represented_by_source = {
-        entry.representative.sisu_course_unit_id: entry.representative
+        entry.representative.source_version_id: entry.representative
         for entry in inputs
         if entry.representative is not None
     }
     assert represented_by_source == {
-        representative.sisu_course_unit_id: representative
+        representative.source_version_id: representative
         for representative in repository.get_representative_teaching_texts(
             tuple(represented_by_source)
         )
@@ -290,7 +311,7 @@ def test_projected_reads_avoid_full_orm_and_prerequisite_payloads(normalized_cur
     )
     inputs = repository.list_teaching_text_inputs()
     represented_by_source = {
-        entry.representative.sisu_course_unit_id: entry.representative
+        entry.representative.source_version_id: entry.representative
         for entry in inputs
         if entry.representative is not None
     }
@@ -299,6 +320,18 @@ def test_projected_reads_avoid_full_orm_and_prerequisite_payloads(normalized_cur
     )
     module_lookup = repository.list_module_lookup()
     code_identities = repository.list_course_code_identities()
+    prompt_courses = repository.list_prompt_courses()
+    # The prompt projection carries every official text cell and no prerequisite or substitution
+    # structure, and its representative identities match the full represented read.
+    assert {
+        item.group_id: item.representative.source_version_id
+        for item in prompt_courses
+        if item.representative is not None
+    } == {record.summary.group_id: record.source_version_id for record in summaries}
+    for item in prompt_courses:
+        if item.representative is None:
+            continue
+        assert set(item.representative.texts) == set(OfficialTextField)
 
     # The repeated projected reads return the same results with no full ORM load. The shared
     # representative selector's necessary membership/period joins are allowed.
@@ -311,7 +344,7 @@ def test_projected_reads_avoid_full_orm_and_prerequisite_payloads(normalized_cur
                 Course,
                 CourseVersion,
                 CourseVersionCurriculumPeriod,
-                CourseText,
+                OfficialCourseText,
                 Module,
                 ModuleRuleNode,
                 ModuleVersion,
@@ -344,6 +377,7 @@ def test_projected_reads_avoid_full_orm_and_prerequisite_payloads(normalized_cur
         summary_getter_window = repository.get_course_summaries(requested_summary_ids)
         represented_getter_window = repository.get_represented_summaries(requested_summary_ids)
         code_identity_window = repository.list_course_code_identities()
+        prompt_window = repository.list_prompt_courses()
     finally:
         event.remove(Session, "loaded_as_persistent", _record_full)
         event.remove(engine, "before_cursor_execute", _capture_sql)
@@ -363,6 +397,7 @@ def test_projected_reads_avoid_full_orm_and_prerequisite_payloads(normalized_cur
     assert summary_getter_window == tuple(record.summary for record in summaries)
     assert represented_getter_window == summaries
     assert code_identity_window == code_identities
+    assert prompt_window == prompt_courses
     assert teaching_texts_window == tuple(
         represented_by_source[source_id] for source_id in sorted(represented_by_source)
     )
@@ -392,20 +427,21 @@ def test_teaching_course_projection_matches_full_read_and_activity(normalized_cu
             continue
         assert projected.representative is not None
         assert text_input is not None
-        assert (
-            projected.representative.sisu_course_unit_id == full.representative.sisu_course_unit_id
-        )
+        assert projected.representative.source_version_id == full.representative.source_version_id
         assert projected.representative.source_hash == full.representative.source_hash
         assert projected.representative.code == full.representative.code
-        assert projected.representative.name_fi == full.representative.name_fi
-        assert projected.representative.name_en == full.representative.name_en
-        assert projected.representative.teaching_text == full.representative.teaching_text
+        assert projected.representative.texts == {
+            field: full.representative.texts.get(field, {})
+            for field in (
+                OfficialTextField.NAME,
+                OfficialTextField.CONTENT,
+                OfficialTextField.OUTCOMES,
+            )
+        }
         # The coverage/import projection and the teaching-course projection share one
-        # loader, so their identity, names, and teaching text agree exactly.
-        assert text_input.sisu_course_unit_id == projected.representative.sisu_course_unit_id
-        assert text_input.name_fi == projected.representative.name_fi
-        assert text_input.name_en == projected.representative.name_en
-        assert text_input.teaching_text == projected.representative.teaching_text
+        # loader, so their identity and teaching cells agree exactly.
+        assert text_input.source_version_id == projected.representative.source_version_id
+        assert text_input.texts == projected.representative.texts
     assert [course.group_id for course in repository.list_teaching_courses(active_only=True)] == [
         course.group_id for course in repository.list_courses(active_only=True)
     ]
@@ -502,7 +538,7 @@ def test_resolver_rejects_historical_and_unrepresented_codes(normalized_curricul
     with factory.begin() as session:
         session.execute(
             update(CourseVersion)
-            .where(CourseVersion.sisu_course_unit_id == "course-a-z1")
+            .where(CourseVersion.source_version_id == "course-a-z1")
             .values(code="CS.AOLD")
         )
     lookup = CourseResolver(repository)
@@ -557,10 +593,9 @@ def test_prerequisite_graph_expands_normalized_module_rules(
     )
     normalize_curriculum(
         store,
-        NormalizationRepository(factory),
+        NormalizationRepository(factory, university=UNIVERSITIES["example"]),
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
 
     from course_explorer.config import load_database_settings
@@ -605,7 +640,7 @@ def test_prerequisite_graph_expands_normalized_module_rules(
     module = next(
         module for module in structure.modules if module.group_id == "module-group-grouping"
     )
-    assert module.sisu_module_id == "module-group-grouping-v1"
+    assert module.source_version_id == "module-group-grouping-v1"
     assert module.module_type is ModuleType.GROUPING_MODULE
     assert module.name_fi == "Ryhmä"
     assert module.name_en == "Grouping"
@@ -650,15 +685,21 @@ def test_prerequisite_graph_expands_normalized_module_rules(
     assert [entry.summary.root_group_id for entry in direct] == ["course-group-a"]
     assert "course-group-a" in {course.group_id for course in direct[0].summary.courses}
     assert (
-        evaluate_next_course_outcomes(direct, (), mode=NextCourseMode.ALL)["course-group-a"] is None
+        evaluate_next_course_outcomes(
+            direct, (), mode=NextCourseMode.ALL, assumed_course_credits=Decimal("5")
+        ).by_group["course-group-a"]
+        is None
     )
     # The inactive 3-credit module member cannot satisfy the stored 5-credit numeric child, so the
     # numeric known-child route is unsatisfied rather than being reported satisfied.
     inactive_direct = compiler.compile_direct_many(("course-group-a",), active_only=False)
     assert (
         evaluate_next_course_outcomes(
-            inactive_direct, ("course-group-inactive",), mode=NextCourseMode.ALL
-        )["course-group-a"]
+            inactive_direct,
+            ("course-group-inactive",),
+            mode=NextCourseMode.ALL,
+            assumed_course_credits=Decimal("5"),
+        ).by_group["course-group-a"]
         is None
     )
     native_compiler.close_compilations(direct)
@@ -697,7 +738,7 @@ def test_prerequisite_graph_expands_normalized_module_rules(
     assert payload["display"] == display.model_dump(mode="json")
     assert "node_states" not in payload["display"]
     module_payload = payload["solver"]["modules"]
-    assert [(node["group_id"], node["sisu_module_id"]) for node in module_payload] == [
+    assert [(node["group_id"], node["source_version_id"]) for node in module_payload] == [
         ("module-group-grouping", "module-group-grouping-v1")
     ]
     drawn_module_payload = next(
@@ -732,10 +773,10 @@ def test_prerequisite_graph_expands_normalized_module_rules(
         lambda: settings_factory(NormalizationSettings),
     )
     structure = study_structure_command_module.run_study_structure_command("module-group-degree")
-    repository = CurriculumRepository(factory)
+    repository = CurriculumRepository(factory, university=UNIVERSITIES["example"])
     assert structure.academic_year_start == 2026
     degree_root = structure.root
-    assert (degree_root.module.group_id, degree_root.module.sisu_module_id) == (
+    assert (degree_root.module.group_id, degree_root.module.source_version_id) == (
         "module-group-degree",
         "module-group-degree-v1",
     )
@@ -751,7 +792,7 @@ def test_prerequisite_graph_expands_normalized_module_rules(
     assert wrapper.referenced_group_id == "module-group-grouping"
     assert wrapper.module is not None
     grouping_structure = wrapper.module
-    assert (grouping_structure.module.group_id, grouping_structure.module.sisu_module_id) == (
+    assert (grouping_structure.module.group_id, grouping_structure.module.source_version_id) == (
         "module-group-grouping",
         "module-group-grouping-v1",
     )
@@ -815,3 +856,278 @@ def test_prerequisite_graph_expands_normalized_module_rules(
     assert bare_study.module.group_id == "module-group-study"
     assert bare_study.rule.course is not None
     assert bare_study.rule.course.group_id == "course-group-a"
+
+
+def test_official_display_fallback_matches_native_without_teaching_substitution(
+    database: tuple[object, object], tmp_path: Path
+) -> None:
+    """Swedish-first display fallback matches every projection and never fills an exact cell."""
+    _, factory = database
+    hanken = UNIVERSITIES["hanken"]
+    course_group = "swedish-course"
+    module_group = "swedish-module"
+    blank_name = "\t\n\u00a0"
+    course_name_fi = " Suomenkielinen nimi "
+    course_name_sv = "Svenskt namn "
+    module_name_fi = " Moduuli "
+    module_name_sv = " Modul "
+    course_records = [
+        {
+            "id": "swedish-course-v1",
+            "groupId": course_group,
+            "code": "SV.1",
+            "name": {"fi": course_name_fi, "sv": course_name_sv},
+            "credits": {"min": 5, "max": 5},
+            "curriculumPeriodIds": ["period-2026"],
+            "documentState": "ACTIVE",
+            "validityPeriod": {"startDate": "2026-01-01", "endDate": None},
+            "metadata": {"revision": 1, "modificationOrdinal": 1},
+            "content": {"fi": "Sisältö"},
+            "outcomes": None,
+            "prerequisites": None,
+            "additional": None,
+            "compulsoryFormalPrerequisites": [
+                {"prerequisites": [{"type": "Module", "moduleGroupId": module_group}]}
+            ],
+            "recommendedFormalPrerequisites": None,
+            "substitutions": None,
+        }
+    ]
+    module_records = [
+        {
+            "id": "swedish-module-v1",
+            "groupId": module_group,
+            "type": "StudyModule",
+            "code": "SM.SV",
+            "name": {"fi": module_name_fi, "sv": module_name_sv},
+            "targetCredits": {"min": 5, "max": 5},
+            "curriculumPeriodIds": ["period-2026"],
+            "documentState": "ACTIVE",
+            "validityPeriod": {"startDate": "2026-01-01", "endDate": None},
+            "metadata": {"revision": 1, "modificationOrdinal": 1},
+            "rule": {"type": "AnyCourseUnitRule"},
+        }
+    ]
+    store = build_completed_fixture_store(
+        tmp_path,
+        CaptureRepository(factory),
+        courses_body=json.dumps(course_records, ensure_ascii=False).encode(),
+        modules_body=json.dumps(module_records, ensure_ascii=False).encode(),
+    )
+    normalize_curriculum(
+        store,
+        NormalizationRepository(factory, university=hanken),
+        current_academic_year_start=2026,
+        activity_window_years=3,
+    )
+
+    # Ingestion omits a blank name, so the direct insert represents a retained migrated cell.
+    with factory.begin() as session:
+        course_version_id = session.scalar(
+            select(CourseVersion.id).where(CourseVersion.source_version_id == "swedish-course-v1")
+        )
+        module_version_id = session.scalar(
+            select(ModuleVersion.id).where(ModuleVersion.source_version_id == "swedish-module-v1")
+        )
+        session.add_all(
+            (
+                OfficialCourseText(
+                    course_version_id=course_version_id,
+                    field=OfficialTextField.NAME,
+                    language="en",
+                    text=blank_name,
+                ),
+                OfficialModuleText(
+                    module_version_id=module_version_id,
+                    field="name",
+                    language="en",
+                    text=blank_name,
+                ),
+            )
+        )
+
+    repository = CurriculumRepository(factory, university=hanken)
+    course = next(item for item in repository.list_courses() if item.group_id == course_group)
+    assert course.representative is not None
+    assert course.representative.texts[OfficialTextField.NAME] == {
+        "fi": course_name_fi,
+        "sv": course_name_sv,
+        "en": blank_name,
+    }
+    full_summary = course_summary(course, display_fallback=hanken.display_fallback)
+    projected = next(
+        record
+        for record in repository.list_represented_summaries()
+        if record.summary.group_id == course_group
+    )
+    assert projected.summary == full_summary
+    assert (full_summary.name_fi, full_summary.name_en) == (course_name_fi, course_name_sv)
+
+    catalogue = lookup_command_module.run_catalogue_command(
+        session_factory=factory, university=hanken
+    )
+    catalogue_course = next(item for item in catalogue.courses if item.group_id == course_group)
+    assert (catalogue_course.name_fi, catalogue_course.name_en) == (
+        course_name_fi,
+        course_name_sv,
+    )
+    catalogue_module = next(item for item in catalogue.modules if item.group_id == module_group)
+    assert (
+        catalogue_module.candidates[0].name_fi,
+        catalogue_module.candidates[0].name_en,
+    ) == (module_name_fi, module_name_sv)
+
+    study = StudyStructureService(
+        repository, academic_year_start=2026, university=hanken
+    ).read_many((module_group,))
+    assert (study.roots[0].module.name_fi, study.roots[0].module.name_en) == (
+        module_name_fi,
+        module_name_sv,
+    )
+
+    from tests.prerequisite._native_support import close_native_compiler, open_native_compiler
+
+    compiler = open_native_compiler(factory, university=hanken)
+    try:
+        compilation = compiler.compile(course_group)
+        native_course = next(
+            item for item in compilation.solver.courses if item.group_id == course_group
+        )
+        assert (native_course.name_fi, native_course.name_en) == (
+            course_name_fi,
+            course_name_sv,
+        )
+        native_module = next(
+            item for item in compilation.solver.modules if item.group_id == module_group
+        )
+        assert (native_module.name_fi, native_module.name_en) == (module_name_fi, module_name_sv)
+    finally:
+        close_native_compiler(compiler)
+
+    effective = TeachingTextService(
+        repository, DerivedTranslationRepository(factory)
+    ).build_catalogue()
+    effective_course = next(item for item in effective.courses if item.group_id == course_group)
+    name_cells = [cell for cell in effective_course.texts if cell.field is TeachingTextField.NAME]
+    assert [(cell.language, cell.origin.value) for cell in name_cells] == [("fi", "official")]
+    assert name_cells[0].text_hash == teaching_text_sha256(course_name_fi)
+    assert (
+        official_teaching_text(
+            repository.get_representative_teaching_texts(("swedish-course-v1",))[0],
+            TeachingTextField.NAME,
+            "en",
+        )
+        is None
+    )
+
+
+def _fallback_course(
+    source_id: str, code: str, period_ids: list[str], ordinal: int | None
+) -> dict[str, object]:
+    """Build one Sisu-shaped course record for the membership-free fallback fixture."""
+    return {
+        "id": source_id,
+        "groupId": "fallback-group",
+        "code": code,
+        "name": {"fi": f"Nimi {code}", "en": f"Name {code}"},
+        "credits": {"min": 5, "max": None},
+        "curriculumPeriodIds": period_ids,
+        "documentState": "ACTIVE",
+        "validityPeriod": {"startDate": None, "endDate": None},
+        "metadata": {"revision": 1, "modificationOrdinal": ordinal},
+        "content": None,
+        "outcomes": None,
+        "prerequisites": None,
+        "additional": None,
+        "compulsoryFormalPrerequisites": None,
+        "recommendedFormalPrerequisites": None,
+        "substitutions": None,
+    }
+
+
+def test_membership_free_representative_matches_native_selection(
+    database: tuple[object, object], tmp_path: Path
+) -> None:
+    """The fallback ranks membership-free versions by ordinal and identity in Python and native."""
+    from tests.prerequisite._native_support import (
+        close_native_compiler,
+        open_native_compiler,
+    )
+
+    _, factory = database
+    capture_repository = CaptureRepository(factory)
+    fallback_records = [
+        _fallback_course("fallback-a", "FB.A", [], 1),
+        _fallback_course("fallback-b", "FB.B", [], 3),
+        _fallback_course("fallback-c", "FB.C", [], 3),
+        _fallback_course("fallback-null", "FB.N", [], None),
+        _fallback_course("fallback-future", "FB.F", ["period-2027"], 9),
+    ]
+    first_store = build_completed_fixture_store(
+        tmp_path,
+        capture_repository,
+        courses_body=json.dumps(fallback_records, sort_keys=True, separators=(",", ":")).encode(),
+        modules_body=b"[]",
+    )
+    normalize_curriculum(
+        first_store,
+        NormalizationRepository(factory, university=UNIVERSITIES["example"]),
+        current_academic_year_start=2026,
+        activity_window_years=3,
+    )
+
+    repository = CurriculumRepository(factory, university=UNIVERSITIES["example"])
+    course = next(
+        course for course in repository.list_courses() if course.group_id == "fallback-group"
+    )
+    assert course.representative is not None
+    assert course.representative.source_version_id == "fallback-c"
+    summary = next(
+        record
+        for record in repository.list_represented_summaries()
+        if record.summary.group_id == "fallback-group"
+    )
+    assert summary.source_version_id == "fallback-c"
+    assert summary.summary.code == "FB.C"
+
+    compiler = open_native_compiler(factory)
+    try:
+        compilation = compiler.compile("fallback-group")
+        native_course = next(
+            course for course in compilation.solver.courses if course.group_id == "fallback-group"
+        )
+        assert native_course.code == "FB.C"
+    finally:
+        close_native_compiler(compiler)
+
+    dated_store = build_completed_fixture_store(
+        tmp_path,
+        capture_repository,
+        courses_body=json.dumps(
+            [_fallback_course("fallback-dated", "FB.D", ["period-2026"], 0)],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode(),
+        modules_body=b"[]",
+    )
+    normalize_curriculum(
+        dated_store,
+        NormalizationRepository(factory, university=UNIVERSITIES["example"]),
+        current_academic_year_start=2026,
+        activity_window_years=3,
+    )
+
+    dated_course = next(
+        course for course in repository.list_courses() if course.group_id == "fallback-group"
+    )
+    assert dated_course.representative is not None
+    assert dated_course.representative.source_version_id == "fallback-dated"
+    compiler = open_native_compiler(factory)
+    try:
+        compilation = compiler.compile("fallback-group")
+        native_course = next(
+            course for course in compilation.solver.courses if course.group_id == "fallback-group"
+        )
+        assert native_course.code == "FB.D"
+    finally:
+        close_native_compiler(compiler)

@@ -1,61 +1,183 @@
 [
   {
     "id": "mock-programme-2026",
-    "groupId": "mock-programme",
-    "type": "DegreeProgramme",
+    "group_id": "mock-programme",
+    "module_type": "DegreeProgramme",
     "code": "DEMO.PROG",
-    "name": {"fi": "Kuvitteellinen relealan opintokokonaisuus", "en": "Fictional Relay Studies Programme"},
-    "targetCredits": {"min": 20, "max": 25},
-    "curriculumPeriodIds": ["mock-period-2026"],
-    "documentState": "ACTIVE",
-    "validityPeriod": {"startDate": "2026-08-01", "endDate": "2027-07-31"},
-    "metadata": {"revision": 1, "modificationOrdinal": 1},
+    "names": {
+      "fi": "Kuvitteellinen relealan opintokokonaisuus",
+      "en": "Fictional Relay Studies Programme",
+      "sv": "Fiktiv studiehelhet i reläteknik"
+    },
+    "target_credits_min": 20,
+    "target_credits_max": 25,
+    "document_state": "ACTIVE",
+    "validity_start": "2026-08-01",
+    "validity_end": "2027-07-31",
+    "source_revision": 1,
+    "source_modification_ordinal": 1,
+    "curriculum_period_ids": ["mock-period-2026"],
     "rule": {
-      "type": "CompositeRule",
-      "localId": "programme-root",
-      "require": {"min": 2, "max": 2},
-      "allMandatory": true,
+      "sibling_position": 0,
+      "local_id": "programme-root",
+      "node_type": "CompositeRule",
+      "require_min": 2,
+      "require_max": 2,
+      "all_mandatory": true,
       "description": {
         "fi": "Kuvitteellinen esimerkkirakenne: relelaboratorion moduuli ja havaintojen kirjaaminen.",
-        "en": "Fictional demonstration structure: the relay laboratory module plus observation note writing."
+        "en": "Fictional demonstration structure: the relay laboratory module plus observation note writing.",
+        "sv": "Fiktiv exempelstruktur: modulen i relälaboratoriet och dokumentation av observationer."
       },
-      "rules": [
-        {"type": "ModuleRule", "localId": "laboratory-module", "moduleGroupId": "mock-laboratory"},
-        {"type": "CourseUnitRule", "localId": "note-writing", "courseUnitGroupId": "mock-note"}
+      "credits_min": null,
+      "credits_max": null,
+      "count_min": null,
+      "count_max": null,
+      "referenced_group_id": null,
+      "children": [
+        {
+          "sibling_position": 0,
+          "local_id": "laboratory-module",
+          "node_type": "ModuleRule",
+          "require_min": null,
+          "require_max": null,
+          "all_mandatory": null,
+          "description": null,
+          "credits_min": null,
+          "credits_max": null,
+          "count_min": null,
+          "count_max": null,
+          "referenced_group_id": "mock-laboratory",
+          "children": []
+        },
+        {
+          "sibling_position": 1,
+          "local_id": "note-writing",
+          "node_type": "CourseUnitRule",
+          "require_min": null,
+          "require_max": null,
+          "all_mandatory": null,
+          "description": null,
+          "credits_min": null,
+          "credits_max": null,
+          "count_min": null,
+          "count_max": null,
+          "referenced_group_id": "mock-note",
+          "children": []
+        }
       ]
     }
   },
   {
     "id": "mock-laboratory-2026",
-    "groupId": "mock-laboratory",
-    "type": "StudyModule",
+    "group_id": "mock-laboratory",
+    "module_type": "StudyModule",
     "code": "DEMO.LAB",
-    "name": {"fi": "Kuvitteellinen relelaboratorion moduuli", "en": "Fictional Relay Laboratory Module"},
-    "targetCredits": {"min": 15, "max": 20},
-    "curriculumPeriodIds": ["mock-period-2026"],
-    "documentState": "ACTIVE",
-    "validityPeriod": {"startDate": "2026-08-01", "endDate": "2027-07-31"},
-    "metadata": {"revision": 1, "modificationOrdinal": 1},
+    "names": {
+      "fi": "Kuvitteellinen relelaboratorion moduuli",
+      "en": "Fictional Relay Laboratory Module",
+      "sv": "Fiktiv modul i relälaboratoriet"
+    },
+    "target_credits_min": 15,
+    "target_credits_max": 20,
+    "document_state": "ACTIVE",
+    "validity_start": "2026-08-01",
+    "validity_end": "2027-07-31",
+    "source_revision": 1,
+    "source_modification_ordinal": 1,
+    "curriculum_period_ids": ["mock-period-2026"],
     "rule": {
-      "type": "CompositeRule",
-      "localId": "laboratory-root",
-      "require": {"min": 3, "max": 3},
-      "allMandatory": true,
+      "sibling_position": 0,
+      "local_id": "laboratory-root",
+      "node_type": "CompositeRule",
+      "require_min": 3,
+      "require_max": 3,
+      "all_mandatory": true,
       "description": {
         "fi": "Kuvitteellinen esimerkkirakenne: signaalit ja laboratorio sekä yksi valinta verkon ja havainnoinnin välillä.",
-        "en": "Fictional demonstration structure: signal patterns and the laboratory plus one choice between the grid and observation relay."
+        "en": "Fictional demonstration structure: signal patterns and the laboratory plus one choice between the grid and observation relay.",
+        "sv": "Fiktiv exempelstruktur: signalmönster och laboratoriet samt ett val mellan nätet och observationsreläet."
       },
-      "rules": [
-        {"type": "CourseUnitRule", "localId": "signal-patterns", "courseUnitGroupId": "mock-signal"},
-        {"type": "CourseUnitRule", "localId": "laboratory-practice", "courseUnitGroupId": "mock-lab"},
+      "credits_min": null,
+      "credits_max": null,
+      "count_min": null,
+      "count_max": null,
+      "referenced_group_id": null,
+      "children": [
         {
-          "type": "CompositeRule",
-          "localId": "bench-choice",
-          "require": {"min": 1, "max": 1},
-          "allMandatory": false,
-          "rules": [
-            {"type": "CourseUnitRule", "localId": "grid", "courseUnitGroupId": "mock-grid"},
-            {"type": "CourseUnitRule", "localId": "observation", "courseUnitGroupId": "mock-observation"}
+          "sibling_position": 0,
+          "local_id": "signal-patterns",
+          "node_type": "CourseUnitRule",
+          "require_min": null,
+          "require_max": null,
+          "all_mandatory": null,
+          "description": null,
+          "credits_min": null,
+          "credits_max": null,
+          "count_min": null,
+          "count_max": null,
+          "referenced_group_id": "mock-signal",
+          "children": []
+        },
+        {
+          "sibling_position": 1,
+          "local_id": "laboratory-practice",
+          "node_type": "CourseUnitRule",
+          "require_min": null,
+          "require_max": null,
+          "all_mandatory": null,
+          "description": null,
+          "credits_min": null,
+          "credits_max": null,
+          "count_min": null,
+          "count_max": null,
+          "referenced_group_id": "mock-lab",
+          "children": []
+        },
+        {
+          "sibling_position": 2,
+          "local_id": "bench-choice",
+          "node_type": "CompositeRule",
+          "require_min": 1,
+          "require_max": 1,
+          "all_mandatory": false,
+          "description": null,
+          "credits_min": null,
+          "credits_max": null,
+          "count_min": null,
+          "count_max": null,
+          "referenced_group_id": null,
+          "children": [
+            {
+              "sibling_position": 0,
+              "local_id": "grid",
+              "node_type": "CourseUnitRule",
+              "require_min": null,
+              "require_max": null,
+              "all_mandatory": null,
+              "description": null,
+              "credits_min": null,
+              "credits_max": null,
+              "count_min": null,
+              "count_max": null,
+              "referenced_group_id": "mock-grid",
+              "children": []
+            },
+            {
+              "sibling_position": 1,
+              "local_id": "observation",
+              "node_type": "CourseUnitRule",
+              "require_min": null,
+              "require_max": null,
+              "all_mandatory": null,
+              "description": null,
+              "credits_min": null,
+              "credits_max": null,
+              "count_min": null,
+              "count_max": null,
+              "referenced_group_id": "mock-observation",
+              "children": []
+            }
           ]
         }
       ]

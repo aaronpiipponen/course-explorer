@@ -12,10 +12,9 @@ import type {
   ProfileState,
 } from "./types";
 import { validateBrowserState, validateProfile } from "./validation";
-import { parseSisuCapture } from "../features/structure/sisu";
 
 /** Storage key for the browser state envelope. */
-export const BROWSER_STORAGE_KEY = "tuni-course-explorer";
+export const BROWSER_STORAGE_KEY = "course-explorer";
 
 /** Live browser store that re-reads, validates and publishes profile mutations. */
 export class BrowserStore {
@@ -122,7 +121,7 @@ export class BrowserStore {
     const profile = snapshot.profiles[id];
     if (!profile) throw new Error("Browser profile is unavailable");
     return {
-      type: "tuni-course-explorer/profile/3",
+      type: "course-explorer/profile/3",
       profile: structuredClone(profile),
     };
   }
@@ -246,10 +245,10 @@ export function createBrowserStore(storage: Storage): BrowserStore {
 export function exportSavedBrowserData(storage: Storage): BrowserStateFile {
   const data = storage.getItem(BROWSER_STORAGE_KEY);
   if (data === null) throw new Error("There is no saved data to export");
-  return { type: "tuni-course-explorer/state/3", data };
+  return { type: "course-explorer/state/3", data };
 }
 
-/** Dispatch one imported file on its `type` field, validate its payload and parse a Sisu capture. */
+/** Dispatch one imported profile or whole-state file on its `type` field and validate its payload. */
 export function parseBrowserImport(text: string): BrowserImport {
   let value: unknown;
   try {
@@ -260,12 +259,12 @@ export function parseBrowserImport(text: string): BrowserImport {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Invalid import file");
   const file = value as Record<string, unknown>;
-  if (file.type === "tuni-course-explorer/profile/3")
+  if (file.type === "course-explorer/profile/3")
     return {
-      type: "tuni-course-explorer/profile/3",
+      type: "course-explorer/profile/3",
       profile: validateProfile(file.profile),
     };
-  if (file.type === "tuni-course-explorer/state/3") {
+  if (file.type === "course-explorer/state/3") {
     if (typeof file.data !== "string") throw new Error("Invalid import file");
     let data: unknown;
     try {
@@ -274,12 +273,10 @@ export function parseBrowserImport(text: string): BrowserImport {
       throw new Error("Invalid import file");
     }
     return {
-      type: "tuni-course-explorer/state/3",
+      type: "course-explorer/state/3",
       state: validateBrowserState(data),
     };
   }
-  if (file.type === "tuni-course-explorer/sisu/1")
-    return parseSisuCapture(value);
   if (typeof file.type === "string") throw new Error("Unsupported file type");
   throw new Error("Invalid import file");
 }

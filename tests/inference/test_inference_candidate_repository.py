@@ -11,7 +11,6 @@ from sqlalchemy import Engine, func, select
 from course_explorer.db.models import (
     Course,
     CourseEmbeddingChunk,
-    CourseText,
     CourseVersion,
     CourseVersionCurriculumPeriod,
     CurriculumPeriod,
@@ -19,6 +18,7 @@ from course_explorer.db.models import (
     InferencePipelineRun,
     InferenceTargetWork,
     IngestionRun,
+    OfficialCourseText,
     SourceSnapshot,
 )
 from course_explorer.db.session import session_scope
@@ -26,9 +26,9 @@ from course_explorer.embeddings.generation import embedding_configuration_sha256
 from course_explorer.enums import (
     CourseEmbeddingStatus,
     IngestionRunStatus,
+    OfficialTextField,
     SourceObjectType,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
     TranslationMethod,
 )
@@ -87,10 +87,8 @@ def _add_version(
         CourseVersion(
             id=version_id,
             course_id=course_id,
-            sisu_course_unit_id=source_id,
+            source_version_id=source_id,
             code=code,
-            name_fi="Kurssi",
-            name_en=None,
             credits_min=5,
             credits_max=5,
             official_url=f"https://example.test/{source_id}",
@@ -99,7 +97,22 @@ def _add_version(
         )
     )
     session.flush()
-    session.add(CourseText(course_version_id=version_id, content_fi="Sisalto"))
+    session.add(
+        OfficialCourseText(
+            course_version_id=version_id,
+            field=OfficialTextField.NAME,
+            language="fi",
+            text="Kurssi",
+        )
+    )
+    session.add(
+        OfficialCourseText(
+            course_version_id=version_id,
+            field=OfficialTextField.CONTENT,
+            language="fi",
+            text="Sisalto",
+        )
+    )
     session.add(
         CourseVersionCurriculumPeriod(
             course_version_id=version_id, curriculum_period_id=f"period-{membership_year}"
@@ -114,7 +127,7 @@ def _add_chunk(
     version_id: UUID,
     source_hash: str,
     field: TeachingTextField,
-    language: TeachingTextLanguage,
+    language: str,
     chunk_index: int,
     cosine: float,
     origin: TeachingTextOrigin = TeachingTextOrigin.OFFICIAL,
@@ -180,7 +193,7 @@ def _seed_candidates(
             version_id=target_version,
             source_hash="1" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.FI,
+            language="fi",
             chunk_index=0,
             cosine=1.0,
             chunk_text_hash="1" * 64,
@@ -190,14 +203,14 @@ def _seed_candidates(
             version_id=target_version,
             source_hash="1" * 64,
             field=TeachingTextField.OUTCOMES,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             cosine=1.0,
             chunk_text_hash="2" * 64,
         )
         result["target"] = InferenceCourseEmbeddingIdentity(
             group_id="group-target",
-            sisu_course_unit_id="source-target",
+            source_version_id="source-target",
             representative_source_sha256="1" * 64,
         )
 
@@ -217,7 +230,7 @@ def _seed_candidates(
             version_id=version_a,
             source_hash="2" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.FI,
+            language="fi",
             chunk_index=0,
             cosine=0.6,
             chunk_text_hash="3" * 64,
@@ -227,14 +240,14 @@ def _seed_candidates(
             version_id=version_a,
             source_hash="2" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.FI,
+            language="fi",
             chunk_index=1,
             cosine=0.9,
             chunk_text_hash="4" * 64,
         )
         result["a"] = InferenceCourseEmbeddingIdentity(
             group_id="group-a",
-            sisu_course_unit_id="source-a",
+            source_version_id="source-a",
             representative_source_sha256="2" * 64,
         )
 
@@ -254,7 +267,7 @@ def _seed_candidates(
             version_id=version_b,
             source_hash="3" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             cosine=0.95,
             origin=TeachingTextOrigin.DERIVED,
@@ -262,7 +275,7 @@ def _seed_candidates(
         )
         result["b"] = InferenceCourseEmbeddingIdentity(
             group_id="group-b",
-            sisu_course_unit_id="source-b",
+            source_version_id="source-b",
             representative_source_sha256="3" * 64,
         )
 
@@ -282,7 +295,7 @@ def _seed_candidates(
             version_id=version_c,
             source_hash="4" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             cosine=0.99,
             configuration_hash=OTHER_CONFIGURATION_HASH,
@@ -292,14 +305,14 @@ def _seed_candidates(
             version_id=version_c,
             source_hash="4" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=1,
             cosine=0.98,
             status=CourseEmbeddingStatus.PENDING,
         )
         result["c"] = InferenceCourseEmbeddingIdentity(
             group_id="group-c",
-            sisu_course_unit_id="source-c",
+            source_version_id="source-c",
             representative_source_sha256="4" * 64,
         )
 
@@ -318,7 +331,7 @@ def _seed_candidates(
             version_id=obsolete_version,
             source_hash="9" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             cosine=0.99,
         )
@@ -339,14 +352,14 @@ def _seed_candidates(
             version_id=version_d,
             source_hash="6" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             cosine=0.9,
             chunk_text_hash="6" * 64,
         )
         result["d"] = InferenceCourseEmbeddingIdentity(
             group_id="group-d",
-            sisu_course_unit_id="source-d",
+            source_version_id="source-d",
             representative_source_sha256="6" * 64,
         )
     return result
@@ -386,7 +399,7 @@ def test_exact_candidate_ranking_uses_best_current_compatible_chunk_and_includes
     assert by_group["group-a"].match.score == pytest.approx(0.9)
     assert by_group["group-a"].match.candidate_chunk.chunk_index == 1
     assert by_group["group-a"].match.candidate_chunk.chunk_text_sha256 == "4" * 64
-    assert by_group["group-a"].match.course.sisu_course_unit_id == "source-a"
+    assert by_group["group-a"].match.course.source_version_id == "source-a"
     assert by_group["group-a"].match.course.representative_source_sha256 == "2" * 64
     # Tie at 0.9 is broken by candidate group id.
     assert by_group["group-d"].match.score == pytest.approx(0.9)
@@ -432,7 +445,7 @@ def test_exact_candidate_ranking_uses_best_current_compatible_chunk_and_includes
             version_id=target_version_id,
             source_hash="1" * 64,
             field=TeachingTextField.NAME,
-            language=TeachingTextLanguage.FI,
+            language="fi",
             chunk_index=0,
             cosine=0.5,
             chunk_text_hash="a" * 64,
@@ -481,7 +494,7 @@ def test_candidate_ranking_rejects_stale_identity_missing_target_and_bad_scope_w
     # A target with no compatible chunk fails before any ranking query.
     unknown = InferenceCourseEmbeddingIdentity(
         group_id="group-c",
-        sisu_course_unit_id="source-c",
+        source_version_id="source-c",
         representative_source_sha256="4" * 64,
     )
     with pytest.raises(TargetSelectionError) as missing_chunk:
@@ -494,7 +507,7 @@ def test_candidate_ranking_rejects_stale_identity_missing_target_and_bad_scope_w
     # The exact target with only an incompatible-configuration chunk is unmeasurable.
     incompatible = InferenceCourseEmbeddingIdentity(
         group_id="group-target",
-        sisu_course_unit_id="source-target",
+        source_version_id="source-target",
         representative_source_sha256="1" * 64,
     )
     ranked = repository.rank_candidates(
@@ -544,7 +557,7 @@ def test_embedding_state_digest_tracks_scoped_current_chunk_changes(
             .join(Course, Course.id == CourseVersion.course_id)
             .where(
                 Course.group_id == "group-a",
-                CourseVersion.sisu_course_unit_id == "source-a",
+                CourseVersion.source_version_id == "source-a",
             )
             .order_by(CourseEmbeddingChunk.chunk_index)
         ).all()
@@ -580,7 +593,7 @@ def test_embedding_state_digest_tracks_scoped_current_chunk_changes(
             .join(Course, Course.id == CourseVersion.course_id)
             .where(
                 Course.group_id == "group-a",
-                CourseVersion.sisu_course_unit_id == "source-a-obsolete",
+                CourseVersion.source_version_id == "source-a-obsolete",
             )
         )
         assert obsolete_version_id is not None
@@ -588,7 +601,7 @@ def test_embedding_state_digest_tracks_scoped_current_chunk_changes(
             CourseEmbeddingChunk(
                 course_version_id=obsolete_version_id,
                 field=TeachingTextField.CONTENT,
-                language=TeachingTextLanguage.EN,
+                language="en",
                 chunk_index=7,
                 text_origin=TeachingTextOrigin.OFFICIAL,
                 text="obsolete",

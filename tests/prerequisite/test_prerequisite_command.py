@@ -9,16 +9,17 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from course_explorer.ingestion.normalization import normalize_curriculum
 from course_explorer.ingestion.normalization_repository import NormalizationRepository
 from course_explorer.ingestion.repository import CaptureRepository
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.prerequisite import commands as command_module
 from course_explorer.prerequisite.graph import PrerequisiteGraphCompiler
 from tests.ingestion._normalization_repository_support import (
-    GUIDE_URL,
     build_completed_fixture_store,
     fixture_bytes,
 )
@@ -43,19 +44,19 @@ def _inactive_prerequisite_fixture(database, tmp_path: Path):
     )
     normalize_curriculum(
         store,
-        NormalizationRepository(factory),
+        NormalizationRepository(factory, university=UNIVERSITIES["example"]),
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
     return factory
 
 
 @pytest.mark.integration
-def test_two_basis_selection_display_and_basis_rule(
+def test_basis_selection_resolves_three_combinations_and_excludes_the_root(
     database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, solver_bundle: None
 ) -> None:
-    """The three selected/completed combinations resolve canonically against real persistence."""
+    """The three selected/completed combinations resolve canonically against real persistence, and
+    an excluded root keeps its card while the route reports no solution."""
     _inactive_prerequisite_fixture(database, tmp_path)
     monkeypatch.setattr(command_module, "load_search_settings", search_settings)
 
@@ -68,7 +69,7 @@ def test_two_basis_selection_display_and_basis_rule(
     assert Decimal(no_selected_route["total_new_credits"]) == Decimal("0")
     assert no_selected_route["new_courses"] == []
 
-    # (b) --selected with no --completed is valid with an empty completed basis. The real route
+    # --selected with no --completed is valid with an empty completed basis. The real route
     # charges the inactive prerequisite under the default all-course scope.
     command_module.run_prerequisite_command("CS.A2", selected_codes=["CS.I1"])
     no_completed_route = command_module.run_minimum_route_command("CS.A2", selected_codes=["CS.I1"])
@@ -96,7 +97,7 @@ def test_two_basis_selection_display_and_basis_rule(
     assert Decimal(selected_basis_route["total_new_credits"]) == Decimal("0")
     assert selected_basis_route["new_courses"] == []
 
-    # (d) a completed course outside a non-empty selected set fails loudly in both preparations.
+    # A completed course outside a non-empty selected set fails loudly in both preparations.
     with pytest.raises(ValueError):
         command_module.run_prerequisite_command(
             "CS.A2", selected_codes=["TIE.B"], completed_codes=["CS.I1"]
@@ -173,8 +174,10 @@ def test_graph_and_route_commands_share_preparation_without_mixing_results(
     monkeypatch.setattr(command_module, "load_search_settings", search_settings)
     projector_calls: list[str] = []
     solver_calls: list[str] = []
+    solver_requests: list[dict[str, Any]] = []
     real_compile = PrerequisiteGraphCompiler.compile
     real_node_route = command_module._node_route
+    real_run_node_solver = command_module._run_node_solver
 
     def watched_compile(compiler, target, **kwargs):
         projector_calls.append(target)
@@ -184,8 +187,13 @@ def test_graph_and_route_commands_share_preparation_without_mixing_results(
         solver_calls.append(context.solver.root_group_id)
         return real_node_route(context)
 
+    def watched_run_node_solver(request):
+        solver_requests.append(request)
+        return real_run_node_solver(request)
+
     monkeypatch.setattr(PrerequisiteGraphCompiler, "compile", watched_compile)
     monkeypatch.setattr(command_module, "_node_route", watched_node_route)
+    monkeypatch.setattr(command_module, "_run_node_solver", watched_run_node_solver)
 
     graph_report = command_module.run_prerequisite_command("CS.A2", completed_codes=["CS.I1"])
     assert projector_calls == ["course-group-a"]
@@ -202,6 +210,11 @@ def test_graph_and_route_commands_share_preparation_without_mixing_results(
     assert Decimal(route["total_new_credits"]) == Decimal("0")
     assert "solver" not in route
     assert "drawing" not in route
+    # The route request carries the configured assumption and compact-node limit together.
+    policy = search_settings()
+    assert len(solver_requests) == 1
+    assert solver_requests[0]["assumed_course_credits"] == str(policy.assumed_course_credits)
+    assert solver_requests[0]["max_compact_nodes"] == policy.prerequisite_path_max_compact_nodes
 
 
 @pytest.mark.integration

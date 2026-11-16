@@ -27,7 +27,7 @@ from course_explorer_admin.commands import format_operator_error
 from course_explorer_admin_web import runner as admin_runner
 from tests.admin_web import _support
 
-TARGET_ID = "tuni-canonical-0f3a91"
+TARGET_ID = "canonical-0f3a91"
 DATASET_ID = "c" * 32
 LOG_SESSION_ID = "e" * 32
 LOG_SOURCE = "worker-runner"

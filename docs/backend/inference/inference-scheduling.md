@@ -4,15 +4,17 @@ Scheduling decides which target courses a processing cycle visits, how a failure
 
 ## Which target courses a cycle visits
 
-Every active canonical course is eligible for inference. An inactive course is never a target course, and it is a valid candidate source.
+Every active canonical course is eligible for inference. An inactive course is never a target course, and it is a valid candidate source. The inferred set, equivalence groups, translations and vectors a course already holds stay stored when it turns inactive, and the reads serve them under their ordinary activity scope.
 
 A target course is visited when its own teaching-text processing marker is false, or when the marker of any course in its selection is false. The marker records the exact effective text the course was last processed from, whether the course was active, and the accepted proposal pointer. The rerank stage and the inference stage read the same membership predicate, so a target course is reprocessed when its own text changed and when the text of a course in its selection changed.
 
-A marker is scheduling state, so the catalogue can hold a processed course with no accepted result. [Inference coverage](/docs/reference/glossary.md#inference) is counted and read separately from the markers.
+A marker is scheduling state, so the catalogue can hold a processed course with no accepted result. [Inference coverage](/docs/reference/glossary.md#inference) is counted and read separately from the markers. Coverage counts active target courses. A retained inactive result is readable and published without entering the eligible denominator.
 
 ## What resets a target course
 
-The marker is set false when the effective text of the course changes, and once when an inactive course becomes active without an accepted result. The hash behind the marker covers teaching text alone, so a change of generation model, prompt, configuration, or curriculum period does not reset a marker, and output accepted under one generation holds across all four.
+The marker is set false when the effective text of the course changes, and once when an inactive course becomes active, whether or not an accepted result is retained. A non-null operator disposition suppresses that reactivation reset. The hash behind the marker covers teaching text alone, so a change of generation model, prompt, configuration, or curriculum period does not reset a marker, and output accepted under one generation holds across all four.
+
+The catalogue activity refresh and inference reconciliation both apply the reactivation reset through the same scheduling repository. A catalogue refresh therefore resets a reactivated marker even when no inference job runs between two imports. The retained result is published until the next complete result replaces it.
 
 A run reconciles every marker at entry and then visits the courses the markers and the membership predicate select. A visited target course reuses matching completed work. Pending work and failed attempts follow the retry policy.
 
@@ -22,7 +24,7 @@ Work runs in one serial processing cycle with five stages: multiview, rerank, in
 
 A target course that the membership predicate leaves out has its rerank and inference stages recorded as skipped, so it runs no rerank and no generation. A cycle that reaches publication with a failed target course is left incomplete, and the publication stage writes the accepted results that are available.
 
-The cycle identity is built from the catalogue identity, the current embedding state, and the selection, context, and rerank settings. A run that finds an unfinished cycle with the identical identity and the identical target set resumes it. A changed identity or a completed cycle starts a fresh cycle across every active target course. A resumed run dispatches the cycle's current stage and the stages after it only, so a completed stage is never repeated.
+The cycle identity is built from the catalogue identity, the current embedding state, the selection, context, and rerank settings, and only the nondefault official languages, inference language/origin pairs and prompt field selection. A run that finds an unfinished cycle with the identical identity and the identical target set resumes it. A changed identity or a completed cycle starts a fresh cycle across every active target course. A policy edit that changes no allowed input for a target therefore reuses that target's completed result, and no policy change resets a marker by itself. A resumed run dispatches the cycle's current stage and the stages after it only, so a completed stage is never repeated.
 
 ## Failures, retries, and isolation
 
@@ -70,6 +72,8 @@ An operator can record one [disposition](/docs/reference/glossary.md#inference) 
 > A **done** decision completes the target course without an inferred result. It removes the inference-produced inferred set and equivalence groups of that target course and counts as complete coverage, rather than storing a generated empty result.
 
 A **failed** target retains the last accepted result the catalogue holds for it, and that result is published and counted while the decision stands. The decision itself grants no result and no coverage, so a failed target course with no accepted result is uncovered. The cycle cannot complete while a failed target course stands, and recording the decision on a cycle that was complete reopens it at the inference stage.
+
+The reported equivalence-group count covers every retained inference group with at least two canonical members. A group member that turns inactive is a member of the group and of that count, while target coverage is scoped to active target courses.
 
 Clearing a decision returns the target course to automatic scheduling. The marker becomes unprocessed, the inference stage reopens, and a completed upstream stage is preserved when a retained pool or shortlist can support it. Only the stages that genuinely cannot be recovered reopen, so clearing one target course does not repeat the work of the others.
 

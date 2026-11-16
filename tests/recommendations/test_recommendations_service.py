@@ -13,7 +13,6 @@ from course_explorer.embeddings.vector_math import unit_row
 from course_explorer.enums import (
     DESCRIPTIVE_TEACHING_TEXT_FIELDS,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
 )
 from course_explorer.recommendations.service import (
@@ -37,7 +36,7 @@ def _chunk(
         chunk_id=uuid.uuid5(uuid.NAMESPACE_URL, f"{group_id}/{field}/0"),
         group_id=group_id,
         field=field,
-        language=TeachingTextLanguage.EN,
+        language="en",
         chunk_index=0,
         text_origin=origin,
         character_count=character_count,
@@ -81,7 +80,7 @@ def test_recommendations_rank_whole_basis_profile_and_drop_a_duplicated_course()
     positions = {
         (
             by_group[group_id].summary.group_id,
-            by_group[group_id].sisu_course_unit_id,
+            by_group[group_id].source_version_id,
             by_group[group_id].source_hash,
         ): position
         for position, group_id in enumerate(candidate_groups)
@@ -162,8 +161,8 @@ class _CentroidLookup:
         self._positions = positions
         self._centroids = centroids
 
-    def position(self, group_id, sisu_course_unit_id, representative_source_hash):
-        return self._positions.get((group_id, sisu_course_unit_id, representative_source_hash))
+    def position(self, group_id, source_version_id, representative_source_hash):
+        return self._positions.get((group_id, source_version_id, representative_source_hash))
 
     def centroids(self, positions):
         return numpy.asarray([self._centroids[position] for position in positions])

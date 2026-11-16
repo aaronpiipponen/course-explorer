@@ -24,7 +24,7 @@ from sqlalchemy import Connection, func, select
 
 from course_explorer import administration
 from course_explorer.administration import load_private_model, session_directory
-from course_explorer.config import DatabaseSettings
+from course_explorer.config import DatabaseSettings, load_instance_settings
 from course_explorer.curriculum import CatalogueSummary
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.db.models import Base
@@ -369,8 +369,10 @@ def read_dataset_verification(settings: DatabaseSettings) -> DatasetVerification
     """Open one engine, read the head and coverage, and dispose it.
 
     The current Alembic head must be the single repository head, every ORM table is counted by its
-    own aggregate count query, and the four coverage owners are called once with shared
-    repositories. It counts tables and calls the four coverage owners only.
+    own aggregate count query, and the four coverage owners are called once over repositories built
+    for this read: the catalogue and teaching text share one curriculum repository, and embeddings
+    and inference each construct their own. It counts tables and calls the four coverage owners
+    only.
     """
     engine = create_database_engine(settings)
     try:
@@ -383,15 +385,18 @@ def read_dataset_verification(settings: DatabaseSettings) -> DatasetVerification
                 for table in Base.metadata.sorted_tables
             }
         factory = create_session_factory(engine)
-        curriculum = CurriculumRepository(factory)
+        university = load_instance_settings().university
+        curriculum = CurriculumRepository(factory, university=university)
         return DatasetVerification(
             alembic_revision=expected_head,
             table_row_counts=table_row_counts,
             catalogue=curriculum.summary(),
             teaching_text=TeachingTextService(
-                curriculum, DerivedTranslationRepository(factory)
+                curriculum,
+                DerivedTranslationRepository(factory, university=university),
+                university=university,
             ).coverage(),
-            embeddings=CourseEmbeddingRepository(factory).coverage(),
+            embeddings=CourseEmbeddingRepository(factory, university=university).coverage(),
             inference=InferenceSchedulingRepository(factory).read_coverage(),
         )
     finally:

@@ -6,13 +6,21 @@ A minimum route calculation returns the set of courses that meets a course's pre
 
 A route holds the courses a requirement needs and the basis does not cover. Its cost is the [new credits](/docs/reference/glossary.md#prerequisites-and-routes) of exactly those courses, each counted once. Course count never decides the route, so two cheap courses can cost less than one expensive course.
 
+A course with no official minimum credit counts at `ASSUMED_COURSE_CREDITS` in `config/search.toml`. The same assumed value supplies the official credit-bound satisfaction, and a result whose calculation used it carries `uses_assumed_credits`. The stored source value is null.
+
+| Key | Meaning | Example |
+|---|---|---|
+| `ASSUMED_COURSE_CREDITS` | The positive credit value a course with no official minimum counts as in route cost, satisfaction and totals | 5 |
+
+`ASSUMED_COURSE_CREDITS` is a positive decimal with at most two decimal places.
+
 ## One structure and one basis
 
 An explicit calculation starts from the solver structure of the graph report the pane already holds. The graph read resolves the root, the toggles and the activity scope, compiles one solver structure, and returns it with the drawing. The calculation reads that structure without a second graph read or a second compilation, so the drawing and the calculation describe the same requirement set and cannot drift apart.
 
 The browser combines the live profile inputs with the held structure on a shallow copy: the excluded courses and the two node-mark lists replace the structure's own values, and **Route basis** chooses either the completed set or every selected course. Both choices have the same effect: a course in the basis satisfies its requirement at no new cost, and its own prerequisites are not expanded below it. The held report is never mutated.
 
-A site bounds the inference toggle. When `WEB_INFERENCE_ENABLED` is false in that site's `config/web.toml`, the graph read compiles no inferred prerequisite whatever the request asks for, so the held structure is official-only and the calculation from it is official-only. The switch bounds that read alone: official data is untouched, the toggle the browser saved in the profile is untouched, and the machine route command and the script adapter are the same on both kinds of site.
+A site bounds the inference toggle. When `WEB_INFERENCE_ENABLED` is false in that site's `config/web.toml`, the graph read compiles no inferred prerequisite whatever the request asks for, so the held structure is official-only and the calculation from it is official-only. The switch bounds that read alone: official data is untouched, the toggle the browser saved in the profile is untouched, and the machine route command and the script adapter take the inference toggle from their caller.
 
 The calculation returns its own result and no drawing. The graph read and the compiler behind it are described in [Prerequisite graph](/docs/backend/prerequisites/prerequisite-graph.md).
 
@@ -68,11 +76,11 @@ A calculation minimizes the new credits first. When several routes share the low
 
 ## What the result reports
 
-Besides the route, a result carries the total new credits and the full route total, which adds the credits of the covered courses to the new credits. The course rows pair each new course with the drawn boxes it satisfies, name the covered courses the witnesses measure, and give the new unexpandable content with its credit minimum. The result also carries the excluded courses and excluded nodes that blocked a requirement, the located problems of the requirements the search denied, and the drawn nodes and lit member IDs the winning route selects. A Shortfall result carries one record per deficient module rule.
+Besides the route, a result carries the total new credits and the full route total, which adds the credits of the covered courses to the new credits. The course rows pair each new course with the drawn boxes it satisfies, name the covered courses the witnesses measure, and give the new unexpandable content with its credit minimum. The result also carries `uses_assumed_credits`, which is true when the new credit total, the full route total or an official credit-bound satisfaction evaluation counted a course at the assumed value. It is false when an input course with no official minimum is not counted by any of them. The result carries the excluded courses and excluded nodes that blocked a requirement, the located problems of the requirements the search denied, and the drawn nodes and lit member IDs the winning route selects. A Shortfall result carries one record per deficient module rule.
 
 ## The panel and the graph
 
-The panel states both totals on one line for an outcome that carries a route. It adds a note for **Approximate route**, **No route found** (that no route or total is available), **No route exists** (the **Blocked requirements:** heading) and **Shortfall**. It lists the located problems for **No route exists**, **Route unresolved** and **No route found**, and the deficient module rules for **Shortfall**. The course rows and the unexpandable content rows appear for **Exact minimum route**, **Approximate route** and **Shortfall**, behind **Expand**, and **Add all missing courses to structure** adds the new courses to Unplaced studies. An exact route with no new credits reads **Nothing new**.
+The panel states both totals on one line for an outcome that carries a route. A result that used the assumed credits shows one **Assumed credits used** caption, and an individual course with no official minimum shows **Credits unknown**. The panel adds a note for **Approximate route**, **No route found** (that no route or total is available), **No route exists** (the **Blocked requirements:** heading) and **Shortfall**. It lists the located problems for **No route exists**, **Route unresolved** and **No route found**, and the deficient module rules for **Shortfall**. The course rows and the unexpandable content rows appear for **Exact minimum route**, **Approximate route** and **Shortfall**, behind **Expand**, and **Add all missing courses to structure** adds the new courses to Unplaced studies. An exact route with no new credits reads **Nothing new**.
 
 The graph lights the drawn nodes and connections of the selected route and dims the rest. For **No route exists** and **Route unresolved** it lights the problem nodes and the blocked node keys instead, and a **No route found** result lights the graph root alone.
 
@@ -80,6 +88,6 @@ The graph lights the drawn nodes and connections of the selected route and dims 
 
 The route appears only after an explicit click. While a route is shown, the control reads **Clear minimum route** and a click clears it. Changing an input, leaving the pane or remounting the pane clears the visible route as well, and returning to earlier inputs does not bring it back.
 
-A successful calculation joins the same bounded browser-memory cache that holds the graph reports. Its key covers the dataset identity, the structural graph key, every live route input and the allocation limit, so a changed basis, course set or mark never answers from another input's value. After the visible route is cleared, the control reads **Find minimum route** again, and a click with the same inputs shows the held value without a worker. The cache is never written to a profile or to browser storage.
+A successful calculation joins the same bounded browser-memory cache that holds the graph reports. Its key covers the dataset identity, the structural graph key, every live route input, the allocation limit and the assumed course credits, so a changed basis, course set or mark never answers from another input's value. After the visible route is cleared, the control reads **Find minimum route** again, and a click with the same inputs shows the held value without a worker. The cache is never written to a profile or to browser storage.
 
 The exact search, its pruning, and the greedy restart are described in [Minimum route solver](/docs/backend/prerequisites/minimum-route-solver.md).

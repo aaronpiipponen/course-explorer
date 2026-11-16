@@ -217,24 +217,36 @@ def processing_cycle_input_sha256(
     context_settings: InferenceContextSettings,
     rerank_input: InferenceRerankInputSettings,
     rerank_settings: InferenceRerankSettings,
+    language_policy: Mapping[str, object] | None = None,
+    prompt_fields: Mapping[str, object] | None = None,
 ) -> str:
     """Hash the selection/embedding compatibility inputs of one processing cycle.
 
     The digest excludes generation configuration, prompt version, and controller
     revision: a generation model/prompt/settings change alone must never force a new cycle or reset a
     marker. Catalogue identity, the embedding-state fingerprint, and the selection/context/
-    rerank settings are the only compatibility inputs.
+    rerank settings are the base compatibility inputs. The context payload omits the raw optional
+    target and pool field keys. A nonempty language policy adds only the configured values that differ
+    from the Finnish/English baseline, and a nonempty prompt field policy adds the selection only when
+    it differs from the teaching-field baseline, so a default policy leaves the payload bytes equal to
+    one built without an override.
     """
     _require_sha256(catalogue_identity_sha256, "catalogue_identity_sha256")
     _require_sha256(embedding_state_sha256, "embedding_state_sha256")
-    return canonical_json_sha256(
-        {
-            "checkpoint_schema_version": PROCESSING_CHECKPOINT_SCHEMA_VERSION,
-            "catalogue_identity_sha256": catalogue_identity_sha256,
-            "embedding_state_sha256": embedding_state_sha256,
-            "selection": selection.model_dump(mode="json"),
-            "context": context_settings.model_dump(mode="json"),
-            "rerank_input": rerank_input.model_dump(mode="json"),
-            "rerank": rerank_settings.model_dump(mode="json"),
-        }
-    )
+    context = context_settings.model_dump(mode="json")
+    context.pop("inference_target_fields", None)
+    context.pop("inference_pool_fields", None)
+    payload: dict[str, object] = {
+        "checkpoint_schema_version": PROCESSING_CHECKPOINT_SCHEMA_VERSION,
+        "catalogue_identity_sha256": catalogue_identity_sha256,
+        "embedding_state_sha256": embedding_state_sha256,
+        "selection": selection.model_dump(mode="json"),
+        "context": context,
+        "rerank_input": rerank_input.model_dump(mode="json"),
+        "rerank": rerank_settings.model_dump(mode="json"),
+    }
+    if language_policy:
+        payload["language_policy"] = language_policy
+    if prompt_fields:
+        payload["prompt_fields"] = prompt_fields
+    return canonical_json_sha256(payload)

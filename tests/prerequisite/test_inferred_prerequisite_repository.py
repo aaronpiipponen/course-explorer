@@ -172,11 +172,14 @@ def test_inferred_categories_round_trip_and_change_canonical_payload_hash(
         for child in read_back.current_set.expression.children
     )
 
-    # An inactive target is rejected without creating or replacing a set.
-    with pytest.raises(ValueError):
-        repository.publish(_publication(seed, target_group_id=seed.inactive_target_group_id))
+    # An inactive target accepts a retained set and reads it as current.
+    inactive_publication = repository.publish(
+        _publication(seed, target_group_id=seed.inactive_target_group_id)
+    )
+    assert inactive_publication.action is InferredPublicationAction.CREATED
+    assert repository.read(seed.inactive_target_group_id).state is InferredReadState.CURRENT
     with session_scope(factory) as session:
-        assert session.scalar(select(func.count()).select_from(InferredPrerequisiteSet)) == 1
+        assert session.scalar(select(func.count()).select_from(InferredPrerequisiteSet)) == 2
 
 
 def test_read_distinguishes_unavailable_complete_empty_partial_and_stale_context(
@@ -356,19 +359,17 @@ def test_publish_rejects_official_unsupported_unknown_self_or_unevidenced_infere
         assert session.scalar(select(func.count()).select_from(InferredPrerequisiteSet)) == 0
 
 
-def test_reconcile_activity_removes_only_stale_final_sets(
+def test_reconcile_activity_retains_inactive_final_sets(
     database: tuple[Engine, object],
     prerequisite_catalogue: PrerequisiteCatalogueSeed,
     set_prerequisite_course_activity,
 ) -> None:
-    """Reconciliation deletes stale inferred rows and leaves course rows untouched."""
+    """Reconciliation retains an inactive target's stored final set and leaves course rows untouched."""
     _, factory = database
     repository = InferredPrerequisiteRepository(factory)
     seed = prerequisite_catalogue
 
     repository.publish(_publication(seed, target_group_id=seed.active_target_group_id))
-    # Publish the second target while it is active, then make it inactive so
-    # reconciliation proves it removes only stale final sets.
     set_prerequisite_course_activity(seed.inactive_target_group_id, True, 2026, 3)
     repository.publish(_publication(seed, target_group_id=seed.inactive_target_group_id))
     set_prerequisite_course_activity(seed.inactive_target_group_id, False, 2026, 3)
@@ -377,16 +378,16 @@ def test_reconcile_activity_removes_only_stale_final_sets(
         course_count = session.scalar(select(func.count()).select_from(Course))
 
     removed = repository.reconcile_activity()
-    assert removed == InferredActivityReconciliation(
-        removed_target_group_ids=(seed.inactive_target_group_id,)
-    )
+    assert removed == InferredActivityReconciliation(removed_target_group_ids=())
     with session_scope(factory) as session:
         remaining = list(session.scalars(select(InferredPrerequisiteSet.target_course_id)))
         assert session.scalar(select(func.count()).select_from(Course)) == course_count
-        assert len(remaining) == 1
+        assert len(remaining) == 2
 
     still_current = repository.read(seed.active_target_group_id)
     assert still_current.state is InferredReadState.CURRENT
+    inactive_current = repository.read(seed.inactive_target_group_id)
+    assert inactive_current.state is InferredReadState.CURRENT
     with session_scope(factory) as session:
         inactive = session.scalar(
             select(Course).where(Course.group_id == seed.inactive_target_group_id)
@@ -454,12 +455,12 @@ def test_reconcile_activity_with_current_input_hashes_does_not_touch_test_sets(
     assert repository.read(test_target).state is InferredReadState.CURRENT
 
 
-def test_inference_generation_context_retained_while_test_context_and_inactive_targets_reconcile(
+def test_inference_generation_context_retained_while_test_context_reconciles(
     database: tuple[Engine, object],
     prerequisite_catalogue: PrerequisiteCatalogueSeed,
     set_prerequisite_course_activity,
 ) -> None:
-    """Active inference rows keep their stored context. Test rows and inactive targets reconcile."""
+    """Inference rows keep their stored context and survive inactivity. Test rows reconcile strictly."""
     _, factory = database
     repository = InferredPrerequisiteRepository(factory)
     seed = prerequisite_catalogue
@@ -506,8 +507,10 @@ def test_inference_generation_context_retained_while_test_context_and_inactive_t
     assert test_target in removed_test.removed_target_group_ids
     assert repository.read(target).state is InferredReadState.CURRENT
 
-    # An inactive target of either producer reconciles away.
+    # An inactive target keeps its retained inference output readable.
     set_prerequisite_course_activity(target, False, 2027, 3)
     removed_inactive = repository.reconcile_activity()
-    assert target in removed_inactive.removed_target_group_ids
-    assert repository.read(target).state is InferredReadState.UNAVAILABLE
+    assert removed_inactive == InferredActivityReconciliation(removed_target_group_ids=())
+    retained_inactive = repository.read(target)
+    assert retained_inactive.state is InferredReadState.CURRENT
+    assert retained_inactive.current_set is not None

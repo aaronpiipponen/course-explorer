@@ -9,7 +9,7 @@ The structure of studies service projects selected official module versions into
 - `get_modules(group_ids)` returns the identical full `CatalogueModule` DTOs `list_modules` builds, with their sorted versions.
 - `get_course_summaries(group_ids)` returns the shared official `CourseSummary` for the requested canonical courses, omits an unknown or unrepresented identity, and applies no activity filter.
 
-`CurriculumRepository` in `src/course_explorer/curriculum_repository.py` implements both. `CatalogueModule` holds `group_id` and its `versions`. `CatalogueModuleVersion` adds `source_hash`, `target_credits_min`, `target_credits_max`, `document_state`, and the nullable `rule`, and it inherits the identity, names, validity bounds, and `curriculum_periods` memberships.
+`CurriculumRepository` in `src/course_explorer/curriculum_repository.py` implements both. `CatalogueModule` holds `group_id` and its `versions`. `CatalogueModuleVersion` adds `source_hash`, `target_credits_min`, `target_credits_max`, the nullable `document_state`, and the nullable `rule`, and it inherits the identity, names, validity bounds, and `curriculum_periods` memberships.
 
 ## The service contract
 
@@ -40,7 +40,7 @@ A projected rule carries the official node identity, so `model_dump_json` of a r
 
 ## Version selection
 
-`_select_version(module, module_versions)` calls `module_version_candidates(module.versions, academic_year_start=...)` from `src/course_explorer/curriculum.py` with the default `allow_nearest=False`, so the strict candidate set applies: exact academic-year memberships win, and, only when none exists, membership-free versions whose validity bounds contain the requested year are considered. A supplied exact identity must belong to that candidate set, or the read raises `ValueError`. It is never replaced by another version. Without an entry, an empty set returns the reason `no_current_version`, and more than one candidate returns `ambiguous_version`. The service never falls back to a version tied to another year.
+`_select_version(module, module_versions)` calls `module_version_candidates(module.versions, academic_year_start=...)` from `src/course_explorer/curriculum.py` with the default `allow_nearest=False`, so the strict candidate set applies: exact academic-year memberships win, and, only when none exists, membership-free versions whose validity bounds contain the requested year are considered. A bound that is `None` leaves that side open, so a version with neither bound is a candidate for every academic year. A supplied exact identity must belong to that candidate set, or the read raises `ValueError`. The read uses that exact version. Without an entry, an empty set returns the reason `no_current_version`, and more than one candidate returns `ambiguous_version`. The service never falls back to a version tied to another year.
 
 The prerequisite graph compiler does not use this helper. The native compiler selects the module version in one call: an exact period membership first, then a validity-bound match, then the nearest dated version, and it records a `module_version_fallback` ignored part naming the requested year and the selected version when it falls back. `tests/study_structure/test_study_structure.py::test_structure_preserves_official_containers_rules_and_courses` covers the strict policy over its `exact_year`, `validity` and `ambiguous_year` scenarios.
 
@@ -83,7 +83,7 @@ Four root outcomes belong to one root alone, and each is a `ValueError`:
 | The root identity is unknown | `unknown module <identity> for academic year <year>` |
 | The root has no version | `module <identity> has no unique current version for academic year <year>: <reason>` |
 | The root has several versions and no explicit selection | `module <identity> has several current versions for academic year <year> and no explicit selection` |
-| The selected root version has no rule | `module <identity> version <sisu_module_id> has no stored rule` |
+| The selected root version has no rule | `module <identity> version <source_version_id> has no stored rule` |
 
 A batch settles each root's own identity, missing-version and selection-required outcome separately, and `allow_unavailable` decides whether a root it cannot provide is listed as unavailable or aborts the batch. An explicit selection that is not eligible for its group is neither of those: it raises `ValueError` from the version-selection step, so the whole batch aborts even when unavailable roots are allowed.
 

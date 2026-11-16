@@ -1,11 +1,10 @@
 """Sole writer and reader for the current final inferred prerequisite sets.
 
 This repository owns the `inferred_prerequisite_sets` trust boundary. It validates every
-publication against active canonical target identity, activity context, canonical inferred
+publication against canonical target identity, activity context, canonical inferred
 source courses, evidence policy, and coverage before writing, replaces one target's current
 set atomically, is idempotent for identical payloads, and distinguishes unavailable, stale,
 partial, and complete reads. It never writes official curriculum rows. Its activity reconciliation
-also
 supports an explicit policy map that removes inference-produced sets a fresh cohort stops
 supporting, and it exposes a scoped projection of live inference targets.
 """
@@ -165,14 +164,16 @@ def _unavailable_result(target_group_id: str) -> InferredSetReadResult:
 def _stale_result(
     course: Course, row: InferredPrerequisiteSet, *, target_group_id: str
 ) -> InferredSetReadResult | None:
-    """Return the stale-context read result of one stored set, or None for a readable set."""
+    """Return the stale-context read result of one stored set, or None for a readable set.
+
+    Activity is not a staleness input: a retained result of an inactive target stays readable. A
+    test-produced row is stale when its stored generation context differs from the live course.
+    """
     context_matches = (
         row.activity_as_of_academic_year_start == course.activity_as_of_academic_year_start
         and row.activity_window_years == course.activity_window_years
     )
-    if not course.is_active or (
-        row.producer_kind is not InferredProducerKind.INFERENCE and not context_matches
-    ):
+    if row.producer_kind is not InferredProducerKind.INFERENCE and not context_matches:
         return InferredSetReadResult(
             target_group_id=target_group_id,
             state=InferredReadState.STALE_ACTIVITY_CONTEXT,
@@ -261,10 +262,10 @@ class InferredPrerequisiteRepository(InferredSetRead, InferredSetPublisher):
     def read(self, target_group_id: str) -> InferredSetReadResult:
         """Return availability, stale context, or the current validated inferred set.
 
-        An inactive target is always stale. A test-produced row is stale when its stored generation
-        context differs from the live course. An active inference-owned row is current with its
-        stored context, because its eligibility is owned by the canonical activity rule
-        and a calendar-only rollover must not hide retained accepted output.
+        An inactive target keeps its stored result readable. A test-produced row is stale when its
+        stored generation context differs from the live course. An inference-owned row is current
+        with its stored context, active or not, because its eligibility is owned by the canonical
+        activity rule and a calendar-only rollover does not hide retained accepted output.
         """
         if not target_group_id.strip():
             raise ValueError("target_group_id must not be blank")
@@ -356,19 +357,35 @@ class InferredPrerequisiteRepository(InferredSetRead, InferredSetPublisher):
                 )
             return {target_group_id: results[target_group_id] for target_group_id in requested}
 
-    def find_candidate_group_ids(self, source_group_ids: Collection[str]) -> tuple[str, ...]:
-        """Return active targets whose inferred expression names any requested source course.
+    def find_candidate_group_ids(
+        self, source_group_ids: Collection[str], *, active_only: bool = True
+    ) -> tuple[str, ...]:
+        """Return targets whose inferred expression names any requested source course.
 
         One bounded JSONPath existence read over the current inferred-set store, never a payload
         hydration: the typed `JSONPATH` parameter's `$ids[*]` variable is bound as one JSONB object
         of sorted distinct source IDs, and the recursive descent finds any nested course leaf. This
         is only a candidate superset. `read()` owns current/stale/valid semantics and the
-        compiler decides whether the expression satisfies the target.
+        compiler decides whether the expression satisfies the target. ``active_only=False`` also
+        reaches an inactive target's retained result for an all-courses view.
         """
         requested = tuple(sorted({group_id for group_id in source_group_ids if group_id}))
         if not requested:
             return ()
         with self._factory() as session:
+            conditions = [
+                InferredPrerequisiteSet.expression.is_not(None),
+                func.jsonb_path_exists(
+                    InferredPrerequisiteSet.expression,
+                    cast(
+                        literal('$.** ? (@.type == "course" && @.course_group_id == $ids[*])'),
+                        JSONPATH,
+                    ),
+                    literal({"ids": list(requested)}, type_=JSONB),
+                ),
+            ]
+            if active_only:
+                conditions.append(Course.is_active.is_(True))
             return tuple(
                 session.scalars(
                     select(Course.group_id)
@@ -376,20 +393,7 @@ class InferredPrerequisiteRepository(InferredSetRead, InferredSetPublisher):
                         InferredPrerequisiteSet,
                         InferredPrerequisiteSet.target_course_id == Course.id,
                     )
-                    .where(
-                        Course.is_active.is_(True),
-                        InferredPrerequisiteSet.expression.is_not(None),
-                        func.jsonb_path_exists(
-                            InferredPrerequisiteSet.expression,
-                            cast(
-                                literal(
-                                    '$.** ? (@.type == "course" && @.course_group_id == $ids[*])'
-                                ),
-                                JSONPATH,
-                            ),
-                            literal({"ids": list(requested)}, type_=JSONB),
-                        ),
-                    )
+                    .where(*conditions)
                     .order_by(Course.group_id)
                 )
             )
@@ -412,10 +416,6 @@ class InferredPrerequisiteRepository(InferredSetRead, InferredSetPublisher):
             )
             if course is None:
                 raise ValueError(f"unknown canonical target course {publication.target_group_id}")
-            if not course.is_active:
-                raise ValueError(
-                    f"cannot publish an inferred set for inactive target {publication.target_group_id}"
-                )
             if (
                 publication.activity_as_of_academic_year_start
                 != course.activity_as_of_academic_year_start
@@ -517,18 +517,19 @@ class InferredPrerequisiteRepository(InferredSetRead, InferredSetPublisher):
     def reconcile_activity(
         self, *, current_inference_input_hashes: Mapping[str, str | None] | None = None
     ) -> InferredActivityReconciliation:
-        """Delete stale inferred sets and, when supplied, inference output whose input hash changed.
+        """Delete stale test-produced sets and, when supplied, unsupported inference output.
 
-        An inactive target of either producer is stale and removed. A test-produced row whose
-        stored generation context differs from the live course is removed, while an active
-        inference-owned row with a differing stored context is retained: its eligibility is owned
-        by the canonical activity rule and a calendar-only rollover must not delete accepted output.
-        With the default `None` this preserves the activity-only behavior for every caller.
-        When a cohort map is supplied it names every eligible target and records its current accepted
-        proposal identity or `None` for no accepted current result. After the activity removal this
-        additionally removes only inference-produced final sets for named targets whose stored
-        `input_hash` does not equal the non-None current identity. Test/official rows and inference
-        evidence are never touched, and validation completes before any mutation.
+        Activity alone is not stale: an inactive target of either producer keeps its stored result.
+        A test-produced row whose stored generation context differs from the live course is removed,
+        while an inference-owned row with a differing stored context is retained: its eligibility is
+        owned by the canonical activity rule and a calendar-only rollover must not delete accepted
+        output. With the default `None` this preserves the activity-independent behavior for every
+        caller. When a cohort map is supplied it names every eligible target and records its current
+        accepted proposal identity or `None` for no accepted current result. This additionally
+        removes only inference-produced final sets for named targets whose stored `input_hash` does
+        not equal the recorded current identity, and for named targets with no recorded current
+        identity. Test/official rows and inference evidence are never touched, and validation
+        completes before any mutation.
         """
         validated = (
             None
@@ -541,21 +542,15 @@ class InferredPrerequisiteRepository(InferredSetRead, InferredSetPublisher):
                     select(InferredPrerequisiteSet.id, Course.group_id)
                     .join(Course, Course.id == InferredPrerequisiteSet.target_course_id)
                     .where(
-                        (Course.is_active.is_(False))
-                        | (
+                        (InferredPrerequisiteSet.producer_kind != InferredProducerKind.INFERENCE)
+                        & (
                             (
-                                InferredPrerequisiteSet.producer_kind
-                                != InferredProducerKind.INFERENCE
+                                InferredPrerequisiteSet.activity_as_of_academic_year_start
+                                != Course.activity_as_of_academic_year_start
                             )
-                            & (
-                                (
-                                    InferredPrerequisiteSet.activity_as_of_academic_year_start
-                                    != Course.activity_as_of_academic_year_start
-                                )
-                                | (
-                                    InferredPrerequisiteSet.activity_window_years
-                                    != Course.activity_window_years
-                                )
+                            | (
+                                InferredPrerequisiteSet.activity_window_years
+                                != Course.activity_window_years
                             )
                         )
                     )

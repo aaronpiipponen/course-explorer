@@ -27,14 +27,13 @@ from course_explorer.curriculum import (
     CatalogueCourseVersion,
     CatalogueModuleLookup,
     CatalogueTeachingCourse,
-    CatalogueTeachingText,
     CatalogueTeachingTextInput,
     RepresentedCourseSummary,
     course_summary,
 )
 from course_explorer.enums import (
+    OfficialTextField,
     TeachingTextField,
-    TeachingTextLanguage,
     TranslationMethod,
 )
 from course_explorer.teaching_text.service import (
@@ -45,6 +44,7 @@ from course_explorer.teaching_text.service import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_ROOT = REPO_ROOT / "examples"
 _TEMPLATE_PATH = EXAMPLE_ROOT / ".env.example"
+FIXTURE_DISPLAY_FALLBACK = {"fi": ("fi", "en"), "en": ("en", "fi")}
 
 HASH_A = "a" * 64
 HASH_B = "b" * 64
@@ -146,8 +146,16 @@ def settings_factory[T: BaseSettings](settings_type: type[T], **overrides: objec
     """
     environment = public_environment()
     values: dict[str, object] = {}
+    optional = {
+        field.validation_alias if isinstance(field.validation_alias, str) else name
+        for name, field in settings_type.model_fields.items()
+        if not field.is_required()
+    }
     for alias in _aliases(settings_type):
         if alias not in environment:
+            # An optional aliased field with no composed public value stays at its code default.
+            if alias in optional:
+                continue
             raise ValueError(f"no composed public value for settings alias {alias}")
         values[alias] = environment[alias]
     for alias, synthetic in _SYNTHETIC_VALUES.items():
@@ -187,23 +195,26 @@ def version(
     outcomes_fi: str | None = None,
     outcomes_en: str | None = None,
 ) -> CatalogueCourseVersion:
-    """Build one detached official representative fixture."""
+    """Build one detached official representative fixture with keyed official cells."""
+    texts: dict[OfficialTextField, dict[str, str]] = {
+        field: {
+            language: value for language, value in (("fi", fi), ("en", en)) if value is not None
+        }
+        for field, (fi, en) in (
+            (OfficialTextField.NAME, (name_fi, name_en)),
+            (OfficialTextField.CONTENT, (content_fi, content_en)),
+            (OfficialTextField.OUTCOMES, (outcomes_fi, outcomes_en)),
+        )
+    }
     return CatalogueCourseVersion(
-        sisu_course_unit_id=source_id,
+        source_version_id=source_id,
         source_hash=source_hash,
         code=code if code is not None else f"CODE.{source_id}",
-        name_fi=name_fi,
-        name_en=name_en,
+        texts=texts,
         credits_min=Decimal("5"),
         official_url=f"https://example.test/{source_id}",
         document_state="ACTIVE",
         curriculum_period_ids=(),
-        teaching_text=CatalogueTeachingText(
-            content_fi=content_fi,
-            content_en=content_en,
-            outcomes_fi=outcomes_fi,
-            outcomes_en=outcomes_en,
-        ),
         prerequisite_options=(),
         substitution_options=(),
     )
@@ -227,6 +238,8 @@ def course(
 
 def represented_rows(
     courses: tuple[CatalogueCourse, ...],
+    *,
+    display_fallback: dict[str, tuple[str, ...]] = FIXTURE_DISPLAY_FALLBACK,
 ) -> tuple[RepresentedCourseSummary, ...]:
     """Wrap supplied represented fixture courses with the public summary projection.
 
@@ -235,8 +248,8 @@ def represented_rows(
     """
     return tuple(
         RepresentedCourseSummary(
-            summary=course_summary(item),
-            sisu_course_unit_id=item.representative.sisu_course_unit_id,
+            summary=course_summary(item, display_fallback=display_fallback),
+            source_version_id=item.representative.source_version_id,
             source_hash=item.representative.source_hash,
         )
         for item in courses
@@ -260,6 +273,9 @@ class FakeCurriculum:
         module_lookup: tuple[CatalogueModuleLookup, ...] = (),
     ) -> None:
         self._teaching_courses = tuple(
+            CatalogueTeachingCourse.model_validate(item, from_attributes=True) for item in courses
+        )
+        self._prompt_courses = tuple(
             CatalogueTeachingCourse.model_validate(item, from_attributes=True) for item in courses
         )
         self._teaching_text_inputs = tuple(
@@ -291,6 +307,10 @@ class FakeCurriculum:
         if active_only is None:
             return self._teaching_courses
         raise ValueError(f"unsupported teaching-course activity profile: {active_only!r}")
+
+    def list_prompt_courses(self) -> tuple[CatalogueTeachingCourse, ...]:
+        """Return the prepared prompt fixtures over every supplied course."""
+        return self._prompt_courses
 
     def list_teaching_text_inputs(self) -> tuple[CatalogueTeachingTextInput, ...]:
         """Return the prepared teaching-text input fixtures, in canonical order."""
@@ -344,15 +364,15 @@ class FakeTranslations:
     def __init__(self, rows: tuple[DerivedTranslation, ...] = ()) -> None:
         self._rows = rows
 
-    def list_for_course_versions(self, sisu_course_unit_ids):
+    def list_for_course_versions(self, source_version_ids):
         return self._rows
 
 
 def derived_translation(
     source_id: str,
     field: TeachingTextField,
-    language: TeachingTextLanguage,
-    source_language: TeachingTextLanguage,
+    language: str,
+    source_language: str,
     source_text: str,
     text: str,
     *,
@@ -361,7 +381,7 @@ def derived_translation(
 ) -> DerivedTranslation:
     """Build one persisted derived translation fixture with a matching source hash."""
     return DerivedTranslation(
-        sisu_course_unit_id=source_id,
+        source_version_id=source_id,
         field=field,
         language=language,
         source_language=source_language,

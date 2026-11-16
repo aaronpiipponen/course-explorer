@@ -12,7 +12,7 @@ The full text is in [LICENSE](/LICENSE), and the project metadata declares the s
 
 ## University material
 
-The software licence covers the code of this project. Tampere University curriculum data and other university material carry the university's own terms, and the software licence does not extend to them. The project is independent of Tampere University.
+The software licence covers the code of this project. University curriculum data and other university material carry the university's own terms, and the software licence does not extend to them. The project is independent of every university.
 
 ## The example dataset
 

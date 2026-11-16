@@ -27,47 +27,18 @@ using namespace tce;
 
 namespace {
 
-int64_t parse_cents(const char *text)
-{
-    if (text == nullptr || *text == '\0') return -1;
-    bool negative = false;
-    const char *cursor = text;
-    if (*cursor == '-') {
-        negative = true;
-        ++cursor;
-    }
-    int64_t value = 0;
-    int digits = 0;
-    int fraction = 0;
-    while (*cursor >= '0' && *cursor <= '9') {
-        value = value * 10 + (*cursor - '0');
-        ++cursor;
-        ++digits;
-    }
-    if (*cursor == '.') {
-        ++cursor;
-        while (*cursor >= '0' && *cursor <= '9' && fraction < 2) {
-            value = value * 10 + (*cursor - '0');
-            ++cursor;
-            ++fraction;
-        }
-        while (*cursor >= '0' && *cursor <= '9') ++cursor;
-        while (fraction < 2) {
-            value *= 10;
-            ++fraction;
-        }
-    } else {
-        value *= 100;
-    }
-    if (digits == 0) return -1;
-    return negative ? -value : value;
-}
-
 int32_t parse_year(const char *text)
 {
     if (text == nullptr || *text == '\0') return 0;
     return std::atoi(text);
 }
+
+/* Python's str.strip() whitespace set as a PostgreSQL character set. The display selection treats
+ * a name composed only of these characters as missing, matching the Python display projection. */
+constexpr const char *kNonblankOfficialNameSql =
+    "btrim(nt.text, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085"
+    "\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028"
+    "\\2029\\202F\\205F\\3000') <> ''";
 
 /* A JSON reader for the stored inferred expression tree. */
 struct Json {
@@ -422,6 +393,8 @@ struct PackedCacheView {
 
 struct PgHandle {
     PGconn *connection = nullptr;
+    std::string display_fi;
+    std::string display_en;
     Bundle cache;
     std::set<std::string> loaded_courses;
     std::set<std::string> loaded_modules;
@@ -539,7 +512,8 @@ private:
     std::set<std::string> inferred_done_;
     std::set<std::string> equivalence_done_;
     std::set<std::string> modules_done_;
-    bool query(const char *statement, const std::vector<std::string> &values, PGresult **result);
+    bool query(const char *statement, const std::vector<std::string> &values, PGresult **result,
+               bool names = false);
 
     PGconn *connection_;
     Bundle &bundle_;
@@ -547,11 +521,17 @@ private:
 };
 
 bool Loader::query(const char *statement, const std::vector<std::string> &values,
-                   PGresult **result)
+                   PGresult **result, bool names)
 {
     std::string literal = array_literal(values);
-    const char *parameters[1] = {literal.c_str()};
-    *result = PQexecParams(connection_, statement, 1, nullptr, parameters, nullptr, nullptr, 0);
+    const char *parameters[3] = {literal.c_str(), nullptr, nullptr};
+    int count = 1;
+    if (names) {
+        parameters[1] = cache_.handle->display_fi.c_str();
+        parameters[2] = cache_.handle->display_en.c_str();
+        count = 3;
+    }
+    *result = PQexecParams(connection_, statement, count, nullptr, parameters, nullptr, nullptr, 0);
     if (*result == nullptr || PQresultStatus(*result) != PGRES_TUPLES_OK) {
         last_error = *result == nullptr ? PQerrorMessage(connection_)
                                         : PQresultErrorMessage(*result);
@@ -567,22 +547,33 @@ bool Loader::load_courses(const std::vector<std::string> &group_ids,
                           std::set<std::string> &course_refs)
 {
     PGresult *result = nullptr;
-    const char *statement =
+    std::string statement =
         "SELECT c.group_id, c.is_active, c.activity_as_of_academic_year_start, "
-        "c.activity_window_years, v.id::text, v.sisu_course_unit_id, v.credits_min::text, "
-        "v.credits_max::text, v.code, v.name_fi, v.name_en, v.official_url, "
+        "c.activity_window_years, v.id::text, v.source_version_id, v.credits_min::text, "
+        "v.credits_max::text, v.code, "
+        "(SELECT nt.text FROM official_course_texts nt "
+        " WHERE nt.course_version_id = v.id AND nt.field = 'name' "
+        " AND nt.language = ANY($2::text[]) AND " +
+        std::string(kNonblankOfficialNameSql) +
+        " ORDER BY array_position($2::text[], nt.language) LIMIT 1), "
+        "(SELECT nt.text FROM official_course_texts nt "
+        " WHERE nt.course_version_id = v.id AND nt.field = 'name' "
+        " AND nt.language = ANY($3::text[]) AND " +
+        std::string(kNonblankOfficialNameSql) +
+        " ORDER BY array_position($3::text[], nt.language) LIMIT 1), "
+        "v.official_url, "
         "v.source_modification_ordinal, cp.academic_year_start "
         "FROM courses c "
         "LEFT JOIN course_versions v ON v.course_id = c.id "
         "LEFT JOIN course_version_curriculum_periods p ON p.course_version_id = v.id "
         "LEFT JOIN curriculum_periods cp ON cp.id = p.curriculum_period_id "
         "WHERE c.group_id = ANY($1::text[]) "
-        "ORDER BY c.group_id, v.sisu_course_unit_id, cp.academic_year_start";
-    if (!query(statement, group_ids, &result)) return false;
+        "ORDER BY c.group_id, v.source_version_id, cp.academic_year_start";
+    if (!query(statement.c_str(), group_ids, &result, true)) return false;
 
     struct VersionRow {
         std::string id;
-        std::string sisu;
+        std::string source_version_id;
         std::string code;
         std::string name_fi;
         std::string name_en;
@@ -612,14 +603,14 @@ bool Loader::load_courses(const std::vector<std::string> &group_ids,
         if (PQgetisnull(result, index, 4)) continue;
         VersionRow version;
         version.id = PQgetvalue(result, index, 4);
-        version.sisu = PQgetvalue(result, index, 5);
+        version.source_version_id = PQgetvalue(result, index, 5);
         if (!PQgetisnull(result, index, 6)) {
             version.credits_min_text = PQgetvalue(result, index, 6);
-            version.credits_min = parse_cents(version.credits_min_text.c_str());
+            version.credits_min = parse_credit_cents(version.credits_min_text.c_str());
         }
         if (!PQgetisnull(result, index, 7)) {
             version.credits_max_text = PQgetvalue(result, index, 7);
-            version.credits_max = parse_cents(version.credits_max_text.c_str());
+            version.credits_max = parse_credit_cents(version.credits_max_text.c_str());
         }
         if (!PQgetisnull(result, index, 8)) version.code = PQgetvalue(result, index, 8);
         if (!PQgetisnull(result, index, 9)) {
@@ -642,7 +633,6 @@ bool Loader::load_courses(const std::vector<std::string> &group_ids,
     std::unordered_map<std::string, std::string> representative;
     for (const auto &[group, row] : rows) {
         bool found = false;
-        std::string best_source;
         std::string best_version;
         std::tuple<int, int32_t, int64_t, std::string> best;
         for (const VersionRow &version : row.versions) {
@@ -651,12 +641,25 @@ bool Loader::load_courses(const std::vector<std::string> &group_ids,
                 if (period <= row.year && period > year) year = period;
             if (year < 0) continue;
             int kind = year == row.year ? 2 : (within_window(year, row.year, row.window) ? 1 : 0);
-            auto candidate = std::make_tuple(kind, year, version.ordinal, version.sisu);
+            auto candidate = std::make_tuple(kind, year, version.ordinal, version.source_version_id);
             if (!found || candidate > best) {
                 found = true;
                 best = candidate;
-                best_source = version.sisu;
                 best_version = version.id;
+            }
+        }
+        if (!found) {
+            // A version with no membership row at all is the only fallback candidate. A version
+            // whose rows are all future periods keeps its stored memberships and stays ineligible.
+            std::tuple<int64_t, std::string> fallback;
+            for (const VersionRow &version : row.versions) {
+                if (!version.periods.empty()) continue;
+                auto candidate = std::make_tuple(version.ordinal, version.source_version_id);
+                if (!found || candidate > fallback) {
+                    found = true;
+                    fallback = candidate;
+                    best_version = version.id;
+                }
             }
         }
         if (found) representative[group] = best_version;
@@ -738,7 +741,7 @@ bool Loader::load_courses(const std::vector<std::string> &group_ids,
             member.index = std::atoi(PQgetvalue(result, index, 3));
             member.group = PQgetvalue(result, index, 4);
             member.credits = PQgetisnull(result, index, 5) ? -1
-                                                           : parse_cents(PQgetvalue(result, index, 5));
+                                                           : parse_credit_cents(PQgetvalue(result, index, 5));
             course_refs.insert(member.group);
             option.members.push_back(std::move(member));
         }
@@ -757,7 +760,7 @@ bool Loader::load_courses(const std::vector<std::string> &group_ids,
                 if (version.id == rep->second) selected = &version;
             if (selected != nullptr) {
                 course.has_rep = true;
-                course.rep.sisu = selected->sisu;
+                course.rep.source_version_id = selected->source_version_id;
                 course.rep.code = selected->code;
                 course.rep.name_fi = selected->name_fi;
                 course.rep.name_en = selected->name_en;
@@ -791,21 +794,31 @@ bool Loader::load_modules(const std::vector<std::string> &group_ids,
                           std::set<std::string> &course_refs)
 {
     PGresult *result = nullptr;
-    const char *statement =
-        "SELECT mo.group_id, mv.id::text, mv.sisu_module_id, mv.module_type, mv.code, "
-        "mv.name_fi, mv.name_en, mv.validity_start::text, mv.validity_end::text, "
+    std::string statement =
+        "SELECT mo.group_id, mv.id::text, mv.source_version_id, mv.module_type, mv.code, "
+        "(SELECT nt.text FROM official_module_texts nt "
+        " WHERE nt.module_version_id = mv.id AND nt.field = 'name' "
+        " AND nt.language = ANY($2::text[]) AND " +
+        std::string(kNonblankOfficialNameSql) +
+        " ORDER BY array_position($2::text[], nt.language) LIMIT 1), "
+        "(SELECT nt.text FROM official_module_texts nt "
+        " WHERE nt.module_version_id = mv.id AND nt.field = 'name' "
+        " AND nt.language = ANY($3::text[]) AND " +
+        std::string(kNonblankOfficialNameSql) +
+        " ORDER BY array_position($3::text[], nt.language) LIMIT 1), "
+        "mv.validity_start::text, mv.validity_end::text, "
         "mv.target_credits_min::text, mv.target_credits_max::text, cp.academic_year_start "
         "FROM modules mo "
         "JOIN module_versions mv ON mv.module_id = mo.id "
         "LEFT JOIN module_version_curriculum_periods p ON p.module_version_id = mv.id "
         "LEFT JOIN curriculum_periods cp ON cp.id = p.curriculum_period_id "
         "WHERE mo.group_id = ANY($1::text[]) "
-        "ORDER BY mo.group_id, mv.sisu_module_id, cp.academic_year_start";
-    if (!query(statement, group_ids, &result)) return false;
+        "ORDER BY mo.group_id, mv.source_version_id, cp.academic_year_start";
+    if (!query(statement.c_str(), group_ids, &result, true)) return false;
 
     struct VersionRow {
         std::string id;
-        std::string sisu;
+        std::string source_version_id;
         std::string code;
         std::string name_fi;
         std::string name_en;
@@ -830,7 +843,7 @@ bool Loader::load_modules(const std::vector<std::string> &group_ids,
         if (items.empty() || items.back().id != id) {
             VersionRow version;
             version.id = id;
-            version.sisu = PQgetvalue(result, index, 2);
+            version.source_version_id = PQgetvalue(result, index, 2);
             if (!module_type_code(PQgetvalue(result, index, 3), version.module_type)) {
                 PQclear(result);
                 return false;
@@ -851,11 +864,11 @@ bool Loader::load_modules(const std::vector<std::string> &group_ids,
             version.end = parse_year(PQgetvalue(result, index, 8));
             if (!PQgetisnull(result, index, 9)) {
                 version.target_min_text = PQgetvalue(result, index, 9);
-                version.target_min = parse_cents(version.target_min_text.c_str());
+                version.target_min = parse_credit_cents(version.target_min_text.c_str());
             }
             if (!PQgetisnull(result, index, 10)) {
                 version.target_max_text = PQgetvalue(result, index, 10);
-                version.target_max = parse_cents(version.target_max_text.c_str());
+                version.target_max = parse_credit_cents(version.target_max_text.c_str());
             }
             items.push_back(std::move(version));
             version_ids.push_back(id);
@@ -903,11 +916,11 @@ bool Loader::load_modules(const std::vector<std::string> &group_ids,
                 row.all_mandatory = std::string(PQgetvalue(result, index, 7)) == "t" ? 1 : 0;
             if (!PQgetisnull(result, index, 8)) {
                 row.credits_min_text = PQgetvalue(result, index, 8);
-                row.credits_min = parse_cents(row.credits_min_text.c_str());
+                row.credits_min = parse_credit_cents(row.credits_min_text.c_str());
             }
             if (!PQgetisnull(result, index, 9)) {
                 row.credits_max_text = PQgetvalue(result, index, 9);
-                row.credits_max = parse_cents(row.credits_max_text.c_str());
+                row.credits_max = parse_credit_cents(row.credits_max_text.c_str());
             }
             if (!PQgetisnull(result, index, 10)) row.count_min = std::atoi(PQgetvalue(result, index, 10));
             if (!PQgetisnull(result, index, 11)) row.count_max = std::atoi(PQgetvalue(result, index, 11));
@@ -953,7 +966,7 @@ bool Loader::load_modules(const std::vector<std::string> &group_ids,
         module.id = group;
         for (const VersionRow &row : versions) {
             Version version;
-            version.sisu = row.sisu;
+            version.source_version_id = row.source_version_id;
             version.module_type = row.module_type;
             version.code = row.code;
             version.name_fi = row.name_fi;
@@ -998,7 +1011,7 @@ bool Loader::load_inferred(const std::vector<std::string> &group_ids)
     if (pending.empty()) return true;
     PGresult *result = nullptr;
     const char *statement =
-        "SELECT c.group_id, c.is_active, c.activity_as_of_academic_year_start, "
+        "SELECT c.group_id, c.activity_as_of_academic_year_start, "
         "c.activity_window_years, s.id::text, s.producer_kind, "
         "s.activity_as_of_academic_year_start, s.activity_window_years, s.expression::text, "
         "s.coverage_state, s.eligible_source_count, s.processed_source_count, "
@@ -1008,30 +1021,29 @@ bool Loader::load_inferred(const std::vector<std::string> &group_ids)
     if (!query(statement, pending, &result)) return false;
     for (int index = 0; index < PQntuples(result); ++index) {
         std::string group = PQgetvalue(result, index, 0);
-        bool active = PQgetvalue(result, index, 1)[0] == 't';
-        int32_t course_year = parse_year(PQgetvalue(result, index, 2));
-        int32_t course_window = std::atoi(PQgetvalue(result, index, 3));
-        std::string producer = PQgetvalue(result, index, 5);
-        int32_t set_year = parse_year(PQgetvalue(result, index, 6));
-        int32_t set_window = std::atoi(PQgetvalue(result, index, 7));
+        int32_t course_year = parse_year(PQgetvalue(result, index, 1));
+        int32_t course_window = std::atoi(PQgetvalue(result, index, 2));
+        std::string producer = PQgetvalue(result, index, 4);
+        int32_t set_year = parse_year(PQgetvalue(result, index, 5));
+        int32_t set_window = std::atoi(PQgetvalue(result, index, 6));
         bool context_matches = set_year == course_year && set_window == course_window;
         InferredEntry entry;
-        bool stale = !active || (producer != "inference" && !context_matches);
+        bool stale = producer != "inference" && !context_matches;
         entry.state = stale ? "stale_activity_context" : "current";
         entry.current = !stale;
         if (!stale) {
             entry.fact.target = group;
-            entry.fact.set_id = PQgetvalue(result, index, 4);
+            entry.fact.set_id = PQgetvalue(result, index, 3);
             entry.fact.current = true;
-            entry.fact.coverage_state = PQgetvalue(result, index, 9);
-            entry.fact.eligible = std::atoll(PQgetvalue(result, index, 10));
-            entry.fact.processed = std::atoll(PQgetvalue(result, index, 11));
-            entry.fact.accepted = std::atoll(PQgetvalue(result, index, 12));
-            if (!PQgetisnull(result, index, 8)) {
+            entry.fact.coverage_state = PQgetvalue(result, index, 8);
+            entry.fact.eligible = std::atoll(PQgetvalue(result, index, 9));
+            entry.fact.processed = std::atoll(PQgetvalue(result, index, 10));
+            entry.fact.accepted = std::atoll(PQgetvalue(result, index, 11));
+            if (!PQgetisnull(result, index, 7)) {
                 Json json;
-                JsonReader reader(PQgetvalue(result, index, 8));
+                JsonReader reader(PQgetvalue(result, index, 7));
                 if (!reader.read(json)) {
-                    std::string snippet(PQgetvalue(result, index, 8));
+                    std::string snippet(PQgetvalue(result, index, 7));
                     if (snippet.size() > 400) snippet.resize(400);
                     last_error = "stored inferred expression is not valid JSON: " + snippet;
                     PQclear(result);
@@ -1138,7 +1150,8 @@ PgHandle *handle_of(int handle)
 
 }  // namespace
 
-int open_database_handle(const std::string &conninfo)
+int open_database_handle(const std::string &conninfo, const std::string &display_fi,
+                         const std::string &display_en)
 {
     PGconn *connection = PQconnectdb(conninfo.c_str());
     if (connection == nullptr || PQstatus(connection) != CONNECTION_OK) {
@@ -1149,6 +1162,8 @@ int open_database_handle(const std::string &conninfo)
     }
     auto handle = std::make_unique<PgHandle>();
     handle->connection = connection;
+    handle->display_fi = display_fi;
+    handle->display_en = display_en;
     int value = next_pg_handle++;
     pg_handles.emplace(value, std::move(handle));
     return value;

@@ -4,11 +4,13 @@ The teaching text of each representative version becomes effective text and the 
 
 ## Official text and stored translations
 
-Official text is teaching text as the university publishes it, and it is stored with the exact course version it belongs to. A translation is stored apart from it, one row per version, field, and target language, with the hash of the source text it was made from. Official text always takes precedence, and a translation whose recorded source text differs from the official text is stale, reported, and never used. [Teaching text and effective text](/docs/backend/text-and-vectors/teaching-text.md) describes the resolution, and [Translation](/docs/backend/text-and-vectors/translation.md) describes the remote stage that fills the missing cells on the worker.
+Official text is teaching text as the university publishes it, stored with the exact course version as one cell per version, official field and official language. A translation is stored apart from it, one row per version, field, and target language, with the hash of the source text it was made from. The university map's translation priority map is the sole accepted-pair list: a translation is effective only for a mapped target whose listed source matches the official text. Official text always takes precedence, and an accepted translation whose recorded source text differs from the official text is stale, reported, and never used. A stored row outside the accepted pairs is kept but contributes no effective text.
+
+[Teaching text and effective text](/docs/backend/text-and-vectors/teaching-text.md) describes the resolution, the configured official languages and the display fallback, and [Translation](/docs/backend/text-and-vectors/translation.md) describes the remote stage that fills the missing cells on the worker. [Translation stage](/docs/backend/text-and-vectors/translation-stage.md) describes the selector, the provider request contract and the resumable output of that stage.
 
 ## Effective text
 
-The effective text of one cell is the official text when the version holds one, otherwise a translation that is not stale, otherwise nothing. Each of the six cells of a representative version resolves on its own. The embedding stage reads those cells, and the coverage report counts them. [Teaching text store](/docs/backend/text-and-vectors/teaching-text-store.md) describes the derived table and the one import that writes it.
+The effective text of one cell is the official text when the version holds one, otherwise a translation accepted by the translation priority map that is not stale, otherwise nothing. Each teaching field resolves its own cell for each configured official language of a representative version. The embedding stage reads those cells, and the coverage report counts them. [Teaching text store](/docs/backend/text-and-vectors/teaching-text-store.md) describes the derived table and the one import that writes it.
 
 ## Chunks and vectors
 

@@ -23,6 +23,7 @@ from course_explorer.administration import (
 )
 from course_explorer.config import (
     TranslationControllerSettings,
+    load_instance_settings,
     load_raw_database_settings,
     load_translation_controller_settings,
     load_translation_settings,
@@ -46,6 +47,7 @@ from course_explorer_admin.translation.controller import (
     load_translation_controller_import_receipt,
     load_translation_controller_worker_state,
     load_translation_dataset_session,
+    translation_configuration_sha256,
 )
 from course_explorer_admin.worker_session import (
     read_control,
@@ -177,14 +179,16 @@ def _publish_prepared_session(
     """
     database_settings = load_raw_database_settings()
     session_settings = database_settings.model_copy(update={"postgres_db": session.database_name})
+    university = load_instance_settings().university
     engine = create_database_engine(session_settings)
     try:
         factory = create_session_factory(engine)
         selection = select_translation_work(
-            CurriculumRepository(factory),
-            DerivedTranslationRepository(factory),
+            CurriculumRepository(factory, university=university),
+            DerivedTranslationRepository(factory, university=university),
             load_translation_settings(),
             course_limit=session.course_limit,
+            university=university,
         )
     finally:
         engine.dispose()
@@ -284,10 +288,11 @@ def _finalize(
         output_sha256 = None
     database_settings = load_raw_database_settings()
     session_settings = database_settings.model_copy(update={"postgres_db": session.database_name})
+    university = load_instance_settings().university
     engine = create_database_engine(session_settings)
     try:
         factory = create_session_factory(engine)
-        report = DerivedTranslationRepository(factory).upsert(translations)
+        report = DerivedTranslationRepository(factory, university=university).upsert(translations)
     finally:
         engine.dispose()
     receipt = TranslationControllerImportReceipt(
@@ -321,9 +326,9 @@ class TranslationWorkerStage:
     def require_policy(
         self, session: WorkerDatasetSession, policy: TranslationControllerPolicy
     ) -> None:
-        if policy.translation_model != load_translation_settings().provenance_model:
+        if policy.configuration_sha256 != translation_configuration_sha256():
             raise ValueError(
-                "canonical policy model does not match the configured provenance model"
+                "canonical policy configuration does not match the executing configuration"
             )
 
     def publish_prepared(

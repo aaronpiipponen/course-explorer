@@ -19,7 +19,7 @@ import { NoticeProvider } from "../../../shared/NoticeProvider";
 import { RoutePanel } from "./RoutePanel";
 import type { MinimumRouteSession } from "./useMinimumRoute";
 
-const course = (group_id: string, credits_min: string) => ({
+const course = (group_id: string, credits_min: string | null) => ({
   group_id,
   name_fi: null,
   name_en: group_id,
@@ -78,6 +78,7 @@ const graphReport = (
       element_count: 9,
     },
     dataset_identity: "synthetic-dataset",
+    assumed_course_credits: "5",
     max_compact_nodes: 10000,
     solver: {
       root_group_id: "root",
@@ -172,13 +173,17 @@ const path = (
 describe("minimum-route projection", () => {
   it("lights returned members and sums new plus covered credits without a drawing", () => {
     for (const language of ["en", "fi"] as const) {
-      const graph = graphReport();
+      const graph = {
+        ...graphReport(),
+        assumed_course_credits: "10",
+      };
       const route = path("exact", {
         new_courses: [{ course: course("new", "3"), node_ids: ["course:new"] }],
         total_new_credits: "3",
         selected_nodes: ["course:root", orNode, "course:new", "course:covered"],
         lit_members: ["m:root", "m:first", "m:covered"],
-        covered_courses: [course("covered", "4")],
+        covered_courses: [course("covered", null)],
+        uses_assumed_credits: true,
       });
       const model = buildGraphModel(graph, language, []);
       const summary = buildRouteSummary(graph, route, language);
@@ -197,8 +202,9 @@ describe("minimum-route projection", () => {
         uiText(language, "{value} cr", { value: 3 }),
       );
       expect(view.fullCredits).toBe(
-        uiText(language, "{value} cr", { value: 7 }),
+        uiText(language, "{value} cr", { value: 13 }),
       );
+      expect(view.usesAssumedCredits).toBe(true);
       expect(
         view.rows.map(
           (row) => row.kind === "course" && [row.course.group_id, row.covered],
@@ -208,7 +214,10 @@ describe("minimum-route projection", () => {
         ["covered", true],
       ]);
       // A refused drawing still produces the identical totals, rows and titles.
-      const refused = graphReport(["m:first"], false);
+      const refused = {
+        ...graphReport(["m:first"], false),
+        assumed_course_credits: "10",
+      };
       const refusedSummary = buildRouteSummary(refused, route, language);
       expect(refusedSummary.newCredits).toBe(summary.newCredits);
       expect(refusedSummary.fullCredits).toBe(summary.fullCredits);
@@ -329,7 +338,20 @@ describe("minimum-route projection", () => {
               value: {
                 embeddings_enabled: true,
                 inference_enabled: true,
+                prerequisites_enabled: true,
                 dataset_identity: "synthetic-dataset",
+                display_label: "example-uni",
+                university_names: {
+                  en: "Example University",
+                  fi: "Esimerkkiyliopisto",
+                },
+                source_attribution: {
+                  en: "Source attribution",
+                  fi: "Lähdemerkintä",
+                },
+                assumed_course_credits: "5",
+                study_plan_script: null,
+                study_plan_formats: [],
               },
             },
             createElement(
@@ -405,11 +427,11 @@ describe("minimum-route projection", () => {
     expect(shortfallView.rows).toHaveLength(1);
     expect(shortfallView.missingCourseIds).toEqual(["new"]);
     expect(shortfallView.shortfalls).toEqual([
-      { title: "OR", text: "1 of 2 courses" },
+      { title: "OR", text: "Courses: 1 of 2" },
     ]);
     expect(
       renderPanel(shortfallView).querySelector(".route-problems")?.textContent,
-    ).toContain("1 of 2 courses");
+    ).toContain("Courses: 1 of 2");
     const zero = path("exact", { total_new_credits: "0" });
     expect(build(graph, zero).rows).toEqual([]);
   });

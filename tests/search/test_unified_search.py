@@ -50,7 +50,7 @@ def represented(course_summary: CourseSummary) -> RepresentedCourseSummary:
     """Wrap one shared summary with a synthetic exact representative identity."""
     return RepresentedCourseSummary(
         summary=course_summary,
-        sisu_course_unit_id=f"source-{course_summary.group_id}",
+        source_version_id=f"source-{course_summary.group_id}",
         source_hash=HASH_A,
     )
 

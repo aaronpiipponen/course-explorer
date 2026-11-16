@@ -17,6 +17,7 @@ describe("route module shortfall", () => {
     const bare = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.bare`),
       [],
+      "5",
     );
     expect(bare.state).toBe("shortfall");
     expect(bare.satisfaction.requirements_state).toBe("unsatisfied");
@@ -40,6 +41,7 @@ describe("route module shortfall", () => {
     const allMandatory = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.all_mandatory`),
       [],
+      "5",
     );
     expect(allMandatory.state).toBe("shortfall");
     expect(selectedGroupIds(allMandatory)).toEqual(["active-a"]);
@@ -56,6 +58,7 @@ describe("route module shortfall", () => {
     const mixed = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.mixed`),
       [],
+      "5",
     );
     expect(mixed.state).toBe("shortfall");
     expect(selectedGroupIds(mixed)).toEqual(["active-nested"]);
@@ -84,6 +87,7 @@ describe("route module shortfall", () => {
     const nestedOnly = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.nested_only`),
       [],
+      "5",
     );
     expect(nestedOnly.state).toBe("shortfall");
     expect(selectedGroupIds(nestedOnly)).toEqual([
@@ -102,6 +106,7 @@ describe("route module shortfall", () => {
     const cardinality = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.cardinality`),
       [],
+      "5",
     );
     expect(cardinality.state).toBe("shortfall");
     expect(selectedGroupIds(cardinality)).toEqual(["active-a"]);
@@ -121,6 +126,7 @@ describe("route module shortfall", () => {
     const credits = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.credits`),
       [],
+      "5",
     );
     expect(credits.state).toBe("shortfall");
     expect(selectedGroupIds(credits)).toEqual(["active-head", "deep-tail"]);
@@ -138,6 +144,7 @@ describe("route module shortfall", () => {
     const mixedCredit = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.mixed_credit`),
       [],
+      "5",
     );
     expect(mixedCredit.state).toBe("shortfall");
     expect(selectedGroupIds(mixedCredit)).toEqual(["credit-low"]);
@@ -154,6 +161,7 @@ describe("route module shortfall", () => {
     const courseCount = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.course_count`),
       [],
+      "5",
     );
     expect(courseCount.state).toBe("shortfall");
     expect(selectedGroupIds(courseCount)).toEqual(["active-a", "active-b"]);
@@ -183,6 +191,7 @@ describe("route module shortfall", () => {
           `zero_minimum_module_bound_preserves_child_activity_shortfall.compilation[${nodeType}]`,
         ),
         [],
+        "5",
       );
       expect(result.state).toBe("shortfall");
       expect(result.satisfaction.requirements_state).toBe("unsatisfied");

@@ -18,10 +18,12 @@ import { BrandMark } from "./BrandMark";
 /** Render the sign-in screen. */
 export function SignIn({
   session,
+  displayLabel,
   onAuthenticated,
   onRefusal,
 }: {
   session: SessionReport | null;
+  displayLabel: string;
   onAuthenticated: (report: SessionReport) => void;
   onRefusal: (status: number) => void;
 }) {
@@ -60,7 +62,7 @@ export function SignIn({
         onSubmit={(event) => void onSubmit(event)}
       >
         <div className="logo">
-          <BrandMark />
+          <BrandMark displayLabel={displayLabel} />
         </div>
         <h1>{text.heading}</h1>
         <label className="field">

@@ -39,6 +39,7 @@ from course_explorer.config import (
     load_database_settings,
     load_embedding_runtime_settings,
     load_raw_database_settings,
+    load_shared_storage_settings,
     load_web_settings,
 )
 from course_explorer.datasets import dataset_pointer_path, dataset_state_refusal, read_dataset_role
@@ -180,7 +181,8 @@ class DatabaseStatus(_ServerModel):
 class EmbeddingStatus(_ServerModel):
     """The configured embedding runtime and the container that serves it.
 
-    ``artifact`` names the configured artifact path, which identifies the model the service loads.
+    ``artifact`` names the artifact path resolved under the machine shared directory, which
+    identifies the model the service loads.
     """
 
     container: ContainerStatus
@@ -481,12 +483,15 @@ def _read_embedding(
 ) -> EmbeddingStatus:
     """Compose the embedding member from its configured runtime contract and its container."""
     runtime = load_embedding_runtime_settings()
+    artifact = load_shared_storage_settings().resolve_embedding_artifact(
+        runtime.embedding_artifact_path
+    )
     return EmbeddingStatus(
         container=container,
         host=runtime.embedding_host,
         port=runtime.embedding_port,
         model=runtime.embedding_model,
-        artifact=str(runtime.embedding_artifact_path),
+        artifact=str(artifact),
         context_size=runtime.embedding_context_size,
         threads=runtime.embedding_threads,
         pooling=runtime.embedding_pooling,

@@ -4,6 +4,7 @@
  */
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentType,
@@ -53,9 +54,13 @@ type Swipe = {
 /** Render the animated tab carousel and handle keyboard or touch navigation. */
 export function TabCarousel() {
   const storedTab = useActiveTab();
-  const { embeddings_enabled } = useWebFeatures();
-  const activeTab = effectiveTab(storedTab, embeddings_enabled);
-  const visible = visibleTabs(embeddings_enabled);
+  const { embeddings_enabled, prerequisites_enabled } = useWebFeatures();
+  const features = useMemo(
+    () => ({ embeddings_enabled, prerequisites_enabled }),
+    [embeddings_enabled, prerequisites_enabled],
+  );
+  const activeTab = effectiveTab(storedTab, features);
+  const visible = useMemo(() => visibleTabs(features), [features]);
   const { runAction, error } = useAction();
   const { language, t } = useWording();
   const phone = useMediaQuery(PHONE_SHELL_QUERY);
@@ -67,7 +72,7 @@ export function TabCarousel() {
   });
   if (presentation.tab !== activeTab) {
     const previous = visible.findIndex(
-      (tab) => tab.id === effectiveTab(presentation.tab, embeddings_enabled),
+      (tab) => tab.id === effectiveTab(presentation.tab, features),
     );
     const displacement = (active - previous + visible.length) % visible.length;
     const shortest =

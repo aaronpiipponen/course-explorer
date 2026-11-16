@@ -1,8 +1,10 @@
-/** Rendered proof that a whole-state import waits for its replacement confirmation. */
+/** Rendered proof that profile, whole-state and plan imports wait for their confirmation. */
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProfileTransfer } from "./ProfileTransfer";
+import type { WebFeatures } from "../../api/types";
+import { WebFeaturesContext } from "../../app/webFeaturesContext";
 import { uiText } from "../../shared/wording";
 import { StoreContext } from "../../state/context";
 import { READ_CACHE_CAPACITY, ReadCache } from "../../app/readCache";
@@ -19,7 +21,7 @@ const { readSisuPdfMock } = vi.hoisted(() => ({
   readSisuPdfMock: vi.fn(),
 }));
 
-vi.mock("../structure/sisuPdf", () => ({ readSisuPdf: readSisuPdfMock }));
+vi.mock("../imports/pdf", () => ({ readSisuPdf: readSisuPdfMock }));
 vi.mock("../structure/structureStorage", () => ({
   readPersistedStructures: vi.fn(async () => ({})),
   writePersistedStructures: vi.fn(async () => undefined),
@@ -31,10 +33,34 @@ vi.mock("../structure/structureStorage", () => ({
 
 const originalMedia = globalThis.matchMedia;
 
-describe("whole-state import confirmation", () => {
+const featuresWithoutFormats: WebFeatures = {
+  embeddings_enabled: true,
+  inference_enabled: false,
+  prerequisites_enabled: true,
+  dataset_identity: "test-dataset",
+  display_label: "example-uni",
+  university_names: { en: "Example University", fi: "Esimerkkiyliopisto" },
+  source_attribution: { en: "Source", fi: "Lähde" },
+  assumed_course_credits: "5",
+  study_plan_script: null,
+  study_plan_formats: [],
+};
+const sisuFeatures: WebFeatures = {
+  ...featuresWithoutFormats,
+  study_plan_script: "sisu",
+  study_plan_formats: ["sisu_page", "sisu_pdf", "sisu_capture"],
+};
+const peppiFeatures: WebFeatures = {
+  ...featuresWithoutFormats,
+  study_plan_script: "peppi",
+  study_plan_formats: ["peppi_page", "peppi_capture"],
+};
+
+describe("profile transfer confirmation", () => {
   let container: HTMLDivElement;
   let root: Root;
   let store: BrowserStore;
+  let features: WebFeatures;
   let input!: HTMLInputElement;
   let originalFilesDescriptor: PropertyDescriptor | undefined;
   const selectedFiles: File[] = [];
@@ -91,6 +117,10 @@ describe("whole-state import confirmation", () => {
     if (envelope === null) throw new Error("The saved envelope is missing");
     initialEnvelope = envelope;
     root = createRoot(container);
+    features = featuresWithoutFormats;
+  });
+
+  function render(importOnly = false): void {
     const cache = new ReadCache("test-dataset", READ_CACHE_CAPACITY);
     act(() =>
       root.render(
@@ -98,9 +128,13 @@ describe("whole-state import confirmation", () => {
           ReadCacheContext.Provider,
           { value: cache },
           createElement(
-            StoreContext.Provider,
-            { value: store },
-            createElement(ProfileTransfer, { store }),
+            WebFeaturesContext.Provider,
+            { value: features },
+            createElement(
+              StoreContext.Provider,
+              { value: store },
+              createElement(ProfileTransfer, { store, importOnly }),
+            ),
           ),
         ),
       ),
@@ -110,7 +144,7 @@ describe("whole-state import confirmation", () => {
     if (!found) throw new Error("The file input is missing");
     input = found;
     originalFilesDescriptor = Object.getOwnPropertyDescriptor(input, "files");
-  });
+  }
 
   afterEach(() => {
     act(() => root.unmount());
@@ -145,6 +179,17 @@ describe("whole-state import confirmation", () => {
     );
   }
 
+  async function chooseUnsupported(file: File): Promise<void> {
+    selectedFiles.push(file);
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [file],
+    });
+    await act(async () => {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
   function dialogButton(name: string): HTMLButtonElement {
     const found = [
       ...document.body.querySelectorAll<HTMLButtonElement>(
@@ -155,7 +200,74 @@ describe("whole-state import confirmation", () => {
     return found;
   }
 
-  it("replaces every profile only after the whole-state import confirmation", async () => {
+  it("refuses an unconfigured file and replaces every profile after confirmation", async () => {
+    render(true);
+    expect(
+      container.querySelector("h3.profile-transfer-heading")?.textContent,
+    ).toBe(uiText("en", "Import"));
+    expect(container.querySelector(".profile-choose")?.textContent).toBe(
+      uiText("en", "Choose file"),
+    );
+    const exportButton = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === uiText("en", "Export"),
+    );
+    if (!exportButton) throw new Error("The Export button is missing");
+    expect(exportButton.getAttribute("aria-controls")).toBe(
+      "structure-profile-export-list",
+    );
+    const exportList = container.querySelector(
+      "#structure-profile-export-list",
+    );
+    if (!exportList) throw new Error("The export list is missing");
+    expect(
+      [...exportList.querySelectorAll("button")].map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["My plan", "Second", uiText("en", "All saved data")]);
+    expect(container.querySelector("#profile-export-list")).toBeNull();
+
+    act(() => root.unmount());
+    root = createRoot(container);
+
+    render();
+    const note = container.querySelector(".profile-drop-note")?.textContent;
+    expect(note).toContain("or drop a JSON profile export");
+    expect(
+      [...container.querySelectorAll("button")].some(
+        (button) =>
+          button.textContent?.trim() === uiText("en", "Copy import script"),
+      ),
+    ).toBe(false);
+
+    await chooseUnsupported(
+      new File(["%PDF-1.7"], "plan.pdf", { type: "application/pdf" }),
+    );
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(
+        uiText(
+          "en",
+          "This file is not one of this site's import formats. Use a file type listed in the import area.",
+        ),
+      ),
+    );
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    await chooseUnsupported(
+      new File(
+        [JSON.stringify({ type: "course-explorer/sisu/1", markup: "<p></p>" })],
+        "capture.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(
+        uiText(
+          "en",
+          "This file is not one of this site's import formats. Use a file type listed in the import area.",
+        ),
+      ),
+    );
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+
     await chooseFile();
     expect(reload).not.toHaveBeenCalled();
     expect(document.body.querySelector('[role="dialog"]')).toBeTruthy();
@@ -185,6 +297,7 @@ describe("whole-state import confirmation", () => {
   });
 
   it("overwrites the profile that holds the imported name after its confirmation", async () => {
+    render();
     // The imported file is one profile of a separate storage, named like the second saved profile.
     const source = createBrowserStore(sessionStorage);
     source.saveAsProfile("Second");
@@ -214,145 +327,161 @@ describe("whole-state import confirmation", () => {
     expect(saved.currentProfileId).toBe(overwritten);
   });
 
-  it.each(["pdf", "capture"] as const)(
-    "keeps a Sisu plan transient until its named confirmation",
+  it.each(["pdf", "capture", "peppi"] as const)(
+    "keeps a study plan transient until its named confirmation",
     async (source) => {
+      features = source === "peppi" ? peppiFeatures : sisuFeatures;
+      render();
       let selectedFile: File;
       let pdfRows: readonly unknown[] = [];
       let settle: () => Promise<void>;
       let expectedText: readonly string[];
       let absentText: readonly string[];
       let assertCreated: (created: Profile) => void;
+      const profileName = `${source} plan`;
+
+      const catalogue = {
+        dataset_identity: "pdf-test-dataset",
+        courses: [
+          {
+            group_id: "c-1",
+            name_fi: null,
+            name_en: "Course one",
+            code: "C-1",
+          },
+        ],
+        modules: [
+          {
+            group_id: "prog-1",
+            candidates: [
+              {
+                source_version_id: "v-prog",
+                module_type: "DegreeProgramme",
+                code: "PROG-1",
+                name_fi: null,
+                name_en: "Programme One",
+              },
+            ],
+          },
+          {
+            group_id: "mod-1",
+            candidates: [
+              {
+                source_version_id: "v-mod-1",
+                module_type: "Module",
+                code: "MOD-1",
+                name_fi: null,
+                name_en: "Module one",
+              },
+            ],
+          },
+          {
+            group_id: "mod-uncoded",
+            candidates: [
+              {
+                source_version_id: "v-uncoded",
+                module_type: "Module",
+                code: null,
+                name_fi: null,
+                name_en: "Uncoded module",
+              },
+            ],
+          },
+          {
+            group_id: "group-a",
+            candidates: [
+              {
+                source_version_id: "v-a",
+                module_type: "Module",
+                code: "GRP-A",
+                name_fi: null,
+                name_en: "Same name",
+              },
+            ],
+          },
+          {
+            group_id: "group-b",
+            candidates: [
+              {
+                source_version_id: "v-b",
+                module_type: "Module",
+                code: "GRP-B",
+                name_fi: null,
+                name_en: "Same name",
+              },
+            ],
+          },
+        ],
+      };
+      const rule = (patch: Record<string, unknown>) => ({
+        node_type: "CompositeRule",
+        sibling_position: 0,
+        require_min: null,
+        require_max: null,
+        all_mandatory: null,
+        credits_min: null,
+        credits_max: null,
+        count_min: null,
+        count_max: null,
+        referenced_group_id: null,
+        children: [],
+        course: null,
+        module: null,
+        unresolved: null,
+        ...patch,
+      });
+      const moduleNode = (
+        groupId: string,
+        name: string,
+        children: unknown[],
+      ) => ({
+        module: {
+          group_id: groupId,
+          source_version_id: `v-${groupId}`,
+          module_type: groupId === "prog-1" ? "DegreeProgramme" : "Module",
+          code: groupId.toUpperCase(),
+          name_fi: null,
+          name_en: name,
+        },
+        target_credits_min: null,
+        target_credits_max: null,
+        rule: rule({ all_mandatory: true, children }),
+      });
+      const groupA = moduleNode("group-a", "Same name", []);
+      const groupB = moduleNode("group-b", "Same name", []);
+      const mod1 = moduleNode("mod-1", "Module one", [
+        rule({
+          node_type: "CourseUnitRule",
+          course: { group_id: "c-1", name_en: "Course one", code: "C-1" },
+        }),
+        rule({ node_type: "ModuleRule", module: groupA }),
+        rule({ node_type: "ModuleRule", module: groupB }),
+      ]);
+      const programme = moduleNode("prog-1", "Programme One", [
+        rule({ node_type: "ModuleRule", module: mod1 }),
+      ]);
+      const fetchSpy = vi.fn(async (path: string) => {
+        if (path === "/api/catalogue")
+          return new Response(JSON.stringify(catalogue), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        if (path === "/api/study-structure")
+          return new Response(
+            JSON.stringify({
+              academic_year_start: 2026,
+              roots: [programme],
+              unavailable_root_group_ids: [],
+              version_selection_required: [],
+              dataset_identity: "pdf-test-dataset",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        throw new Error(`Unexpected request ${path}`);
+      });
+      vi.stubGlobal("fetch", fetchSpy);
 
       if (source === "pdf") {
-        const catalogue = {
-          dataset_identity: "pdf-test-dataset",
-          courses: [
-            {
-              group_id: "c-1",
-              name_fi: null,
-              name_en: "Course one",
-              code: "C-1",
-            },
-          ],
-          modules: [
-            {
-              group_id: "prog-1",
-              candidates: [
-                {
-                  sisu_module_id: "v-prog",
-                  module_type: "DegreeProgramme",
-                  code: "PROG-1",
-                  name_fi: null,
-                  name_en: "Programme One",
-                },
-              ],
-            },
-            {
-              group_id: "mod-1",
-              candidates: [
-                {
-                  sisu_module_id: "v-mod-1",
-                  module_type: "Module",
-                  code: "MOD-1",
-                  name_fi: null,
-                  name_en: "Module one",
-                },
-              ],
-            },
-            {
-              group_id: "group-a",
-              candidates: [
-                {
-                  sisu_module_id: "v-a",
-                  module_type: "Module",
-                  code: "GRP-A",
-                  name_fi: null,
-                  name_en: "Same name",
-                },
-              ],
-            },
-            {
-              group_id: "group-b",
-              candidates: [
-                {
-                  sisu_module_id: "v-b",
-                  module_type: "Module",
-                  code: "GRP-B",
-                  name_fi: null,
-                  name_en: "Same name",
-                },
-              ],
-            },
-          ],
-        };
-        const rule = (patch: Record<string, unknown>) => ({
-          node_type: "CompositeRule",
-          sibling_position: 0,
-          require_min: null,
-          require_max: null,
-          all_mandatory: null,
-          credits_min: null,
-          credits_max: null,
-          count_min: null,
-          count_max: null,
-          referenced_group_id: null,
-          children: [],
-          course: null,
-          module: null,
-          unresolved: null,
-          ...patch,
-        });
-        const moduleNode = (
-          groupId: string,
-          name: string,
-          children: unknown[],
-        ) => ({
-          module: {
-            group_id: groupId,
-            sisu_module_id: `v-${groupId}`,
-            module_type: groupId === "prog-1" ? "DegreeProgramme" : "Module",
-            code: groupId.toUpperCase(),
-            name_fi: null,
-            name_en: name,
-          },
-          target_credits_min: null,
-          target_credits_max: null,
-          rule: rule({ all_mandatory: true, children }),
-        });
-        const groupA = moduleNode("group-a", "Same name", []);
-        const groupB = moduleNode("group-b", "Same name", []);
-        const mod1 = moduleNode("mod-1", "Module one", [
-          rule({
-            node_type: "CourseUnitRule",
-            course: { group_id: "c-1", name_en: "Course one", code: "C-1" },
-          }),
-          rule({ node_type: "ModuleRule", module: groupA }),
-          rule({ node_type: "ModuleRule", module: groupB }),
-        ]);
-        const programme = moduleNode("prog-1", "Programme One", [
-          rule({ node_type: "ModuleRule", module: mod1 }),
-        ]);
-        const fetchSpy = vi.fn(async (path: string) => {
-          if (path === "/api/catalogue")
-            return new Response(JSON.stringify(catalogue), {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            });
-          if (path === "/api/study-structure")
-            return new Response(
-              JSON.stringify({
-                academic_year_start: 2026,
-                roots: [programme],
-                unavailable_root_group_ids: [],
-                version_selection_required: [],
-                dataset_identity: "pdf-test-dataset",
-              }),
-              { status: 200, headers: { "content-type": "application/json" } },
-            );
-          throw new Error(`Unexpected request ${path}`);
-        });
-        vi.stubGlobal("fetch", fetchSpy);
         const rows = [
           {
             kind: "module",
@@ -414,7 +543,7 @@ describe("whole-state import confirmation", () => {
         ];
         absentText = ["Choose module version"];
         assertCreated = (created) => {
-          expect(created.state.pendingSisuImport?.programmes[0]).toMatchObject({
+          expect(created.state.pendingPlanImport?.programmes[0]).toMatchObject({
             groupId: "prog-1",
             versionId: "v-prog",
           });
@@ -426,17 +555,74 @@ describe("whole-state import confirmation", () => {
             "ambiguous_official_match",
           );
         };
+      } else if (source === "peppi") {
+        const page = `<html><body>
+          <div id="header-row-div"><h2>PROG-1, Programme One</h2></div>
+          <div id="structure">
+            <section class="panel lu-container">
+              <div class="panel-heading">
+                <h4 class="study-header">
+                  <button onclick="openLearningUnitInfoModal('STUDY_MODULE', 'MOD-1', 1)">
+                    <span class="lu-name">Module one</span>
+                  </button>
+                </h4>
+              </div>
+              <div class="panel-body">
+                <table><tbody>
+                  <tr class="lu-container">
+                    <td class="table-cell-status"><span class="status-badge status-completed"></span></td>
+                    <td class="table-cell-name">
+                      <button onclick="openLearningUnitInfoModal('COURSE_UNIT', 'C-1', 1)">
+                        <span class="lu-name">Course One</span>
+                      </button>
+                    </td>
+                  </tr>
+                  <tr class="lu-container">
+                    <td class="table-cell-status"></td>
+                    <td class="table-cell-name">
+                      <button onclick="openLearningUnitInfoModal('COURSE_UNIT', 'C-UNKNOWN', 1)">
+                        <span class="lu-name">Unknown course</span>
+                      </button>
+                    </td>
+                  </tr>
+                </tbody></table>
+              </div>
+            </section>
+          </div>
+        </body></html>`;
+        selectedFile = new File([page], "tarkastelu.html", {
+          type: "text/html",
+        });
+        Object.defineProperty(selectedFile, "text", {
+          configurable: true,
+          value: async () => page,
+        });
+        settle = async () => {};
+        expectedText = [
+          uiText(
+            "en",
+            "No official match was found, so this item was left out.",
+          ),
+          "C-UNKNOWN Unknown course",
+        ];
+        absentText = ["Choose module version"];
+        assertCreated = (created) => {
+          expect(created.state.pendingPlanImport?.programmes[0]).toMatchObject({
+            groupId: "prog-1",
+            versionId: "v-prog",
+          });
+          expect(created.state.completedCourseIds).toEqual(["c-1"]);
+          expect(created.state.selectedCourseIds).not.toContain("c-unknown");
+        };
       } else {
-        // A real capture whose top programme resolves, with an uncoded module that placement
-        // resolves by name and one course whose Kori lookup returned no identity.
         const markup = `
           <plan-module>
             <span class="graduate"></span>
-            <div class="status"><span id="prog-statuscell"></span></div>
+            <div class="status"><span id="v-prog-statuscell"></span></div>
             <span ng-bind=":: $ctrl.module.code">PROG-1</span>
             <span data-cy="plan-module-name">Programme One</span>
             <plan-module>
-              <div class="status"><span id="mod-statuscell"></span></div>
+              <div class="status"><span id="v-uncoded-statuscell"></span></div>
               <span data-cy="plan-module-name">Uncoded module</span>
               <course-unit-box>
                 <span class="courseunit-code">C-UNKNOWN</span>
@@ -445,10 +631,8 @@ describe("whole-state import confirmation", () => {
             </plan-module>
           </plan-module>`;
         const capture = JSON.stringify({
-          type: "tuni-course-explorer/sisu/1",
+          type: "course-explorer/sisu/1",
           markup,
-          modules: { "prog-statuscell": ["prog-1"] },
-          courses: { "C-UNKNOWN": [] },
         });
         selectedFile = new File([capture], "sisu-plan-capture.json", {
           type: "application/json",
@@ -461,18 +645,51 @@ describe("whole-state import confirmation", () => {
         expectedText = [
           uiText(
             "en",
-            "Sisu data did not identify this item uniquely, so it was left out.",
+            "No official match was found, so this item was left out.",
           ),
           "C-UNKNOWN Unknown course",
         ];
-        absentText = ["Uncoded module"];
+        absentText = ["Uncoded module", "Choose module version"];
         assertCreated = (created) => {
-          expect(created.state.pendingSisuImport?.programmes[0]).toMatchObject({
+          expect(created.state.pendingPlanImport?.programmes[0]).toMatchObject({
             groupId: "prog-1",
-            versionId: "prog",
+            versionId: "v-prog",
           });
           expect(created.state.selectedCourseIds).toEqual([]);
         };
+      }
+
+      if (source === "peppi") {
+        const note =
+          container.querySelector(".profile-drop-note")?.textContent ?? "";
+        expect(note).toContain(uiText("en", "Peppi saved page"));
+        expect(note.indexOf(uiText("en", "Peppi capture"))).toBeGreaterThan(
+          note.indexOf(uiText("en", "Peppi saved page")),
+        );
+        expect(
+          [...container.querySelectorAll("button")].some(
+            (button) =>
+              button.textContent?.trim() === uiText("en", "Copy import script"),
+          ),
+        ).toBe(true);
+        const help = container.querySelector<HTMLButtonElement>(
+          'button.help-tip[aria-label="Explain profiles and import"]',
+        );
+        if (!help) throw new Error("The help trigger is missing");
+        act(() => help.click());
+        const drawer =
+          document.body.querySelector(".help-drawer")?.textContent ?? "";
+        expect(drawer).toContain(uiText("en", "Peppi saved page"));
+        expect(drawer).toContain(uiText("en", "Peppi capture"));
+        expect(drawer).toContain(uiText("en", "Peppi import script"));
+        const close = document.body.querySelector<HTMLButtonElement>(
+          ".help-drawer .pill-btn",
+        );
+        if (!close) throw new Error("The help close button is missing");
+        act(() => close.click());
+        await waitFor(() =>
+          expect(document.body.querySelector(".help-drawer")).toBeNull(),
+        );
       }
 
       const chooseSelected = async () => {
@@ -514,14 +731,14 @@ describe("whole-state import confirmation", () => {
         expect(document.body.querySelector('[role="dialog"]')).toBeTruthy(),
       );
       const nameInput =
-        document.body.querySelector<HTMLInputElement>("#sisu-profile-name");
+        document.body.querySelector<HTMLInputElement>("#plan-profile-name");
       if (!nameInput) throw new Error("The profile name input is missing");
       const setValue = Object.getOwnPropertyDescriptor(
         HTMLInputElement.prototype,
         "value",
       )?.set;
       act(() => {
-        setValue?.call(nameInput, "Sisu plan");
+        setValue?.call(nameInput, profileName);
         nameInput.dispatchEvent(new Event("input", { bubbles: true }));
       });
       act(() => dialogButton(uiText("en", "Import")).click());
@@ -531,7 +748,7 @@ describe("whole-state import confirmation", () => {
 
       const snapshot = store.getSnapshot();
       const created = Object.values(snapshot.profiles).find(
-        (profile) => profile.name === "Sisu plan",
+        (profile) => profile.name === profileName,
       );
       expect(created).toBeTruthy();
       if (created) assertCreated(created);

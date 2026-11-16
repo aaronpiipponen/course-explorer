@@ -72,7 +72,7 @@ const programmeReport = (
   root: {
     module: {
       group_id: id,
-      sisu_module_id: `${id}-v1`,
+      source_version_id: `${id}-v1`,
       module_type: "DegreeProgramme",
       code: id.toUpperCase(),
       name_fi: id,
@@ -235,7 +235,7 @@ describe("structure selection actions", () => {
       looseDone = summary("loose-done");
     const module = (id: string) => ({
       group_id: id,
-      sisu_module_id: `${id}-v1`,
+      source_version_id: `${id}-v1`,
       module_type: "StudyModule" as const,
       code: id,
       name_fi: id,
@@ -270,7 +270,7 @@ describe("structure selection actions", () => {
       root: {
         module: {
           group_id: "root",
-          sisu_module_id: "root-v1",
+          source_version_id: "root-v1",
           module_type: "DegreeProgramme",
           code: "ROOT",
           name_fi: "Root",
@@ -449,7 +449,7 @@ describe("structure selection actions", () => {
       cDefault = course("c-default");
     const moduleB = {
       group_id: "mod-b",
-      sisu_module_id: "mod-b-v1",
+      source_version_id: "mod-b-v1",
       module_type: "StudyModule" as const,
       code: "B",
       name_fi: "Moduuli B",
@@ -460,7 +460,7 @@ describe("structure selection actions", () => {
       root: {
         module: {
           group_id: "prog-d",
-          sisu_module_id: "prog-d-v1",
+          source_version_id: "prog-d-v1",
           module_type: "DegreeProgramme",
           code: "D",
           name_fi: "D",
@@ -570,7 +570,7 @@ describe("structure selection actions", () => {
     // Adding a module that officially holds the course moves it out of Module B as well.
     const moduleE = {
       group_id: "mod-e",
-      sisu_module_id: "mod-e-v1",
+      source_version_id: "mod-e-v1",
       module_type: "StudyModule" as const,
       code: "E",
       name_fi: "Moduuli E",
@@ -965,7 +965,7 @@ describe("structure selection actions", () => {
     const bModule: StudyStructureReport["root"] = {
       module: {
         group_id: "b-module",
-        sisu_module_id: "b-module-v1",
+        source_version_id: "b-module-v1",
         module_type: "StudyModule",
         code: "B-MODULE",
         name_fi: "B module",

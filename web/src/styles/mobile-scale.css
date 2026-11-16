@@ -378,15 +378,18 @@
     min-height: 24px;
     padding-inline: 10px;
   }
-  .phone-more-sheet .profile-transfer-toggle {
+  .phone-more-sheet .profile-transfer-toggle,
+  .structure-empty-import .profile-transfer-toggle {
     min-height: 24px;
     font-size: 12px;
   }
-  .phone-more-sheet .profile-transfer-actions .help-tip {
+  .phone-more-sheet .profile-transfer-actions .help-tip,
+  .structure-empty-import .profile-transfer-actions .help-tip {
     width: 26px;
     height: 26px;
   }
-  .phone-more-sheet .profile-export-item {
+  .phone-more-sheet .profile-export-item,
+  .structure-empty-import .profile-export-item {
     min-height: 32px;
     padding: 6px 10px;
   }

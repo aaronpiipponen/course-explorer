@@ -28,7 +28,7 @@ function version(
   periods: readonly { id: string; academic_year_start: number }[] = [],
 ) {
   return {
-    sisu_module_id: sisuModuleId,
+    source_version_id: sisuModuleId,
     module_type: moduleType,
     code,
     name_fi: names.fi ?? null,
@@ -213,7 +213,7 @@ describe("local official narrowing", () => {
       "module-ambiguous",
     ]);
     expect(
-      ambiguous[0].candidates.map((candidate) => candidate.sisu_module_id),
+      ambiguous[0].candidates.map((candidate) => candidate.source_version_id),
     ).toEqual(["ambiguous-v1", "ambiguous-v2"]);
     expect(ambiguous[0].code).toBe("AMB.1");
     // A query that matches one sibling keeps the sibling rows of the group as they are.
@@ -227,7 +227,7 @@ describe("local official narrowing", () => {
     expect(tied).toHaveLength(1);
     expect(tied[0].code).toBe("TIE.1");
     expect(
-      tied[0].candidates.map((candidate) => candidate.sisu_module_id),
+      tied[0].candidates.map((candidate) => candidate.source_version_id),
     ).toEqual(["tie-b", "tie-a"]);
     // Different candidate keys order the display fields by name and then code.
     const display = narrowModules(modules, "näyttö", "fi");

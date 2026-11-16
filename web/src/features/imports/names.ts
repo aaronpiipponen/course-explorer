@@ -1,13 +1,13 @@
 /**
- * Shared exact official-name comparison for a Sisu capture and a Sisu plan PDF.
+ * Shared exact official-name comparison for a study-plan reader and its resolve step.
  *
- * The extractor and the capture parser emit the same ligatures and whitespace runs the official
- * print and page markup carry, so both read one normalization owner here before an exact
- * Finnish-or-English name equality.
+ * The readers emit the same ligatures and whitespace runs the official print and page markup carry,
+ * so both normalize a name here before comparing it with the exact Finnish or English official
+ * name.
  */
 
 /** Normalize extraction whitespace and ligatures for an exact official name comparison. */
-export function normalizeSisuName(name: string): string {
+export function normalizeImportedName(name: string): string {
   return name
     .replaceAll("ﬁ", "fi")
     .replaceAll("ﬂ", "fl")
@@ -20,9 +20,9 @@ export function sameOfficialName(
   module: { name_fi: string | null; name_en: string | null },
   name: string,
 ): boolean {
-  const wanted = normalizeSisuName(name);
+  const wanted = normalizeImportedName(name);
   return [module.name_fi, module.name_en].some(
     (candidate) =>
-      candidate !== null && normalizeSisuName(candidate) === wanted,
+      candidate !== null && normalizeImportedName(candidate) === wanted,
   );
 }

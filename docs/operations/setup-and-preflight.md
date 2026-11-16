@@ -16,7 +16,7 @@ The **Setup/preflight** entry holds the setup operations, the copy to Working, t
 | 8 | Configuration | `uv run python scripts/admin.py config list`, `config read FILE` and `config set FILE KEY VALUE` |
 | 9 | Rebuild app | `uv run python scripts/admin.py rebuild` |
 | 10 | Administration password | `uv run python scripts/admin.py password --username USERNAME` |
-| 11 | Rebuild admin panel | `uv run python scripts/admin.py rebuild-admin` and `restart-admin` |
+| 11 | Rebuild administration console | `uv run python scripts/admin.py rebuild-admin` and `restart-admin` |
 | 12 | Set up example site | `uv run python scripts/admin.py self-host example` |
 | 13 | Set up real empty database | `uv run python scripts/admin.py self-host real-database` |
 
@@ -34,22 +34,34 @@ The worker setup and the preflight add one fixed notice when the server checkout
 
 ## The two self-host workflows
 
-Choice 12 opens the example workflow. It asks for the site's external app address with the example's address as its default, the administration username, the startup mode, the pinned-model download confirmation and the optional publication choice. It then reads the publication token at a hidden prompt when the publication choice is yes, followed by the administration password twice at the hidden prompts. A cancel, an end of input and an interrupt write nothing and run nothing.
+Choice 12 opens the example workflow. It asks for a university, the feature web, administration, database and embedding ports, the shared directory, the feature app address and the administration origin, the administration username, the startup mode, the pinned-model download confirmation and the optional publication choice.
+
+The university picker lists one option per implemented university map entry, named by its English display name. The four ports default to the values of the example files and must differ. The shared directory prompt shows the example file's `ADMIN_SHARED_ROOT` as its default, and a blank answer leaves the configured value as it is. A blank app address or administration origin takes the port-derived address.
+
+The host preflight refuses a loopback port that another process holds, except the database port or the embedding port of a container this project already runs. Stop that listener or run the entry again with another port.
+
+The workflow then reads the publication token at a hidden prompt when the publication choice is yes, followed by the administration password twice at the hidden prompts. A cancel, an end of input and an interrupt write nothing and run nothing.
 
 Choice 13 opens the real-database workflow. It asks for the database name with `course_explorer_real` as its default and for the startup mode. The default is terminal wording alone, and the workflow owner accepts the name it is given.
 
 The two machine commands read one JSON object from non-interactive standard input and take no secret flag. Fixed step names go to standard error and the one report goes to standard output.
 
 ```bash
-.venv/bin/python -c 'import getpass, json, warnings; warnings.simplefilter("error", getpass.GetPassWarning); print(json.dumps({"username":"OPERATOR","password":getpass.getpass("Administration password: "),"mode":"user","confirm_download":True}))' | uv run python scripts/admin.py self-host example
+.venv/bin/python -c 'import getpass, json, warnings; warnings.simplefilter("error", getpass.GetPassWarning); print(json.dumps({"instance_key":"example","web_port":8037,"admin_web_port":8039,"postgres_port":5433,"embedding_port":8081,"username":"OPERATOR","password":getpass.getpass("Administration password: "),"mode":"user","confirm_download":True}))' | uv run python scripts/admin.py self-host example
 printf '%s\n' '{"database_name":"course_explorer_real","mode":"foreground"}' | uv run python scripts/admin.py self-host real-database
 ```
 
 A terminal standard input refuses with guidance to the menu, so no secret is read at a visible prompt.
 
-The example workflow materializes the absent working templates, writes the supplied app address and the two generated database passwords, creates the administration account only when it is absent, checks the host, downloads the pinned model after the confirmation, builds and starts the database and embedding services, migrates and loads the example dataset, prepares the feedback application store, builds the native libraries and both frontends, starts the two backends in the chosen mode, and proves both shells and the bootstrap catalogue and identity.
+The example workflow names its checkout `course-explorer-<key>` before it writes anything. A checkout with no working file is renamed in its parent directory, its `.venv` is deleted and rebuilt, and the command prints the renamed path and returns without materializing a working file. A checkout that holds a working file or the runtime state directory `data/admin` retains its folder and prints the exact `mv` command, then continues to the workflow's own preconditions, which can refuse a populated installation. A linked worktree retains its checkout path and prints the exact `git worktree move` command instead.
 
-The host check runs the prepared `.venv/bin/python` once to require Linux CPython 3.14 or newer with `os.memfd_create`, before the model download, the container build or the frontend build. An interpreter without that capability refuses with the environment-preparation guidance and runs none of them.
+The workflow then materializes the absent working templates and writes the chosen instance key, the four ports, the feature app address and administration origin, the embedding and inference switches off, the prerequisites switch from the source family (on for Sisu and off for every other family, including the guide family), the shared directory and the two generated database passwords. It creates the administration account only when it is absent. The same PostgreSQL port is written to `POSTGRES_PORT` and `FEEDBACK_POSTGRES_PORT`.
+
+It then checks the host, downloads the pinned model after the confirmation, builds and starts the database and embedding services, migrates and loads the example dataset, prepares the feedback application store, builds the native libraries and both frontends, starts the two backends in the chosen mode, and proves both shells and the bootstrap catalogue and identity.
+
+The shared directory is resolved outside the checkout and created with its parents when absent. Its `models/` and `locks/` directories are created at mode 0700 inside it. A present directory is adopted with its other contents and permissions as they are, and setup writes no marker or inventory into it.
+
+The host check runs the prepared `.venv/bin/python` once to require Linux CPython 3.14 or newer with `os.memfd_create`, before the model download, the container build or the frontend build. An interpreter without that capability refuses with the environment-preparation guidance and runs none of them. The browser runtime is prepared in the installation step with `uv run playwright install chromium --only-shell`, and the host check has no browser item.
 
 The real-database workflow requires the working files, the running database and embedding services, every stage idle, and, in foreground mode, free feature and administration ports. It creates the named database, enrolls it as the initial Selected dataset, builds its serving artifacts, starts or restarts the site, and proves the selected catalogue and a changed identity. `POSTGRES_DB` is not edited, and the example database is left in the container.
 
@@ -84,6 +96,8 @@ A save draws one confirmation titled `Save configuration <file> key <key>?` with
 
 One save writes one key, so a file with several edits takes one save per key. The entry edits the keys the read displays, so it writes a key the chosen file already carries and appends nothing. The machine command accepts one more case: `config set` appends an absent environment alias that a settings family owns for that file as one quoted assignment that leaves every other byte as it is, and it refuses an absent subsystem-file key or an absent environment key that no settings family owns.
 
+A save of `CURRENT_ACADEMIC_YEAR` or `ACTIVE_ACADEMIC_YEAR_WINDOW` in `config/curriculum.toml` also refreshes the stored activity of every course in every present dataset role and, when no Selected dataset is enrolled, of the configured bootstrap database. Such a save is refused while any preparation stage runs.
+
 > [!CAUTION]
 > The read prints every value of the chosen file in plain text, the environment file included.
 
@@ -91,7 +105,7 @@ A saved file reaches a running process when that process next builds its setting
 
 ## The two rebuild scopes
 
-Choice 9 rebuilds the app. Choice 11 rebuilds the administration panel. The two scopes are separate, each has its own confirmation, and neither reaches the other's process or its resources.
+Choice 9 rebuilds the app. Choice 11 rebuilds the administration console. The two scopes are separate, each has its own confirmation, and neither reaches the other's process or its resources.
 
 Choice 9 builds the site frontend, recreates the database and embedding containers, restarts the site's web server and checks its bind. The machine command is `uv run python scripts/admin.py rebuild`.
 
@@ -106,11 +120,11 @@ The command runs four steps in this order, and the first failure stops it.
 
 The commands of the first three steps are bounded by `ADMIN_STOP_TIMEOUT_SECONDS`, and the bind wait by its poll count and interval. The report names the four steps and the verified bind, and it is the transient acknowledgment of the run. A failed step prints the shared safe failure and the rebuild guidance, and no further step runs. The rebuild leaves the checkout's Git state as it is, reaches no worker, and restarts only the site's own web unit.
 
-The command validates the site's own loaded web unit, running from this checkout and executing this checkout's `scripts/run_web.sh`, before its first step. `ADMIN_SITE_WEB_SERVICE_UNIT` in `config/admin_web.toml` names that unit, and `ADMIN_SITE_WEB_SERVICE_SCOPE` names the manager that owns it.
+The command holds the checkout reservation for its whole run, so it refuses before its first step while a preparation stage or a Working dataset operation holds the checkout. It validates the site's own loaded web unit, running from this checkout and executing this checkout's `scripts/run_web.sh`, before that first step. `ADMIN_SITE_WEB_SERVICE_UNIT` in `config/admin_web.toml` names that unit, and `ADMIN_SITE_WEB_SERVICE_SCOPE` names the manager that owns it.
 
 Choice 11 builds the administration frontend alone and then queues the restart of this checkout's own administration unit. The machine commands are `uv run python scripts/admin.py rebuild-admin` and `uv run python scripts/admin.py restart-admin`, and the entry runs the first and then the second.
 
-The entry asks one confirmation, `Rebuild the admin panel? This signs all operators out.`, and holds **1 Rebuild** and **0 Cancel**. The warning states the sign-out because ending that backend process ends every session it holds in memory. Only the rebuild choice runs the sequence. A cancel and any other answer run nothing and return to the calling menu, and an end of input and an interrupt run nothing and leave the whole menu with exit status 0 and 130.
+The entry asks one confirmation, `Rebuild the administration console? This signs all operators out.`, and holds **1 Rebuild** and **0 Cancel**. The warning states the sign-out because ending that backend process ends every session it holds in memory. Only the rebuild choice runs the sequence. A cancel and any other answer run nothing and return to the calling menu, and an end of input and an interrupt run nothing and leave the whole menu with exit status 0 and 130.
 
 The sequence runs two commands in this order, and a failed build stops it before the restart.
 

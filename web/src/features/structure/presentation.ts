@@ -6,6 +6,7 @@ import type {
 } from "../../api/types";
 import type { ResolvedNode, StructureNode } from "./model";
 import { localizedName } from "../../shared/course/presentation";
+import { effectiveCourseCredits } from "../../solver/credits";
 import { uiText } from "../../shared/wording";
 
 /** Return the display name of one module, falling back to its code or identity. */
@@ -62,13 +63,18 @@ export function nodeKindLabel(
 export function formatCredits(n: number): string {
   return String(Number(n.toFixed(2)));
 }
-/** Return the summed minimum credits of the courses the predicate accepts. */
+/** Return the summed effective minimum credits of the courses the predicate accepts. */
 export function sumCredits(
   courses: readonly CourseSummary[],
+  assumedCourseCredits: string,
   predicate: (course: CourseSummary) => boolean = () => true,
 ): number {
   return courses.reduce(
-    (sum, course) => sum + (predicate(course) ? Number(course.credits_min) : 0),
+    (sum, course) =>
+      sum +
+      (predicate(course)
+        ? Number(effectiveCourseCredits(course, assumedCourseCredits)) / 100
+        : 0),
     0,
   );
 }

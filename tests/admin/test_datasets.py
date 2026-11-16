@@ -121,6 +121,8 @@ def configured(
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(administration, "repository_root", lambda: tmp_path)
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(tmp_path / "shared"))
+    monkeypatch.setenv("INSTANCE_KEY", "hanken")
     monkeypatch.setattr(
         datasets_admin, "read_dataset_verification", lambda settings: sample_verification()
     )

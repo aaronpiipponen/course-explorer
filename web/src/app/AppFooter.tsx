@@ -1,17 +1,17 @@
-/** Independent-project notice, repository link and curriculum source line pinned to the bottom of the application shell. */
+/** Independent-project notice and curriculum source line pinned to the bottom of the application shell. */
 import { useLayoutEffect, useRef } from "react";
+import { useWebFeatures } from "../app/useWebFeatures";
 import { useWording } from "../shared/useWording";
 
-/** Render the application notice, repository link and curriculum source line. */
+/** Render the application notice and curriculum source line. */
 export function AppFooter({
-  repositoryUrl,
   measures = true,
 }: {
-  repositoryUrl: string;
   /** Whether this copy reports its height to the document root. Only one copy may. */
   measures?: boolean;
 }) {
-  const { t } = useWording();
+  const { language, t } = useWording();
+  const { source_attribution, university_names } = useWebFeatures();
   const footer = useRef<HTMLElement>(null);
   // The notice stack sits above the footer, so its measured height is a root variable. A hidden
   // footer measures zero and the phone rule uses its own bottom offset.
@@ -38,17 +38,13 @@ export function AppFooter({
     <footer className="app-footer" ref={footer}>
       <span className="app-footer-notice">
         {t(
-          "This is an independent project that is not affiliated with Tampere University.",
+          "This is an independent project that is not affiliated with {university}.",
+          {
+            university: university_names[language],
+          },
         )}
-      </span>{" "}
-      <a href={repositoryUrl} target="_blank" rel="noopener noreferrer">
-        {t("Source code on GitHub.")}
-      </a>
-      <div className="app-footer-source">
-        {t(
-          "Tampere University curriculum data, retrieved from Tampere University's Sisu KORI API.",
-        )}
-      </div>
+      </span>
+      <div className="app-footer-source">{source_attribution[language]}</div>
     </footer>
   );
 }

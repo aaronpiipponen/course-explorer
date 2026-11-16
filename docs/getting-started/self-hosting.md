@@ -18,23 +18,45 @@ The administration backend runs from a systemd user unit, and the site runs from
 
 The example workflow and the real-database workflow ask whether the two backends run as user units or as foreground children of the setup command.
 
-**User units** derives one prefix from the checkout directory's basename, `course-explorer-<basename>`, and appends `-web`, `-admin-web` and `-feedback-sender`. It renders the four `examples/deploy/systemd/*.in` templates into `~/.config/systemd/user/`, replacing `@CHECKOUT@`, `@UV_BIN@` and the feedback timer's paired service name. An identical rendered unit is reused, and a different file refuses. The workflow writes the two derived service names and the `user` scope into `config/admin_web.toml`, verifies the four units with `systemd-analyze --user verify`, reloads the user manager, and enables and starts the two backend services. It enables the sender timer only when publication setup was requested and the configured destination is a real repository.
+**User units** derives one prefix from the configured instance key, `course-explorer-<instance key>`, and adds `-web`, `-admin-web` and `-feedback-sender`. A checkout that the workflow renames carries the same `course-explorer-<key>` folder name, as [Cloning the checkout](/docs/getting-started/installation.md#cloning-the-checkout) states. It renders the four `examples/deploy/systemd/*.in` templates into `~/.config/systemd/user/`, replacing `@CHECKOUT@`, `@UV_BIN@` and the feedback timer's `@FEEDBACK_SERVICE@` token with its paired service name. An identical rendered unit is reused, and a different file refuses. The workflow writes the two derived service names and the `user` scope into `config/admin_web.toml`, verifies the four units with `systemd-analyze --user verify`, reloads the user manager, and enables and starts the two backend services. It enables the sender timer only when publication setup was requested and the configured destination is a real repository.
 
 The user manager starts these units at boot only with lingering enabled. The workflow prints `loginctl enable-linger USER` when the account has no lingering, and it changes no lingering policy itself.
 
 **Foreground** starts `scripts/run_web.sh` and `scripts/run_admin_web.sh` as children of the setup command with the terminal's own streams. It proves both backends, prints the Ctrl-C notice, and waits while polling those two children. Ctrl-C terminates and reaps them and returns the workflow report. A child that exits before the operator stops the pair fails the setup. The database and the embedding service continue running, and the terminal states that fact.
 
-Both modes preserve the working files and credentials. A present `config/`, `.env`, `docker-compose.yml` or `deploy/` file is preserved byte for byte, both generated database passwords live in `.env`, and a present administration account is not reset. A second example run refuses at the example database's user-table check before it imports anything.
+Both modes preserve every present working file at template materialization and then write the workflow's own instance, port, origin, switch and shared-directory keys into `config/`. Both generated database passwords live in `.env`, and a present administration account is not reset. A second example run refuses at the example database's user-table check before it imports anything.
 
 The sections below install the units by hand for a host whose names or values differ from the derived ones. The proxy, DNS and certificate are operator steps in every mode, and the workflows install no proxy.
 
-## The site web unit
+## Several instances on one server
 
-The template `examples/deploy/systemd/tuni-course-explorer-web.service.in` starts the web server through `scripts/run_web.sh`, which binds the loopback address from `config/web.toml`. Copy it into `deploy/` under the template's name without the `.in` suffix, then replace `@CHECKOUT@` with the absolute path of the checkout.
+Each checkout is one instance, and its `INSTANCE_KEY` names one university and one curriculum source. The example workflow selects one entry of `universities.toml` of the implemented source families and writes the instance key and the four loopback ports into that checkout's own subsystem files. The key derives the Compose project `course-explorer-<key>` and the user unit names `course-explorer-<key>-web.service`, `course-explorer-<key>-admin-web.service` and `course-explorer-<key>-feedback-sender.service`. It also names the folder of a checkout that the workflow renames, and a checkout that holds a working file retains its folder, as [Cloning the checkout](/docs/getting-started/installation.md#cloning-the-checkout) states. The Compose volume namespace follows the project name, so each instance owns its own database volume.
+
+An instance owns its checkout and the data directories and dataset state inside it, its Compose project, database volume, built database image, feature, administration, database and embedding ports, and its unit names. Two instances on one host choose different ports, because the port preflight refuses a port another process holds. Two instances choose different keys, because the unit installation refuses a different file at an installed unit name.
+
+The database service builds from `docker/db/Dockerfile`, and Compose names the result after the effective project and service, `<project>-db`. A build writes only that instance's image, so rebuilding one instance leaves every other instance's image as it is. Build the service before starting or recreating its container. A start without `--no-build` builds a missing image, and a recreation with `--no-build` uses the project image that exists.
+
+Each instance starts and stops independently through its own owners:
 
 ```bash
-cp examples/deploy/systemd/tuni-course-explorer-web.service.in deploy/tuni-course-explorer-web.service
-sed -i "s|@CHECKOUT@|/path/to/checkout|g" deploy/tuni-course-explorer-web.service
+systemctl --user start course-explorer-example-web.service
+systemctl --user start course-explorer-example-admin-web.service
+uv run python -m course_explorer_admin.compose -- down
+```
+
+The database and embedding services of one instance belong to its own Compose project. A stop of one instance reaches neither another instance nor its retained data.
+
+The machine-wide shared directory `ADMIN_SHARED_ROOT` lies outside every checkout. The example workflow creates or adopts it, creates its `models/` and `locks/` directories, and leaves its other contents and permissions as they are. The embedding model and the reservation files live in those directories, and a relative `EMBEDDING_ARTIFACT_PATH` resolves inside the shared directory. [Installation](/docs/getting-started/installation.md#the-instance-resources) states the key and the path rules.
+
+A stopped instance retains its checkout, volume, databases, dataset pointers and ingested data. Starting it again reads that retained state, and no other instance reads or writes it.
+
+## The site web unit
+
+The template `examples/deploy/systemd/course-explorer-web.service.in` starts the web server through `scripts/run_web.sh`, which binds the loopback address from `config/web.toml`. Copy it into `deploy/` under the installed key-derived name, then replace `@CHECKOUT@` with the absolute path of the checkout.
+
+```bash
+cp examples/deploy/systemd/course-explorer-web.service.in deploy/course-explorer-example-web.service
+sed -i "s|@CHECKOUT@|/path/to/checkout|g" deploy/course-explorer-example-web.service
 ```
 
 The unit's directives and what each one does:
@@ -54,17 +76,17 @@ Install the unit as a user unit, enable lingering so it runs without a login ses
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp deploy/tuni-course-explorer-web.service ~/.config/systemd/user/
+cp deploy/course-explorer-example-web.service ~/.config/systemd/user/
 loginctl enable-linger "$(id -un)"
 systemctl --user daemon-reload
-systemctl --user enable --now tuni-course-explorer-web.service
-systemctl --user status tuni-course-explorer-web.service
+systemctl --user enable --now course-explorer-example-web.service
+systemctl --user status course-explorer-example-web.service
 ```
 
 The status output shows `active (running)`. The service answers on the loopback host and port from `config/web.toml` on its own, before the reverse proxy is in place. The error stream goes to the journal:
 
 ```bash
-journalctl --user-unit tuni-course-explorer-web.service
+journalctl --user-unit course-explorer-example-web.service
 ```
 
 The site unit runs under the user manager or the system manager, and both start the same server from the same checkout. Both bind the loopback host and port from `config/web.toml`, so exactly one web unit runs at a time. `ADMIN_SITE_WEB_SERVICE_SCOPE` states which manager owns the installed unit.
@@ -72,7 +94,7 @@ The site unit runs under the user manager or the system manager, and both start 
 1. Stop and disable the user web unit, if the host installed one.
 
    ```bash
-   systemctl --user disable --now tuni-course-explorer-web.service
+   systemctl --user disable --now course-explorer-example-web.service
    ```
 
    The command stops the unit and removes it from the user manager's default target, so the two placements never hold the same port.
@@ -80,8 +102,8 @@ The site unit runs under the user manager or the system manager, and both start 
 2. Render the template with the checkout path.
 
    ```bash
-   cp examples/deploy/systemd/tuni-course-explorer-web.service.in deploy/tuni-course-explorer-web.service
-   sed -i "s|@CHECKOUT@|/path/to/checkout|g" deploy/tuni-course-explorer-web.service
+   cp examples/deploy/systemd/course-explorer-web.service.in deploy/course-explorer-example-web.service
+   sed -i "s|@CHECKOUT@|/path/to/checkout|g" deploy/course-explorer-example-web.service
    ```
 
    Add the three directives to the `[Service]` section, naming the ordinary account that owns the checkout, that account's own group and the account's home directory:
@@ -97,7 +119,7 @@ The site unit runs under the user manager or the system manager, and both start 
 3. Verify the rendered unit.
 
    ```bash
-   systemd-analyze verify deploy/tuni-course-explorer-web.service
+   systemd-analyze verify deploy/course-explorer-example-web.service
    ```
 
    A unit that parses and names a launcher present at its path prints no output, and a missing `ExecStart` path or an unknown directive is reported.
@@ -105,10 +127,10 @@ The site unit runs under the user manager or the system manager, and both start 
 4. Install the unit for the system manager and start it.
 
    ```bash
-   sudo install -m 0644 -o root -g root deploy/tuni-course-explorer-web.service /etc/systemd/system/tuni-course-explorer-web.service
+   sudo install -m 0644 -o root -g root deploy/course-explorer-example-web.service /etc/systemd/system/course-explorer-example-web.service
    sudo systemctl daemon-reload
-   sudo systemctl enable --now tuni-course-explorer-web.service
-   systemctl status tuni-course-explorer-web.service
+   sudo systemctl enable --now course-explorer-example-web.service
+   systemctl status course-explorer-example-web.service
    ```
 
    The installed unit file is root-owned and readable, the system manager reloads it, and the server starts and is enabled for the next boot. The status output shows `active (running)`, and the server answers on the loopback host and port from `config/web.toml` before the reverse proxy is in place.
@@ -118,18 +140,18 @@ The site unit runs under the user manager or the system manager, and both start 
    The app rebuild restarts the web unit with exactly `sudo -n /usr/bin/systemctl restart <unit>`. Create the sudoers file with owner-only access, then write one passwordless grant line into it for the account that owns the checkout:
 
    ```bash
-   install -m 600 /dev/null deploy/tuni-course-explorer-web.sudoers
+   install -m 600 /dev/null deploy/course-explorer-example-web.sudoers
    ```
 
    ```text
-   OPERATOR_ACCOUNT ALL=(root) NOPASSWD: /usr/bin/systemctl restart tuni-course-explorer-web.service
+   OPERATOR_ACCOUNT ALL=(root) NOPASSWD: /usr/bin/systemctl restart course-explorer-example-web.service
    ```
 
    Validate the line and install the file with the sudoers mode:
 
    ```bash
-   sudo visudo -cf deploy/tuni-course-explorer-web.sudoers
-   sudo install -m 0440 -o root -g root deploy/tuni-course-explorer-web.sudoers /etc/sudoers.d/tuni-course-explorer-web
+   sudo visudo -cf deploy/course-explorer-example-web.sudoers
+   sudo install -m 0440 -o root -g root deploy/course-explorer-example-web.sudoers /etc/sudoers.d/course-explorer-example-web
    ```
 
    The check reports `<file>: parsed OK` for a line that parses, and the installed file is root-owned with mode 0440. The file name carries no dot, because the sudoers directory skips a file whose name contains one. The line grants that one restart command, which is the only elevation the app rebuild runs for the web unit.
@@ -137,9 +159,9 @@ The site unit runs under the user manager or the system manager, and both start 
 6. Set the three site keys in `config/admin_web.toml` with the system scope.
 
    ```toml
-   ADMIN_SITE_WEB_SERVICE_UNIT = "tuni-course-explorer-web.service"
+   ADMIN_SITE_WEB_SERVICE_UNIT = "course-explorer-example-web.service"
    ADMIN_SITE_WEB_SERVICE_SCOPE = "system"
-   ADMIN_SITE_ADMIN_SERVICE_UNIT = "tuni-course-explorer-admin-web.service"
+   ADMIN_SITE_ADMIN_SERVICE_UNIT = "course-explorer-example-admin-web.service"
    ```
 
    The status report and the app rebuild read the web unit from the system manager. The administration unit is always a user unit under the user manager.
@@ -147,9 +169,9 @@ The site unit runs under the user manager or the system manager, and both start 
 7. Check the unit and the administration read.
 
    ```bash
-   systemctl is-active tuni-course-explorer-web.service
-   systemctl is-enabled tuni-course-explorer-web.service
-   systemctl show tuni-course-explorer-web.service -p LoadState -p WorkingDirectory -p ExecStart
+   systemctl is-active course-explorer-example-web.service
+   systemctl is-enabled course-explorer-example-web.service
+   systemctl show course-explorer-example-web.service -p LoadState -p WorkingDirectory -p ExecStart
    uv run python scripts/admin.py server status
    ```
 
@@ -158,21 +180,21 @@ The site unit runs under the user manager or the system manager, and both start 
    An account that may read the system journal reads the unit's error stream with:
 
    ```bash
-   journalctl -u tuni-course-explorer-web.service
+   journalctl -u course-explorer-example-web.service
    ```
 
 A host that confines the checkout with its own security policy needs that policy to admit the checkout path before the server starts.
 
 ## The administration unit
 
-The template `examples/deploy/systemd/tuni-course-explorer-admin-web.service.in` starts the administration backend through `scripts/run_admin_web.sh`. Render it into the user unit directory, replacing `@CHECKOUT@` with the checkout path and `@UV_BIN@` with the directory that holds the `uv` executable:
+The template `examples/deploy/systemd/course-explorer-admin-web.service.in` starts the administration backend through `scripts/run_admin_web.sh`. Render it into the user unit directory, replacing `@CHECKOUT@` with the checkout path and `@UV_BIN@` with the directory that holds the `uv` executable:
 
 ```bash
 sed -e "s|@CHECKOUT@|/path/to/checkout|g" \
   -e "s|@UV_BIN@|/path/to/uv/bin|g" \
-  examples/deploy/systemd/tuni-course-explorer-admin-web.service.in \
-  > ~/.config/systemd/user/tuni-course-explorer-admin-web.service
-systemd-analyze --user verify ~/.config/systemd/user/tuni-course-explorer-admin-web.service
+  examples/deploy/systemd/course-explorer-admin-web.service.in \
+  > ~/.config/systemd/user/course-explorer-example-admin-web.service
+systemd-analyze --user verify ~/.config/systemd/user/course-explorer-example-admin-web.service
 ```
 
 The unit's directives and what each one does:
@@ -194,45 +216,46 @@ Enable and start the unit after reloading the user manager:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now tuni-course-explorer-admin-web.service
-systemctl --user status tuni-course-explorer-admin-web.service
+systemctl --user enable --now course-explorer-example-admin-web.service
+systemctl --user status course-explorer-example-admin-web.service
 ```
 
 The status output shows `active (running)`. The backend answers the built console shell on the loopback host and port from `config/admin_web.toml` for a request whose `Host` header carries the host and port of `ADMIN_WEB_ORIGIN`. The error stream goes to the journal:
 
 ```bash
-journalctl --user-unit tuni-course-explorer-admin-web.service
+journalctl --user-unit course-explorer-example-admin-web.service
 ```
 
 ## The feedback sender unit
 
-The templates `examples/deploy/systemd/tuni-course-explorer-feedback-sender.service.in` and `tuni-course-explorer-feedback-sender.timer.in` run one bounded publication attempt. The user-mode workflow renders both with the checkout's derived unit names and enables the timer only for explicit publication setup whose configured destination is a real repository. The commands below render the templates under their tracked basenames for a manual installation. Render both into the user unit directory, replacing `@CHECKOUT@` in the service with the checkout path:
+The templates `examples/deploy/systemd/course-explorer-feedback-sender.service.in` and `course-explorer-feedback-sender.timer.in` run one bounded publication attempt. The user-mode workflow renders both with the configured instance key's derived unit names and enables the timer only for explicit publication setup whose configured destination is a real repository. The commands below render the templates under their key-derived installed names for a manual installation. Render both into the user unit directory, replacing `@CHECKOUT@` in the service with the checkout path and `@FEEDBACK_SERVICE@` in the timer with the installed service name:
 
 ```bash
 sed "s|@CHECKOUT@|/path/to/checkout|g" \
-  examples/deploy/systemd/tuni-course-explorer-feedback-sender.service.in \
-  > ~/.config/systemd/user/tuni-course-explorer-feedback-sender.service
-cp examples/deploy/systemd/tuni-course-explorer-feedback-sender.timer.in \
-  ~/.config/systemd/user/tuni-course-explorer-feedback-sender.timer
+  examples/deploy/systemd/course-explorer-feedback-sender.service.in \
+  > ~/.config/systemd/user/course-explorer-example-feedback-sender.service
+sed "s|@FEEDBACK_SERVICE@|course-explorer-example-feedback-sender.service|g" \
+  examples/deploy/systemd/course-explorer-feedback-sender.timer.in \
+  > ~/.config/systemd/user/course-explorer-example-feedback-sender.timer
 systemd-analyze --user verify \
-  ~/.config/systemd/user/tuni-course-explorer-feedback-sender.service \
-  ~/.config/systemd/user/tuni-course-explorer-feedback-sender.timer
+  ~/.config/systemd/user/course-explorer-example-feedback-sender.service \
+  ~/.config/systemd/user/course-explorer-example-feedback-sender.timer
 ```
 
 The service is a one-shot activation that runs `scripts/run_feedback_sender.sh`, and the timer starts it after boot and after each completed activation. Enable only the timer:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now tuni-course-explorer-feedback-sender.timer
-systemctl --user status tuni-course-explorer-feedback-sender.timer
+systemctl --user enable --now course-explorer-example-feedback-sender.timer
+systemctl --user status course-explorer-example-feedback-sender.timer
 ```
 
 The status output shows `active (waiting)`. The service sends its content-safe failure lines to the journal, and the feedback record and its administration view own the publication outcome, identity and link:
 
 ```bash
-systemctl --user start tuni-course-explorer-feedback-sender.service
-journalctl --user-unit tuni-course-explorer-feedback-sender.service
-systemctl --user disable --now tuni-course-explorer-feedback-sender.timer
+systemctl --user start course-explorer-example-feedback-sender.service
+journalctl --user-unit course-explorer-example-feedback-sender.service
+systemctl --user disable --now course-explorer-example-feedback-sender.timer
 ```
 
 The sender reads `FEEDBACK_GITHUB_TOKEN` from the environment file and the destination, visibility and timeout from `config/feedback.toml`. The feedback application store must exist at the configured connection and carry the feedback chain at its head:
@@ -245,7 +268,7 @@ The example workflow creates the feedback role, its database and the attachment 
 
 ## The deployment runner
 
-A push to the main branch of `aaronpiipponen/tuni-course-explorer` deploys this checkout from a self-hosted GitHub Actions runner. The workflow's deploy job runs only in that repository and only after the verification job succeeds, and it selects a runner that carries the labels `self-hosted`, `linux`, `ARM64` and `tuni-deploy`. It deploys only when its own checkout is on main, holds no uncommitted or untracked change, and is at the commit the verification job tested. A checkout that fails one of those conditions prints a `not deployed` line naming the reason and exits with status 0. The template `deploy/systemd/course-explorer-actions-runner.service.in` starts the runner from its own directory, sets its home directory and executable search path, gives the files it writes owner-only access, starts it again after a failure, and permits the passwordless restart of the feature web unit that the deployment runs.
+A push to the main branch of `aaronpiipponen/course-explorer` deploys this checkout from a self-hosted GitHub Actions runner. The workflow's deploy job runs only in that repository and only after the verification job succeeds, and it selects a runner that carries the labels `self-hosted`, `linux`, `ARM64` and `course-explorer-deploy`. It deploys only when its own checkout is on main, holds no uncommitted or untracked change, and is at the commit the verification job tested. A checkout that fails one of those conditions prints a `not deployed` line naming the reason and exits with status 0. The template `deploy/systemd/course-explorer-actions-runner.service.in` starts the runner from its own directory, sets its home directory and executable search path, gives the files it writes owner-only access, starts it again after a failure, and permits the passwordless restart of the feature web unit that the deployment runs.
 
 Render the template with the runner directory and the account's home directory, verify it, then install and start it under the user manager:
 
@@ -259,7 +282,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now course-explorer-actions-runner.service
 ```
 
-The unit runs `/path/to/actions-runner/run.sh`, so register that runner with the repository, the name `tuni-deploy` and those four labels before the first start. `deploy/deploy.sh` restarts the feature web unit with `sudo -n /usr/bin/systemctl restart` and the administration unit with `systemctl --user restart`, so the deployment host installs the feature web unit under the system manager and the administration unit under the user manager of the account that runs the runner. That account needs the passwordless restart grant that [the system installation](#the-site-web-unit) writes. The user manager starts the runner at boot only with lingering enabled, as [the two startup modes](#the-two-startup-modes) states.
+The unit runs `/path/to/actions-runner/run.sh`, so register that runner with the repository, the name `course-explorer-deploy` and those four labels before the first start. `deploy/deploy.sh` restarts the feature web unit with `sudo -n /usr/bin/systemctl restart` and the administration unit with `systemctl --user restart`, so the deployment host installs the feature web unit under the system manager and the administration unit under the user manager of the account that runs the runner. That account needs the passwordless restart grant that [the system installation](#the-site-web-unit) writes. The user manager starts the runner at boot only with lingering enabled, as [the two startup modes](#the-two-startup-modes) states.
 
 `deploy/deploy.sh` sources the values in `deploy/serving.conf` beside it. Copy the tracked example and set the unit names and loopback ports this host uses:
 
@@ -274,16 +297,16 @@ cp examples/deploy/serving.conf deploy/serving.conf
 | `DEPLOY_ADMIN_UNIT` | The systemd user unit of the administration backend |
 | `DEPLOY_ADMIN_PORT` | The loopback port the administration backend binds |
 
-The example file names `tuni-course-explorer-web.service` on port 8037 and `tuni-course-explorer-admin-web.service` on port 8039, the example values of `WEB_PORT` and `ADMIN_WEB_PORT`.
+The example file names `course-explorer-example-web.service` on port 8037 and `course-explorer-example-admin-web.service` on port 8039, the example values of `WEB_PORT` and `ADMIN_WEB_PORT`.
 
 ## The site unit identities
 
 The administration Dashboard reports the site's web unit, while the administration build and restart validate the administration unit. The runtime `config/admin_web.toml`, copied from its tracked `examples/config/` counterpart, names both and states the manager of the web unit, and the administration command reads all three values:
 
 ```toml
-ADMIN_SITE_WEB_SERVICE_UNIT = "course-explorer-checkout-web.service"
+ADMIN_SITE_WEB_SERVICE_UNIT = "course-explorer-example-web.service"
 ADMIN_SITE_WEB_SERVICE_SCOPE = "user"
-ADMIN_SITE_ADMIN_SERVICE_UNIT = "course-explorer-checkout-admin-web.service"
+ADMIN_SITE_ADMIN_SERVICE_UNIT = "course-explorer-example-admin-web.service"
 ```
 
 The user-mode workflow writes the two derived service names and the `user` scope into this file. The manual unit installation above writes the names it installs. The values are the unit names installed on this host. `ADMIN_SITE_WEB_SERVICE_SCOPE` names the manager that owns the web unit, either `user` or `system`, and the example sets `user`. The scope applies to the web unit alone, and the administration unit always belongs to the user manager.
@@ -300,6 +323,9 @@ The status report and the app rebuild read the web unit from the manager the sco
 | `WEB_PORT` | `8037` | The port the server binds, and the port the reverse proxy targets. |
 | `WEB_EMBEDDINGS_ENABLED` | `true` | Whether the site serves semantic matching, comparison and the recommended courses, and mounts their controls. It also decides which artifacts the build writes and the supervisor opens, as [Serving artifact build](/docs/backend/text-and-vectors/serving-artifact-build.md#the-embedding-switch) states. |
 | `WEB_INFERENCE_ENABLED` | `true` | Whether the site serves inferred prerequisites and mounts the controls and marks that describe them. Inference has no serving artifact and no coverage gate. |
+| `WEB_PREREQUISITES_ENABLED` | `true` | Whether the site serves the prerequisite graph and Next courses and mounts their tabs and controls. Discover is absent when the embeddings switch is also off. |
+
+The example files set all three switches to `true`. The example workflow writes the embedding and inference switches to `false` into a checkout it prepares, and it writes the prerequisites switch from the source family: on for Sisu and off for every other family, including the guide family. The example load imports the fixture's bundled vectors, and the operator turns a switch on when a site's data and serving artifacts exist.
 
 The same file holds the bind address, the worker process count, the malloc arenas and the two respawn bounds, and [Configuration](/docs/backend/configuration.md#subsystem-keys) states every key of the administration file, and [Prerequisite graph](/docs/backend/prerequisites/prerequisite-graph.md) states the drawing limit that the same file sets.
 
@@ -349,7 +375,7 @@ npm --prefix admin-web ci --engine-strict --no-audit --no-fund
 npm --prefix admin-web run build
 ```
 
-The build writes `admin-web/dist`, which the backend serves from the checkout on each request. A change to the backend's own code or settings reaches the administration site when its unit starts again. The console's **Rebuild admin panel** action runs the build and then queues a restart of its own unit, which ends every signed-in session.
+The build writes `admin-web/dist`, which the backend serves from the checkout on each request. A change to the backend's own code or settings reaches the administration site when its unit starts again. The console's **Rebuild administration console** action runs the build and then queues a restart of its own unit, which ends every signed-in session.
 
 ## HTTPS with a reverse proxy
 
@@ -435,12 +461,15 @@ The administration backend binds loopback alone, so a direct request to its port
 
 ## The services and the served site
 
-The database and the embedding service run from `docker-compose.yml` at the checkout root, and each declares `restart: unless-stopped`. Docker starts them again after a host reboot unless an operator stopped them. Start and inspect them through the Compose wrapper:
+The database and the embedding service run from `docker-compose.yml` at the checkout root, and each declares `restart: unless-stopped`. Docker starts them again after a host reboot unless an operator stopped them. The database service image builds from `docker/db/Dockerfile` and carries the serving extension, so build it before the first start and after a change to that Dockerfile or the extension sources. Start and inspect them through the Compose wrapper:
 
 ```bash
+uv run python -m course_explorer_admin.compose -- build db
 uv run python -m course_explorer_admin.compose -- up -d --wait db embedding
 uv run python -m course_explorer_admin.compose -- ps
 ```
+
+The example Compose file takes its project name from `COURSE_EXPLORER_PROJECT_NAME`, which the wrapper derives as `course-explorer-<instance key>`. With the example key `example`, the example configuration's project is `course-explorer-example`.
 
 The Compose file publishes the database port on `127.0.0.1` alone, at the value of `POSTGRES_PORT` in `config/database.toml`, so the database answers the host and not the network. The embedding service listens on the loopback port from `config/search.toml`, and the web server reaches it for the query embedding of a semantic search. The front router holds the admission counters, tickets and graph costs in its own process memory, so admission needs no service or socket.
 
@@ -468,9 +497,10 @@ Run every command from the checkout root.
    uv sync --locked --no-managed-python
    npm --prefix web ci --engine-strict --no-audit --no-fund
    npm --prefix admin-web ci --engine-strict --no-audit --no-fund
+   uv run playwright install chromium --only-shell
    ```
 
-   The `--no-managed-python` flag stops uv from downloading an interpreter in place of the host interpreter that the installation's environment step selects. That interpreter must expose `os.memfd_create`, and the example workflow's host check refuses one that does not.
+   The `--no-managed-python` flag stops uv from downloading an interpreter in place of the host interpreter that the installation's environment step selects. That interpreter must expose `os.memfd_create`, and the example workflow's host check refuses one that does not. The Playwright command prepares the shared Chromium cache once per machine, and a guide ingestion with the `headless_browser` fetch variant needs that browser.
 
 3. Apply the schema migrations.
 
@@ -495,10 +525,10 @@ Run every command from the checkout root.
 5. Restart the units.
 
    ```bash
-   systemctl --user restart tuni-course-explorer-web.service
-   systemctl --user restart tuni-course-explorer-admin-web.service
+   systemctl --user restart course-explorer-example-web.service
+   systemctl --user restart course-explorer-example-admin-web.service
    ```
 
-   A web unit that the system manager owns restarts with `sudo systemctl restart tuni-course-explorer-web.service` in place of the first command, and the administration unit always restarts through the user manager. A completed serving-artifact build and a Selected pointer change both reach the site through the supervisor restart that [Operations](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) states. The site service starts again and reads the updated code, the rebuilt browser app, the subsystem files and the current artifact build, and [Serving state](/docs/backend/interfaces/serving-state.md) and [Web supervisor](/docs/backend/interfaces/web-supervisor.md#startup-and-validation) state what the supervisor resolves and opens before it forks its workers. A restart is also what makes an in-place change to the served data visible to the browser. The administration service starts again and reads its own code and settings.
+   A web unit that the system manager owns restarts with `sudo systemctl restart course-explorer-example-web.service` in place of the first command, and the administration unit always restarts through the user manager. A completed serving-artifact build and a Selected pointer change both reach the site through the supervisor restart that [Operations](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) states. The site service starts again and reads the updated code, the rebuilt browser app, the subsystem files and the current artifact build, and [Serving state](/docs/backend/interfaces/serving-state.md) and [Web supervisor](/docs/backend/interfaces/web-supervisor.md#startup-and-validation) state what the supervisor resolves and opens before it forks its workers. A restart is also what makes an in-place change to the served data visible to the browser. The administration service starts again and reads its own code and settings.
 
-Copy the templates into their working paths again after a change to a tracked file under `examples/`. `docker-compose.yml` at the checkout root and the files under `config/` are working copies, and Git ignores them. [Getting started](/docs/getting-started/README.md) describes the two ways to load and refresh the data behind a served copy.
+Copy the templates into their working paths again after a change to a tracked file under `examples/`. `docker-compose.yml` at the checkout root and the files under `config/` are working copies, and Git ignores them. A rebuilt database image reaches the database container when that container is recreated, so run `uv run python -m course_explorer_admin.compose -- build db` before the recreation when `docker/db/Dockerfile` or its extension source changed. [Getting started](/docs/getting-started/README.md) describes the two ways to load and refresh the data behind a served copy.

@@ -31,6 +31,7 @@ from course_explorer.config import (
     LocalLifecycleSettings,
     NormalizationSettings,
     SearchSettings,
+    SharedStorageSettings,
     TranslationControllerSettings,
     TranslationSettings,
     WebSettings,
@@ -57,7 +58,8 @@ def _keys(settings_type: type[BaseSettings]) -> dict[str, str]:
     """Project the composed public mapping by one settings class's required/aliased fields.
 
     Fields with no validation alias and a default are code-owned defaults, not missing public
-    config, so they are omitted rather than looked up in the composed environment.
+    config, so they are omitted rather than looked up in the composed environment. An optional
+    aliased field that the composed environment omits is omitted too.
     """
     environment = public_environment()
     values: dict[str, str] = {}
@@ -66,6 +68,8 @@ def _keys(settings_type: type[BaseSettings]) -> dict[str, str]:
             continue
         alias = field.validation_alias
         alias = alias if isinstance(alias, str) else name
+        if alias not in environment and not field.is_required():
+            continue
         values[alias] = environment[alias]
     return values
 
@@ -85,6 +89,7 @@ NORMALIZATION_KEYS = _keys(NormalizationSettings)
 EMBEDDING_KEYS = _keys(EmbeddingRuntimeSettings)
 LOCAL_LIFECYCLE_KEYS = _keys(LocalLifecycleSettings)
 SEARCH_KEYS = _keys(SearchSettings)
+SHARED_STORAGE_KEYS = _keys(SharedStorageSettings)
 TRANSLATION_KEYS = _keys(TranslationSettings)
 WORKER_CONNECTION_KEYS = _keys(WorkerConnectionSettings)
 WORKER_SETUP_KEYS = _keys(WorkerSetupSettings)
@@ -134,6 +139,7 @@ FIXTURE_VALUES: dict[str, str] = {
     **NORMALIZATION_KEYS,
     **EMBEDDING_KEYS,
     **SEARCH_KEYS,
+    **SHARED_STORAGE_KEYS,
     **TRANSLATION_KEYS,
     **TRANSLATION_CONTROLLER_KEYS,
     **WORKER_SETUP_KEYS,

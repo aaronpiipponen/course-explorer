@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from course_explorer.administration import administrative_json, atomic_write_private_text
-from course_explorer.config import load_administrative_dataset_settings, load_translation_settings
+from course_explorer.config import load_administrative_dataset_settings
 from course_explorer.datasets import DatabaseSnapshot, DatasetReceipt
 from course_explorer.teaching_text.service import TranslationImportReport
 from course_explorer_admin import remote, worker_session
@@ -27,6 +27,7 @@ from course_explorer_admin.translation.controller import (
     TranslationControllerImportReceipt,
     TranslationControllerPolicy,
     load_translation_controller_import_receipt,
+    translation_configuration_sha256,
 )
 from tests.admin.translation import _worker_support
 from tests.config._support import ADMIN_DATASET_KEYS
@@ -59,8 +60,9 @@ class RecordingRepository:
 
     instances: list[RecordingRepository] = []
 
-    def __init__(self, factory: object) -> None:
+    def __init__(self, factory: object, *, university: object = None) -> None:
         self.factory = factory
+        self.university = university
         self.calls: list[tuple[object, ...]] = []
         RecordingRepository.instances.append(self)
 
@@ -108,14 +110,14 @@ def canonical_session() -> WorkerDatasetSession:
     )
 
 
-def write_policy(directory: Path, model: str) -> None:
+def write_policy(directory: Path, configuration: str) -> None:
     atomic_write_private_text(
         directory / "policy.json",
         administrative_json(
             TranslationControllerPolicy(
-                schema_version=2,
+                schema_version=3,
                 session_id=SESSION_ID,
-                translation_model=model,
+                configuration_sha256=configuration,
             )
         ),
     )
@@ -130,7 +132,7 @@ def seed_canonical(
     directory = worker_dataset_session_directory(SESSION_ID)
     directory.mkdir(mode=0o700, parents=True)
     atomic_write_private_text(directory / "session.json", administrative_json(session))
-    write_policy(directory, load_translation_settings().provenance_model)
+    write_policy(directory, translation_configuration_sha256())
     return directory, session
 
 
@@ -174,13 +176,13 @@ def test_canonical_prepare_reuses_full_restore_and_preserves_partial_evidence(
     assert (directory / "control.json").read_bytes() == control_before
     assert (directory / "state.json").read_bytes() == state_before
 
-    write_policy(directory, "foreign-model")
+    write_policy(directory, "f" * 64)
     with pytest.raises(ValueError):
         worker_session.prepare_worker_session(
             worker_module.TranslationWorkerStage(), session, runner=_worker_support.FakeRunner()
         )
     assert restore_calls == [session]
-    write_policy(directory, load_translation_settings().provenance_model)
+    write_policy(directory, translation_configuration_sha256())
 
     (directory / "state.json").unlink()
     with pytest.raises(ValueError):

@@ -10,6 +10,8 @@ from sqlalchemy import Engine, MetaData, Table, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from course_explorer.config import load_raw_database_settings
+from course_explorer.constants import COURSE_EMBEDDING_DIMENSION
+from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.datasets import require_database_schema
 from course_explorer.db.models import (
     Base,
@@ -28,11 +30,16 @@ from course_explorer.db.session import create_session_factory, session_scope
 from course_explorer.enums import (
     IngestionRunStatus,
     ModuleRuleType,
+    OfficialTextField,
     SourceObjectType,
+    TeachingTextField,
 )
 from course_explorer.inference.evidence_repository import InferenceEvidenceRepository
 from course_explorer.inference.proposal_repository import InferenceProposalRepository
 from course_explorer.inference.scheduling_repository import InferenceSchedulingRepository
+from course_explorer.instance import UNIVERSITIES
+from course_explorer.teaching_text.repository import DerivedTranslationRepository
+from course_explorer.teaching_text.service import teaching_text_sha256
 from tests.conftest import alembic_config
 from tests.db._schema_support import constraint_name
 from tests.db._schema_support import integrity_records as integrity_records
@@ -140,10 +147,10 @@ def test_shared_migration_chain_builds_fresh_head_schema() -> None:
     with scratch_database("course_chain") as engine:
         with engine.connect() as connection:
             command.upgrade(alembic_config(connection), "head")
-            assert require_database_schema(connection) == "20261103_0023"
+            assert require_database_schema(connection) == "20261109_0026"
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20261103_0023"
+                == "20261109_0026"
             )
             assert set(inspect(connection).get_table_names()) == set(Base.metadata.tables) | {
                 "alembic_version"
@@ -158,6 +165,528 @@ def test_shared_migration_chain_builds_fresh_head_schema() -> None:
                 for check in inspect(connection).get_check_constraints("inference_model_attempts")
             }
             assert "ck_inference_model_attempts_lifecycle_consistent" not in attempt_checks
+
+
+def test_official_text_migration_preserves_cells_and_preparation() -> None:
+    """Revision 0025 copies every exact official cell and leaves preparation rows untouched."""
+    group_id = "multilingual-mig-course"
+    module_group_id = "multilingual-mig-module"
+    run_id, course_snapshot_id, module_snapshot_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    course_id, course_version_id = uuid.uuid4(), uuid.uuid4()
+    module_id, module_version_id = uuid.uuid4(), uuid.uuid4()
+
+    course_texts = {
+        "name": {"fi": "Kurssi Ä", "en": "Kurssi Ä"},
+        "content": {"fi": "Sisältö  ", "en": "  spaced  "},
+        "outcomes": {"fi": "", "en": "Outcome"},
+        "prerequisite_text": {"fi": "Esitieto", "en": "Esitieto"},
+        "additional_info": {"fi": "Lisätieto"},
+    }
+    module_names = {"fi": "Moduuli", "en": "Moduuli"}
+
+    with scratch_database("course_multilingual") as engine:
+        with engine.connect() as connection:
+            command.upgrade(alembic_config(connection), "20261106_0024")
+
+            def table(table_name: str) -> Table:
+                return Table(table_name, MetaData(), autoload_with=connection)
+
+            def insert(table_name: str, **values: object) -> None:
+                connection.execute(table(table_name).insert().values(**values))
+
+            insert(
+                "ingestion_runs",
+                id=run_id,
+                status=IngestionRunStatus.COMPLETED.value,
+                raw_root_path="data/raw/multilingual",
+                manifest_path="data/raw/multilingual/manifest.json",
+            )
+            insert(
+                "source_snapshots",
+                id=course_snapshot_id,
+                ingestion_run_id=run_id,
+                object_type=SourceObjectType.COURSE_UNIT.value,
+                source_object_id="multilingual-course-v1",
+                source_group_id=group_id,
+                response_path="responses/multilingual-course.json.gz",
+                response_item_index=0,
+                source_hash="c" * 64,
+            )
+            insert(
+                "source_snapshots",
+                id=module_snapshot_id,
+                ingestion_run_id=run_id,
+                object_type=SourceObjectType.MODULE.value,
+                source_object_id="multilingual-module-v1",
+                source_group_id=module_group_id,
+                response_path="responses/multilingual-module.json.gz",
+                response_item_index=0,
+                source_hash="d" * 64,
+            )
+            insert(
+                "courses",
+                id=course_id,
+                group_id=group_id,
+                is_active=True,
+                activity_as_of_academic_year_start=2026,
+                activity_window_years=3,
+            )
+            insert(
+                "course_versions",
+                id=course_version_id,
+                course_id=course_id,
+                source_version_id="multilingual-course-v1",
+                code="MIG.1",
+                name_fi=course_texts["name"]["fi"],
+                name_en=course_texts["name"]["en"],
+                credits_min=5,
+                credits_max=5,
+                official_url="https://example.test/multilingual",
+                document_state="ACTIVE",
+                source_snapshot_id=course_snapshot_id,
+            )
+            insert(
+                "course_texts",
+                course_version_id=course_version_id,
+                content_fi=course_texts["content"]["fi"],
+                content_en=course_texts["content"]["en"],
+                outcomes_fi=course_texts["outcomes"]["fi"],
+                outcomes_en=course_texts["outcomes"]["en"],
+                prerequisite_text_fi=course_texts["prerequisite_text"]["fi"],
+                prerequisite_text_en=course_texts["prerequisite_text"]["en"],
+                additional_info_fi=course_texts["additional_info"]["fi"],
+            )
+            insert(
+                "modules",
+                id=module_id,
+                group_id=module_group_id,
+            )
+            insert(
+                "module_versions",
+                id=module_version_id,
+                module_id=module_id,
+                source_version_id="multilingual-module-v1",
+                module_type="StudyModule",
+                name_fi=module_names["fi"],
+                name_en=module_names["en"],
+                document_state="ACTIVE",
+                source_snapshot_id=module_snapshot_id,
+            )
+            insert(
+                "derived_course_texts",
+                id=uuid.uuid4(),
+                course_version_id=course_version_id,
+                field="content",
+                language="en",
+                text="Käännös",
+                source_language="fi",
+                source_text_hash="a" * 64,
+                translation_method="manual",
+                generated_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+            )
+            insert(
+                "inference_course_processing",
+                course_id=course_id,
+                teaching_text_sha256="b" * 64,
+                processed=False,
+                was_active=True,
+                generation_attempt_count=2,
+                disposition="done",
+            )
+            connection.commit()
+
+            command.upgrade(alembic_config(connection), "head")
+            assert require_database_schema(connection) == "20261109_0026"
+            connection.commit()
+
+            factory = create_session_factory(engine)
+            repository = CurriculumRepository(factory, university=UNIVERSITIES["example"])
+            course = next(
+                item for item in repository.get_courses((group_id,)) if item.group_id == group_id
+            )
+            assert course.representative is not None
+            assert course.representative.source_hash == "c" * 64
+            assert course.representative.texts == {
+                OfficialTextField.NAME: course_texts["name"],
+                OfficialTextField.CONTENT: course_texts["content"],
+                OfficialTextField.OUTCOMES: course_texts["outcomes"],
+                OfficialTextField.PREREQUISITE_TEXT: course_texts["prerequisite_text"],
+                OfficialTextField.ADDITIONAL_INFO: course_texts["additional_info"],
+            }
+            module = next(
+                item
+                for item in repository.get_modules((module_group_id,))
+                if item.group_id == module_group_id
+            )
+            assert module.versions[0].names == module_names
+
+            translations = DerivedTranslationRepository(factory).list_for_course_versions(
+                ("multilingual-course-v1",)
+            )
+            assert [
+                (row.field, row.language, row.text, row.source_text_hash) for row in translations
+            ] == [(TeachingTextField.CONTENT, "en", "Käännös", "a" * 64)]
+            markers = {
+                record.group_id: record
+                for record in InferenceSchedulingRepository(factory).read_processing()
+            }
+            marker = markers[group_id]
+            assert marker.teaching_text_sha256 == "b" * 64
+            assert marker.processed is False
+            assert marker.disposition == "done"
+
+            with pytest.raises(RuntimeError):
+                command.downgrade(alembic_config(connection), "20261106_0024")
+            connection.rollback()
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20261109_0026"
+            )
+            assert repository.get_courses((group_id,))[0].representative is not None
+
+
+def test_preparation_language_migration_preserves_derived_vectors_and_processing() -> None:
+    """Revision 0026 preserves derived rows, vectors and processing state. Arbitrary canonical codes
+    then persist through the widened columns and checks."""
+    group_id = "preparation-mig-course"
+    run_id = uuid.uuid4()
+    snapshot_id = uuid.uuid4()
+    course_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    translation_id = uuid.uuid4()
+    chunk_id = uuid.uuid4()
+    work_id = uuid.uuid4()
+    attempt_id = uuid.uuid4()
+    proposal_id = uuid.uuid4()
+    cycle_id = uuid.uuid4()
+    vector_text = "[" + ",".join(["0.25"] * COURSE_EMBEDDING_DIMENSION) + "]"
+
+    with scratch_database("course_preparation") as engine:
+        with engine.connect() as connection:
+            command.upgrade(alembic_config(connection), "20261108_0025")
+
+            def table(table_name: str) -> Table:
+                return Table(table_name, MetaData(), autoload_with=connection)
+
+            def insert(table_name: str, **values: object) -> None:
+                connection.execute(table(table_name).insert().values(**values))
+
+            insert(
+                "ingestion_runs",
+                id=run_id,
+                status=IngestionRunStatus.COMPLETED.value,
+                raw_root_path="data/raw/preparation",
+                manifest_path="data/raw/preparation/manifest.json",
+            )
+            insert(
+                "source_snapshots",
+                id=snapshot_id,
+                ingestion_run_id=run_id,
+                object_type=SourceObjectType.COURSE_UNIT.value,
+                source_object_id="preparation-version",
+                source_group_id=group_id,
+                response_path="responses/preparation.json.gz",
+                response_item_index=0,
+                source_hash="c" * 64,
+            )
+            insert(
+                "courses",
+                id=course_id,
+                group_id=group_id,
+                is_active=True,
+                activity_as_of_academic_year_start=2026,
+                activity_window_years=3,
+            )
+            insert(
+                "course_versions",
+                id=version_id,
+                course_id=course_id,
+                source_version_id="preparation-version",
+                code="PREP.1",
+                credits_min=5,
+                credits_max=5,
+                official_url="https://example.test/preparation",
+                document_state="ACTIVE",
+                source_snapshot_id=snapshot_id,
+            )
+            for field, language, cell_text in (
+                ("name", "fi", "Valmistelu"),
+                ("content", "fi", "Matriisit"),
+                ("content", "en", "Matrices"),
+            ):
+                insert(
+                    "official_course_texts",
+                    course_version_id=version_id,
+                    field=field,
+                    language=language,
+                    text=cell_text,
+                )
+            insert(
+                "derived_course_texts",
+                id=translation_id,
+                course_version_id=version_id,
+                field="content",
+                language="en",
+                text="Matrices",
+                source_language="fi",
+                source_text_hash=teaching_text_sha256("Matriisit"),
+                translation_method="manual",
+                translation_model=None,
+                generated_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO course_embedding_chunks (id, course_version_id, field, language, "
+                    "chunk_index, text_origin, text, representative_source_hash, "
+                    "effective_text_hash, source_text_hash, chunk_text_hash, embedding_model, "
+                    "embedding_artifact_sha256, embedding_configuration_hash, "
+                    "translation_method, translation_model, translation_generated_at, status, "
+                    "embedding) VALUES (:id, :version, 'content', 'en', 0, 'official', "
+                    "'Matrices', :source_hash, :source_hash, :source_hash, :source_hash, "
+                    "'test-model', :artifact, :configuration, NULL, NULL, NULL, 'completed', "
+                    "CAST(:embedding AS vector))"
+                ),
+                {
+                    "id": chunk_id,
+                    "version": version_id,
+                    "source_hash": "a" * 64,
+                    "artifact": "b" * 64,
+                    "configuration": "c" * 64,
+                    "embedding": vector_text,
+                },
+            )
+            insert(
+                "inference_pipeline_runs",
+                id=run_id,
+                model_identity="model@rev",
+                runtime_identity="runtime@rev",
+                prompt_version="v9",
+                schema_version="v2",
+                pipeline_version="v1",
+                run_identity_sha256="d" * 64,
+                configuration={"route": "local"},
+            )
+            insert(
+                "inference_target_work",
+                id=work_id,
+                created_by_run_id=run_id,
+                target_course_id=course_id,
+                activity_as_of_academic_year_start=2026,
+                activity_window_years=3,
+                work_key_sha256="e" * 64,
+                status="completed",
+            )
+            insert(
+                "inference_model_attempts",
+                id=attempt_id,
+                target_work_id=work_id,
+                request_payload={
+                    "facts": {
+                        "target_teaching_text_sha256": "f" * 64,
+                        "candidate_count": 0,
+                    }
+                },
+                finished_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+            )
+            insert(
+                "inference_proposals",
+                id=proposal_id,
+                target_course_id=course_id,
+                source_attempt_id=attempt_id,
+                proposal_version="v1",
+                identity_sha256="1" * 64,
+                expression=None,
+                equivalence=[],
+            )
+            insert(
+                "inference_course_processing",
+                course_id=course_id,
+                teaching_text_sha256="2" * 64,
+                processed=True,
+                was_active=True,
+                accepted_proposal_id=proposal_id,
+                generation_attempt_count=2,
+                disposition="done",
+            )
+            insert(
+                "inference_processing_cycles",
+                id=cycle_id,
+                input_sha256="3" * 64,
+                stage="complete",
+            )
+            insert(
+                "inference_processing_targets",
+                cycle_id=cycle_id,
+                target_course_id=course_id,
+                multiview_state="completed",
+                rerank_state="completed",
+                inference_state="completed",
+                pool_input=None,
+                target_input=None,
+                generation_work_key_sha256="e" * 64,
+                generation_started=True,
+                proposal_id=proposal_id,
+                error_type=None,
+            )
+            connection.commit()
+
+            def retained_state() -> dict[str, list[tuple]]:
+                return {
+                    "translations": [
+                        tuple(row)
+                        for row in connection.execute(
+                            text(
+                                "SELECT id, course_version_id, field::text, language, "
+                                "source_language, source_text_hash, text, translation_method, "
+                                "translation_model, generated_at FROM derived_course_texts "
+                                "ORDER BY id"
+                            )
+                        )
+                    ],
+                    "chunks": [
+                        tuple(row)
+                        for row in connection.execute(
+                            text(
+                                "SELECT id, course_version_id, field::text, language, chunk_index, "
+                                "text_origin, text, representative_source_hash, "
+                                "effective_text_hash, source_text_hash, chunk_text_hash, "
+                                "embedding_model, embedding_artifact_sha256, "
+                                "embedding_configuration_hash, translation_method, "
+                                "translation_model, translation_generated_at, status, "
+                                "embedding::text FROM course_embedding_chunks ORDER BY id"
+                            )
+                        )
+                    ],
+                    "markers": [
+                        tuple(row)
+                        for row in connection.execute(
+                            text(
+                                "SELECT course_id, teaching_text_sha256, processed, was_active, "
+                                "accepted_proposal_id, generation_attempt_count, disposition "
+                                "FROM inference_course_processing ORDER BY course_id"
+                            )
+                        )
+                    ],
+                    "proposals": [
+                        tuple(row)
+                        for row in connection.execute(
+                            text(
+                                "SELECT id, target_course_id, source_attempt_id, proposal_version, "
+                                "identity_sha256, expression::text, equivalence::text "
+                                "FROM inference_proposals ORDER BY id"
+                            )
+                        )
+                    ],
+                    "cycles": [
+                        tuple(row)
+                        for row in connection.execute(
+                            text(
+                                "SELECT id, input_sha256, stage FROM inference_processing_cycles "
+                                "ORDER BY id"
+                            )
+                        )
+                    ],
+                    "targets": [
+                        tuple(row)
+                        for row in connection.execute(
+                            text(
+                                "SELECT cycle_id, target_course_id, multiview_state, rerank_state, "
+                                "inference_state, generation_work_key_sha256, generation_started, "
+                                "proposal_id FROM inference_processing_targets"
+                            )
+                        )
+                    ],
+                }
+
+            before = retained_state()
+            command.upgrade(alembic_config(connection), "20261109_0026")
+            assert require_database_schema(connection) == "20261109_0026"
+            connection.commit()
+            assert retained_state() == before
+
+            # The widened canonical columns accept Swedish derived and embedding cells.
+            insert(
+                "derived_course_texts",
+                id=uuid.uuid4(),
+                course_version_id=version_id,
+                field="content",
+                language="sv",
+                text="Matriser",
+                source_language="fi",
+                source_text_hash=teaching_text_sha256("Matriisit"),
+                translation_method="manual",
+                translation_model=None,
+                generated_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+            )
+            insert(
+                "course_embedding_chunks",
+                id=uuid.uuid4(),
+                course_version_id=version_id,
+                field="content",
+                language="sv",
+                chunk_index=0,
+                text_origin="official",
+                text="Matriser",
+                representative_source_hash="a" * 64,
+                effective_text_hash="a" * 64,
+                source_text_hash="a" * 64,
+                chunk_text_hash="a" * 64,
+                embedding_model="test-model",
+                embedding_artifact_sha256="b" * 64,
+                embedding_configuration_hash="c" * 64,
+                translation_method=None,
+                translation_model=None,
+                translation_generated_at=None,
+                status="pending",
+                embedding=None,
+            )
+            connection.commit()
+            assert (
+                connection.scalar(
+                    text("SELECT language FROM derived_course_texts WHERE language = 'sv'")
+                )
+                == "sv"
+            )
+            assert (
+                connection.scalar(
+                    text(
+                        "SELECT language FROM course_embedding_chunks "
+                        "WHERE language = 'sv' AND status = 'pending'"
+                    )
+                )
+                == "sv"
+            )
+            after_swedish = retained_state()
+
+            # A trailing newline is not a canonical code, so the check refuses it.
+            with pytest.raises(IntegrityError):
+                insert(
+                    "derived_course_texts",
+                    id=uuid.uuid4(),
+                    course_version_id=version_id,
+                    field="name",
+                    language="fi\n",
+                    text="Virheellinen",
+                    source_language="en",
+                    source_text_hash="a" * 64,
+                    translation_method="manual",
+                    translation_model=None,
+                    generated_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+                )
+            connection.rollback()
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20261109_0026"
+            )
+
+            with pytest.raises(RuntimeError):
+                command.downgrade(alembic_config(connection), "20261108_0025")
+            connection.rollback()
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20261109_0026"
+            )
+            assert retained_state() == after_swedish
 
 
 def test_identity_column_migration_preserves_populated_results() -> None:
@@ -341,19 +870,39 @@ def test_identity_column_migration_preserves_populated_results() -> None:
                 exhausted=False,
             )
             before = rows(connection, retained_tables)
+            before["course_versions"] = [
+                {
+                    ("source_version_id" if column == "sisu_course_unit_id" else column): value
+                    for column, value in row.items()
+                }
+                for row in before["course_versions"]
+            ]
             connection.commit()
 
-            command.upgrade(alembic_config(connection), "head")
-            assert require_database_schema(connection) == "20261103_0023"
-            after = rows(connection, retained_tables)
+            # The identity-column comparison belongs to revision 0024, the last schema that holds
+            # the fixed official text columns.
+            command.upgrade(alembic_config(connection), "20261106_0024")
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20261106_0024"
+            )
+            after_identity = rows(connection, retained_tables)
             connection.commit()
 
             # The three identity columns are absent and every other retained value is equal.
-            for table_name, after_rows in after.items():
+            for table_name, after_rows in after_identity.items():
                 after_columns = set(after_rows[0])
                 assert [
                     {column: row[column] for column in after_columns} for row in before[table_name]
                 ] == after_rows
+
+            command.upgrade(alembic_config(connection), "head")
+            assert require_database_schema(connection) == "20261109_0026"
+            current_tables = tuple(
+                table_name for table_name in retained_tables if table_name != "course_texts"
+            )
+            after = rows(connection, current_tables)
+            connection.commit()
 
             run_columns = {
                 column["name"]
@@ -402,9 +951,9 @@ def test_identity_column_migration_preserves_populated_results() -> None:
             connection.rollback()
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20261103_0023"
+                == "20261109_0026"
             )
-            after_downgrade = rows(connection, retained_tables)
+            after_downgrade = rows(connection, current_tables)
             assert after_downgrade == after
 
 
@@ -422,7 +971,7 @@ def test_curriculum_constraints_preserve_identity_and_official_order(
                 CourseVersion(
                     id=uuid.uuid4(),
                     course_id=course_id,
-                    sisu_course_unit_id="course-version-2026",
+                    source_version_id="course-version-2026",
                     code="TEST.101",
                     credits_min=1,
                     credits_max=1,
@@ -431,7 +980,43 @@ def test_curriculum_constraints_preserve_identity_and_official_order(
                     source_snapshot_id=snapshot_id,
                 )
             )
-    assert constraint_name(duplicate_version.value) == "uq_course_versions_sisu_course_unit_id"
+    assert constraint_name(duplicate_version.value) == "uq_course_versions_source_version_id"
+
+    # A source version may store no minimum credit or document state without inventing either.
+    with session_scope(factory) as session:
+        existing_snapshot = session.get(SourceSnapshot, snapshot_id)
+        assert existing_snapshot is not None
+        null_snapshot = SourceSnapshot(
+            id=uuid.uuid4(),
+            ingestion_run_id=existing_snapshot.ingestion_run_id,
+            object_type=SourceObjectType.COURSE_UNIT,
+            source_object_id="null-source-version-v1",
+            source_group_id="null-source",
+            response_path="responses/null-source.json.gz",
+            response_item_index=0,
+            source_hash="9" * 64,
+        )
+        session.add(null_snapshot)
+        session.flush()
+        null_version = CourseVersion(
+            id=uuid.uuid4(),
+            course_id=course_id,
+            source_version_id="null-source-version-v1",
+            code="TEST.102",
+            credits_min=None,
+            credits_max=None,
+            official_url="https://example.test/null-source",
+            document_state=None,
+            source_snapshot_id=null_snapshot.id,
+        )
+        session.add(null_version)
+    with session_scope(factory) as session:
+        stored = session.scalar(
+            select(CourseVersion).where(CourseVersion.source_version_id == "null-source-version-v1")
+        )
+        assert stored is not None
+        assert stored.credits_min is None
+        assert stored.document_state is None
 
     with pytest.raises(IntegrityError) as cross_module_parent:
         with session_scope(factory) as session:
@@ -492,7 +1077,7 @@ def test_nullable_course_credit_max_downgrade_rejects_unbounded_rows(
             CourseVersion(
                 id=version_id,
                 course_id=course_id,
-                sisu_course_unit_id="unbounded-course-v1",
+                source_version_id="unbounded-course-v1",
                 code="UNBOUNDED.1",
                 credits_min=1,
                 credits_max=None,

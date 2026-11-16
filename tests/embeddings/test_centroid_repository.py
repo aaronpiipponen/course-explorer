@@ -20,7 +20,7 @@ pytestmark = [pytest.mark.integration]
 def _centroid(group_id: str = "derived-course-0") -> CourseCentroid:
     return CourseCentroid(
         group_id=group_id,
-        sisu_course_unit_id="derived-course-v0",
+        source_version_id="derived-course-v0",
         representative_source_hash="d" * 64,
         chunk_count=1,
         centroid=(0.0,) * COURSE_EMBEDDING_DIMENSION,

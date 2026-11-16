@@ -51,7 +51,7 @@ class CentroidLookup(Protocol):
     def position(
         self,
         group_id: str,
-        sisu_course_unit_id: str,
+        source_version_id: str,
         representative_source_hash: str,
     ) -> int | None:
         """Return the centroid row index for one current representative, or `None`."""
@@ -92,10 +92,10 @@ def rank_recommendation_candidates(
     for neighbor in neighbors:
         record = records.get(neighbor.group_id)
         if record is None or (
-            neighbor.sisu_course_unit_id,
+            neighbor.source_version_id,
             neighbor.representative_source_hash,
         ) != (
-            record.sisu_course_unit_id,
+            record.source_version_id,
             record.source_hash,
         ):
             continue
@@ -187,7 +187,7 @@ def filter_neighbors_by_centroid(
     for neighbor in neighbors:
         key = (
             neighbor.group_id,
-            neighbor.sisu_course_unit_id,
+            neighbor.source_version_id,
             neighbor.representative_source_hash,
         )
         if key in positions:
@@ -209,7 +209,7 @@ def filter_neighbors_by_centroid(
         for neighbor in neighbors
         if (
             neighbor.group_id,
-            neighbor.sisu_course_unit_id,
+            neighbor.source_version_id,
             neighbor.representative_source_hash,
         )
         in kept

@@ -1,8 +1,9 @@
-"""Read the measurement dataset's pool identities, titles, codes, study roots and academic year.
+"""Read the measurement dataset's pool identities, displayed names, codes, study roots and academic year.
 
-The workload holds the pool as course identities. This module resolves the code and full title of
-every pool course, the dataset's module roots, and the configured academic year that selects the
-explicit study version. A pool identity with no catalogue row or no title fails the measurement.
+The workload holds the pool as course identities. This module resolves the code and the displayed
+English or Finnish name of every pool course, the dataset's module roots, and the configured
+academic year that selects the explicit study version. A pool identity with no catalogue row, or
+with neither a displayed name nor a code, fails the measurement.
 """
 
 from __future__ import annotations
@@ -32,20 +33,24 @@ def connect(environment: dict[str, str]) -> psycopg.Connection:
 def _academic_year_start(environment: dict[str, str]) -> int:
     """Return the validated academic-year start that selects the explicit study version.
 
-    ``NormalizationSettings`` requires an activity window and a course-guide address as well, so
-    those come from this process's own settings and ``CURRENT_ACADEMIC_YEAR`` comes from
+    ``NormalizationSettings`` requires the instance key and an activity window as well, so those
+    come from this process's own settings and ``CURRENT_ACADEMIC_YEAR`` comes from
     ``environment``.
     """
     local = load_normalization_settings()
     return NormalizationSettings(
+        INSTANCE_KEY=local.instance_key,
         CURRENT_ACADEMIC_YEAR=environment["CURRENT_ACADEMIC_YEAR"],
         ACTIVE_ACADEMIC_YEAR_WINDOW=local.active_academic_year_window,
-        COURSE_GUIDE_BASE_URL=local.course_guide_base_url,
     ).current_academic_year_start
 
 
 def build_context(environment: dict[str, str], workload: dict) -> dict:
-    """Return the pool titles and codes, the study roots and the dataset schema."""
+    """Return the pool displayed names and codes, the study roots and the dataset schema.
+
+    The two name values are the pool version's exact English and Finnish official name cells, read
+    in that order by the measurement consumers.
+    """
     database = environment["POSTGRES_DB"]
     if not database.endswith("_test"):
         raise ValueError("the payload context database name must end with _test")
@@ -54,7 +59,7 @@ def build_context(environment: dict[str, str], workload: dict) -> dict:
     with connect(environment) as connection, connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT DISTINCT ON (c.group_id) c.group_id, cv.code, cv.name_en, cv.name_fi
+            SELECT DISTINCT ON (c.group_id) c.group_id, cv.code, cv.id
             FROM courses c
             JOIN course_versions cv ON cv.course_id = c.id
             WHERE c.group_id = ANY(%s)
@@ -63,6 +68,19 @@ def build_context(environment: dict[str, str], workload: dict) -> dict:
             (pool,),
         )
         rows = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT course_version_id, language, text
+            FROM official_course_texts
+            WHERE course_version_id = ANY(%s) AND field = 'name'
+              AND language IN ('en', 'fi')
+            """,
+            ([row[2] for row in rows],),
+        )
+        name_cells: dict[object, dict[str, str]] = {}
+        for version_id, language, text in cursor.fetchall():
+            if text.strip():
+                name_cells.setdefault(version_id, {})[language] = text
         cursor.execute(
             """
             SELECT DISTINCT m.group_id
@@ -84,7 +102,7 @@ def build_context(environment: dict[str, str], workload: dict) -> dict:
             )
         cursor.execute(
             """
-            SELECT m.group_id, mv.sisu_module_id
+            SELECT m.group_id, mv.source_version_id
             FROM modules m
             JOIN module_versions mv ON mv.module_id = m.id
             JOIN module_version_curriculum_periods p ON p.module_version_id = mv.id
@@ -103,8 +121,12 @@ def build_context(environment: dict[str, str], workload: dict) -> dict:
         cursor.execute("SELECT version_num FROM alembic_version")
         schema = cursor.fetchone()[0]
     by_id = {
-        group_id: {"code": code, "title_en": name_en, "title_fi": name_fi}
-        for group_id, code, name_en, name_fi in rows
+        group_id: {
+            "code": code,
+            "title_en": name_cells.get(version_id, {}).get("en"),
+            "title_fi": name_cells.get(version_id, {}).get("fi"),
+        }
+        for group_id, code, version_id in rows
     }
     missing = [group_id for group_id in pool if group_id not in by_id]
     if missing:

@@ -1,6 +1,6 @@
-# Example service configuration for the web UI.
+# The web server on its loopback bind.
 [Unit]
-Description=TUNI Course Explorer web UI
+Description=course-explorer web server
 
 [Service]
 Type=simple

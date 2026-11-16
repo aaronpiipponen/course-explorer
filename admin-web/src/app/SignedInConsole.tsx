@@ -95,7 +95,7 @@ export function SignedInConsole({
     <div>
       <header>
         <div className="logo">
-          <BrandMark />
+          <BrandMark displayLabel={session.display_label} />
         </div>
         <span className="docl">{wording.admin}</span>
         <TabBar current={tab} onSelect={selectTab} />

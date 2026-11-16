@@ -20,6 +20,7 @@ from course_explorer.inference.operational import (
 )
 from course_explorer.inference.prompts import load_prompt_pack
 from course_explorer.inference.target_pass import prepare_target_request, target_work_identity
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.teaching_text.repository import DerivedTranslationRepository
 from course_explorer.teaching_text.service import TeachingTextService
 from tests.inference._http_support import InferenceHttpBoundary, install_inference_http
@@ -55,7 +56,7 @@ class _RecordingRuntime:
 
 
 def _catalogue(factory: object):
-    curriculum = CurriculumRepository(factory)
+    curriculum = CurriculumRepository(factory, university=UNIVERSITIES["example"])
     teaching_text = TeachingTextService(curriculum, DerivedTranslationRepository(factory))
     return prepare_operational_catalogue(curriculum, teaching_text, embedding_settings())
 

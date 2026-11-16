@@ -17,7 +17,7 @@ class CourseCentroid:
     """One represented course's hub-centred unit centroid and its representative identity."""
 
     group_id: str
-    sisu_course_unit_id: str
+    source_version_id: str
     representative_source_hash: str
     chunk_count: int
     centroid: tuple[float, ...]
@@ -53,7 +53,7 @@ def compute_course_centroids(
         for index in indices[1:]:
             chunk = chunks[index]
             if (
-                chunk.sisu_course_unit_id != first.sisu_course_unit_id
+                chunk.source_version_id != first.source_version_id
                 or chunk.representative_source_hash != first.representative_source_hash
             ):
                 raise ValueError(f"course {group_id} carries more than one representative identity")
@@ -67,7 +67,7 @@ def compute_course_centroids(
         centroids.append(
             CourseCentroid(
                 group_id=group_id,
-                sisu_course_unit_id=first.sisu_course_unit_id,
+                source_version_id=first.source_version_id,
                 representative_source_hash=first.representative_source_hash,
                 chunk_count=len(indices),
                 centroid=tuple(float(value) for value in centroid),

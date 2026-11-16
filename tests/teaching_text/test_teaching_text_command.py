@@ -9,13 +9,12 @@ import pytest
 
 from course_explorer.enums import (
     TeachingTextField,
-    TeachingTextLanguage,
     TranslationMethod,
 )
 from course_explorer.teaching_text import commands as command_module
 
 VALID_ENTRY = {
-    "sisu_course_unit_id": "course-a-v1",
+    "source_version_id": "course-a-v1",
     "field": "name",
     "language": "en",
     "source_language": "fi",
@@ -37,10 +36,10 @@ def test_translation_file_parses_closed_json_array(tmp_path: Path) -> None:
     loaded = command_module.load_translation_file(path)
 
     assert len(loaded) == 1
-    assert loaded[0].sisu_course_unit_id == "course-a-v1"
+    assert loaded[0].source_version_id == "course-a-v1"
     assert loaded[0].field is TeachingTextField.NAME
-    assert loaded[0].language is TeachingTextLanguage.EN
-    assert loaded[0].source_language is TeachingTextLanguage.FI
+    assert loaded[0].language == "en"
+    assert loaded[0].source_language == "fi"
     assert loaded[0].translation_method is TranslationMethod.MANUAL
     assert loaded[0].generated_at == datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 

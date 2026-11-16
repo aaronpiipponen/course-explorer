@@ -13,19 +13,19 @@ from sqlalchemy import Engine
 
 from course_explorer.db.models import (
     Course,
-    CourseText,
     CourseVersion,
     CourseVersionCurriculumPeriod,
     CurriculumPeriod,
     IngestionRun,
+    OfficialCourseText,
     SourceSnapshot,
 )
 from course_explorer.db.session import session_scope
 from course_explorer.enums import (
     IngestionRunStatus,
+    OfficialTextField,
     SourceObjectType,
     TeachingTextField,
-    TeachingTextLanguage,
     TranslationMethod,
 )
 from course_explorer.teaching_text.service import DerivedTranslationInput
@@ -102,10 +102,8 @@ def seed_representative_catalogue(database: tuple[Engine, object]) -> tuple[str,
                 CourseVersion(
                     id=version_ids[index],
                     course_id=course_ids[index],
-                    sisu_course_unit_id=source_id,
+                    source_version_id=source_id,
                     code=f"CODE.{index}",
-                    name_en=("Programming" if group_id == "course-inactive" else None),
-                    name_fi=("Lineaarialgebra" if group_id == "course-active" else None),
                     credits_min=5,
                     credits_max=5,
                     official_url="https://example.test/course",
@@ -116,6 +114,20 @@ def seed_representative_catalogue(database: tuple[Engine, object]) -> tuple[str,
             ]
         )
         session.flush()
+        session.add_all(
+            OfficialCourseText(
+                course_version_id=version_ids[index],
+                field=OfficialTextField.NAME,
+                language=language,
+                text=text,
+            )
+            for index, (group_id, _, _, _) in enumerate(group_specs)
+            for language, text in (
+                ("en", "Programming" if group_id == "course-inactive" else None),
+                ("fi", "Lineaarialgebra" if group_id == "course-active" else None),
+            )
+            if text is not None
+        )
         memberships = [
             CourseVersionCurriculumPeriod(
                 course_version_id=version_ids[index], curriculum_period_id=period_id
@@ -124,11 +136,26 @@ def seed_representative_catalogue(database: tuple[Engine, object]) -> tuple[str,
             for period_id in periods
         ]
         session.add_all(memberships)
-        session.add(
-            CourseText(
-                course_version_id=version_ids[0],
-                content_fi="Matriisit",
-                outcomes_en="Use matrices",
+        session.add_all(
+            (
+                OfficialCourseText(
+                    course_version_id=version_ids[0],
+                    field=OfficialTextField.CONTENT,
+                    language="fi",
+                    text="Matriisit",
+                ),
+                OfficialCourseText(
+                    course_version_id=version_ids[0],
+                    field=OfficialTextField.OUTCOMES,
+                    language="en",
+                    text="Use matrices",
+                ),
+                OfficialCourseText(
+                    course_version_id=version_ids[0],
+                    field=OfficialTextField.CONTENT,
+                    language="sv",
+                    text="Matriser",
+                ),
             )
         )
     return active_source, empty_source
@@ -137,14 +164,14 @@ def seed_representative_catalogue(database: tuple[Engine, object]) -> tuple[str,
 def manual_input(
     source_id: str,
     field: TeachingTextField,
-    language: TeachingTextLanguage,
-    source_language: TeachingTextLanguage,
+    language: str,
+    source_language: str,
     source_text: str,
     text: str,
 ) -> DerivedTranslationInput:
     """Build one manual translation input with timezone-aware provenance."""
     return DerivedTranslationInput(
-        sisu_course_unit_id=source_id,
+        source_version_id=source_id,
         field=field,
         language=language,
         source_language=source_language,

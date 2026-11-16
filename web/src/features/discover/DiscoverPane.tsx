@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DiscoveryRequest } from "../../api/types";
 import { useProfileSelector } from "../../state/useProfileSelector";
 import { setDiscoverOptions } from "./actions";
+import type { DiscoverState } from "./state";
 import { DiscoverBasis } from "./DiscoverBasis";
 import { DiscoverControls, DiscoverListTabs } from "./DiscoverControls";
 import { DiscoverResults } from "./DiscoverResults";
@@ -20,17 +21,27 @@ export function DiscoverPane() {
     (state) => state.discover,
   );
   const { t } = useWording();
-  const { embeddings_enabled, inference_enabled } = useWebFeatures();
+  const { embeddings_enabled, inference_enabled, prerequisites_enabled } =
+    useWebFeatures();
   const selected = useProfileSelector((state) => state.selectedCourseIds).value;
   const completed = useProfileSelector(
     (state) => state.completedCourseIds,
   ).value;
   const language = useProfileSelector((state) => state.language).value;
-  // A site without embedding features serves the next-course list, so Recommended never runs.
+  // The available lists follow the site switches. Discover is hidden when both are off, so one
+  // list is always available while this pane mounts.
+  const availableLists = useMemo(() => {
+    const lists: DiscoverState["list"][] = [];
+    if (prerequisites_enabled) lists.push("next");
+    if (embeddings_enabled) lists.push("recommended");
+    return lists;
+  }, [embeddings_enabled, prerequisites_enabled]);
   const effective = useMemo(
     () =>
-      embeddings_enabled ? options : { ...options, list: "next" as const },
-    [options, embeddings_enabled],
+      availableLists.includes(options.list)
+        ? options
+        : { ...options, list: availableLists[0] },
+    [options, availableLists],
   );
   const request = useMemo<DiscoveryRequest>(
     () => ({

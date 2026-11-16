@@ -27,6 +27,7 @@ from course_explorer.config import (
     load_inference_rerank_settings,
     load_inference_selection_settings,
     load_inference_settings,
+    load_instance_settings,
     load_raw_database_settings,
     load_worker_gpu_reboot_settings,
 )
@@ -205,6 +206,7 @@ def _finalize(
             cohort,
             load_inference_settings(),
             load_inference_selection_settings(),
+            university=load_instance_settings().university,
         )
         repository.prune_retained_state()
         coverage = repository.read_coverage()

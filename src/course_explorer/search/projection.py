@@ -77,7 +77,11 @@ def build_lookup_rows(records: Sequence[CourseSummary]) -> tuple[CourseLookupRow
 
 
 def official_name(name_fi: str | None, name_en: str | None, display_language: str) -> str | None:
-    """Return the requested official name, or the other official name when it is absent."""
+    """Return the requested display name, or the other display name when it is absent.
+
+    The two values are already the university map's display projections for the interface
+    languages, not exact official language cells.
+    """
     requested = name_fi if display_language == "fi" else name_en
     if requested is not None:
         return requested

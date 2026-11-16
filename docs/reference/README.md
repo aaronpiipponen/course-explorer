@@ -10,7 +10,7 @@ A page links a term where the exact definition matters, and it uses the defined 
 
 ## Identity and version
 
-A course is one course as the app shows it, shared by all of its official versions. A course version is one exact official version of a course, as published for one curriculum period. The representative version is the one course version chosen to stand for a course, and the choice prefers the configured academic year and then a version inside the activity window.
+A course is one course as the app shows it, shared by all of its official versions. A course version is one exact official version of a course, as published for one curriculum period. The representative version is the one course version chosen to stand for a course, and the choice prefers the configured academic year, then the greatest year inside the activity window, then the greatest earlier year. It falls back to a membership-free version, ordered by source modification ordinal and then source version identity, only when no version carries an eligible dated membership. A version whose memberships are all future years is ineligible.
 
 Canonical identity ties together a course's versions, so a selection, a completion, and an exclusion act on the same course in every tab. The displayed code and name come from its representative version. A page that names a course version refers to one exact official record and its curriculum-period memberships.
 

@@ -17,11 +17,11 @@ from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.db.models import (
     Course,
     CourseEmbeddingChunk,
-    CourseText,
     CourseVersion,
     CourseVersionCurriculumPeriod,
     CurriculumPeriod,
     IngestionRun,
+    OfficialCourseText,
     SourceSnapshot,
 )
 from course_explorer.db.session import session_scope
@@ -29,11 +29,12 @@ from course_explorer.embeddings.generation import CourseEmbeddingService
 from course_explorer.embeddings.repository import CourseEmbeddingRepository
 from course_explorer.enums import (
     IngestionRunStatus,
+    OfficialTextField,
     SourceObjectType,
     TeachingTextField,
-    TeachingTextLanguage,
     TranslationMethod,
 )
+from course_explorer.instance import UniversityMetadata
 from course_explorer.teaching_text.repository import DerivedTranslationRepository
 from course_explorer.teaching_text.service import (
     DerivedTranslationInput,
@@ -61,6 +62,8 @@ class FakeProvider:
 
 def compose(
     database: tuple[Engine, object],
+    *,
+    university: UniversityMetadata | None = None,
 ) -> tuple[
     CourseEmbeddingService,
     CourseEmbeddingRepository,
@@ -71,9 +74,11 @@ def compose(
     """Build the real generation service over real curricula and a recording fake provider."""
     _, factory = database
     teaching_text = TeachingTextService(
-        CurriculumRepository(factory), DerivedTranslationRepository(factory)
+        CurriculumRepository(factory, university=university),
+        DerivedTranslationRepository(factory, university=university),
+        university=university,
     )
-    repository = CourseEmbeddingRepository(factory)
+    repository = CourseEmbeddingRepository(factory, university=university)
     provider = FakeProvider()
     config = embedding_settings()
     service = CourseEmbeddingService(teaching_text, repository, provider, config)
@@ -140,9 +145,8 @@ def seed_representatives(database: tuple[Engine, object]) -> dict[str, UUID]:
                 CourseVersion(
                     id=direct_version,
                     course_id=course_id,
-                    sisu_course_unit_id="course-a-2026",
+                    source_version_id="course-a-2026",
                     code="A.1",
-                    name_fi="Lineaarialgebra",
                     credits_min=5,
                     credits_max=5,
                     official_url="https://example.test/a",
@@ -152,9 +156,8 @@ def seed_representatives(database: tuple[Engine, object]) -> dict[str, UUID]:
                 CourseVersion(
                     id=alt_version,
                     course_id=course_id,
-                    sisu_course_unit_id="course-a-2020",
+                    source_version_id="course-a-2020",
                     code="A.1",
-                    name_fi="Vanha lineaaralgebra",
                     credits_min=5,
                     credits_max=5,
                     official_url="https://example.test/a-old",
@@ -164,16 +167,48 @@ def seed_representatives(database: tuple[Engine, object]) -> dict[str, UUID]:
             ]
         )
         session.flush()
+        session.add_all(
+            (
+                OfficialCourseText(
+                    course_version_id=direct_version,
+                    field=OfficialTextField.NAME,
+                    language="fi",
+                    text="Lineaarialgebra",
+                ),
+                OfficialCourseText(
+                    course_version_id=alt_version,
+                    field=OfficialTextField.NAME,
+                    language="fi",
+                    text="Vanha lineaaralgebra",
+                ),
+            )
+        )
+        session.flush()
         session.add(
             CourseVersionCurriculumPeriod(
                 course_version_id=direct_version, curriculum_period_id="period-2026"
             )
         )
-        session.add(
-            CourseText(
-                course_version_id=direct_version,
-                content_fi="Matriisit",
-                content_en="Matrices",
+        session.add_all(
+            (
+                OfficialCourseText(
+                    course_version_id=direct_version,
+                    field=OfficialTextField.CONTENT,
+                    language="fi",
+                    text="Matriisit",
+                ),
+                OfficialCourseText(
+                    course_version_id=direct_version,
+                    field=OfficialTextField.CONTENT,
+                    language="en",
+                    text="Matrices",
+                ),
+                OfficialCourseText(
+                    course_version_id=direct_version,
+                    field=OfficialTextField.CONTENT,
+                    language="sv",
+                    text="Matriser",
+                ),
             )
         )
     return {
@@ -190,10 +225,10 @@ def upsert_translation(database: tuple[Engine, object], text: str) -> None:
     DerivedTranslationRepository(factory).upsert(
         (
             DerivedTranslationInput(
-                sisu_course_unit_id="course-a-2026",
+                source_version_id="course-a-2026",
                 field=TeachingTextField.NAME,
-                language=TeachingTextLanguage.EN,
-                source_language=TeachingTextLanguage.FI,
+                language="en",
+                source_language="fi",
                 source_text="Lineaarialgebra",
                 text=text,
                 translation_method=TranslationMethod.MANUAL,
@@ -205,7 +240,7 @@ def upsert_translation(database: tuple[Engine, object], text: str) -> None:
 
 def _chunk_state(
     database: tuple[Engine, object], course_version_id: UUID
-) -> dict[tuple[TeachingTextField, TeachingTextLanguage], tuple[UUID, bool, str]]:
+) -> dict[tuple[TeachingTextField, str], tuple[UUID, bool, str]]:
     """Capture per-cell row identity, vector presence, and text hash for comparison."""
     _, factory = database
     with session_scope(factory) as session:

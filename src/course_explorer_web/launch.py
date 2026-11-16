@@ -60,6 +60,10 @@ def main() -> NoReturn:
             if not isinstance(alias, str):
                 continue
             value = getattr(settings, name)
+            if value is None:
+                # An optional setting with no value stays unset in the child, which composes the
+                # same absent default instead of receiving a text form of ``None``.
+                continue
             if isinstance(value, SecretStr):
                 value = value.get_secret_value()
             environment[alias] = environment_value(value)

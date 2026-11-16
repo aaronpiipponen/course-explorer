@@ -7,7 +7,8 @@ connection settings. This module owns that handle and the connection string it w
 
 from __future__ import annotations
 
-from course_explorer.config import DatabaseSettings
+from course_explorer.config import DatabaseSettings, load_instance_settings
+from course_explorer.instance import UniversityMetadata
 from course_explorer.prerequisite.native_compiler import _NATIVE_LOCK, _load
 
 _WORKER_HANDLE: int | None = None
@@ -27,6 +28,11 @@ def database_conninfo(settings: DatabaseSettings) -> str:
     )
 
 
+def _text_array(values: tuple[str, ...]) -> str:
+    """Serialize one validated official-language sequence as a PostgreSQL text array literal."""
+    return "{" + ",".join(values) + "}"
+
+
 def worker_handle(settings: DatabaseSettings) -> int:
     """Return this worker's one cached native fact handle for the serving database."""
     global _WORKER_HANDLE, _WORKER_CONNINFO
@@ -40,10 +46,19 @@ def worker_handle(settings: DatabaseSettings) -> int:
         return _WORKER_HANDLE
 
 
-def open_database(conninfo: str) -> int:
-    """Open one per-worker database fact handle from a libpq connection string."""
+def open_database(conninfo: str, *, university: UniversityMetadata | None = None) -> int:
+    """Open one per-worker database fact handle with the configured display policy.
+
+    The supplied university, or the configured one, contributes its two validated fallback
+    sequences as PostgreSQL text-array parameters consumed by the scoped name reads.
+    """
+    policy = load_instance_settings().university if university is None else university
+    display_fi = _text_array(policy.display_fallback["fi"])
+    display_en = _text_array(policy.display_fallback["en"])
     with _NATIVE_LOCK:
-        handle = _load().course_prerequisite_open(conninfo.encode())
+        handle = _load().course_prerequisite_open(
+            conninfo.encode(), display_fi.encode(), display_en.encode()
+        )
         if handle < 0:
             message = _load().course_prerequisite_last_error()
             raise ValueError(message.decode() if message else "native database loader failed")

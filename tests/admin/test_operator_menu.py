@@ -84,8 +84,33 @@ class _ScriptedRead:
         ("rebuild-app", ["1", "9", "1", "0", "0"], "main"),
         ("rebuild-admin-panel", ["1", "11", "1", "0", "0"], "main"),
         ("password-setup", ["1", "10", "synthetic-operator", "0", "0"], "main"),
-        ("example-setup", ["1", "12", "", "synthetic-operator", "2", "1", "0", "0", "0"], "main"),
-        ("example-setup-cancel", ["1", "12", "", "synthetic-operator", "0", "0", "0"], "main"),
+        (
+            "example-setup",
+            [
+                "1",
+                "12",
+                "36",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "synthetic-operator",
+                "2",
+                "1",
+                "0",
+                "0",
+                "0",
+            ],
+            "main",
+        ),
+        (
+            "example-setup-cancel",
+            ["1", "12", "36", "", "", "", "", "", "", "", "synthetic-operator", "0", "0", "0"],
+            "main",
+        ),
         ("real-database-setup", ["1", "13", "", "1", "0", "0"], "main"),
         (
             "configuration-save",
@@ -384,7 +409,7 @@ def test_operator_menu_routes_explicit_choices_and_uses_server_setup_branch(
     monkeypatch.setattr(
         commands,
         "run_administrative_example_setup",
-        lambda options: example_setup_calls.append(options) or sentinel,
+        lambda options, **kwargs: example_setup_calls.append(options) or sentinel,
     )
     monkeypatch.setattr(
         commands,
@@ -518,13 +543,13 @@ def test_operator_menu_routes_explicit_choices_and_uses_server_setup_branch(
         assert embedding_log_reads == [] and tool_calls == [] and setup_calls == []
         return
     if scenario == "rebuild-admin-panel":
-        # The administration entry builds the panel and then queues its restart, in that order, and
+        # The administration entry builds the console and then queues its restart, in that order, and
         # its own confirmation names the sign-out the restart causes.
         assert admin_maintenance_calls == ["build", "restart"]
-        assert "Rebuild the admin panel? This signs all operators out." in writes
+        assert "Rebuild the administration console? This signs all operators out." in writes
         assert admin_restart_report.model_dump_json() in writes
         assert writes.index(
-            "Rebuild the admin panel? This signs all operators out."
+            "Rebuild the administration console? This signs all operators out."
         ) < writes.index(admin_restart_report.model_dump_json())
         assert rebuild_calls == []
         assert server_status_calls == [] and log_session_listings == [] and log_reads == []
@@ -635,11 +660,19 @@ def test_operator_menu_routes_explicit_choices_and_uses_server_setup_branch(
         return
 
     if scenario == "example-setup":
-        # Choice 12 asks the device choices, reads both password entries hidden, and delegates once.
+        # Choice 12 asks the instance and device choices, reads both password entries hidden, and
+        # delegates once.
         assert len(example_setup_calls) == 1
         options = example_setup_calls[0]
         assert isinstance(options, commands.ExampleSetupInput)
         assert options.app_url is None
+        assert options.admin_origin is None
+        assert options.instance_key == "example"
+        assert options.web_port == 8037
+        assert options.admin_web_port == 8039
+        assert options.postgres_port == 5433
+        assert options.embedding_port == 8081
+        assert options.shared_root is None
         assert options.username == "synthetic-operator"
         assert options.mode == "foreground"
         assert options.confirm_download is True
@@ -1155,7 +1188,7 @@ def test_operator_menu_failure_and_eof_preserve_running_work(
             )
             == 0
         )
-        assert "Rebuild the admin panel? This signs all operators out." in writes
+        assert "Rebuild the administration console? This signs all operators out." in writes
     elif scenario == "admin-rebuild-build-failure":
         # A failed administration build stops the callback before its restart, with the safe error.
         def failing_admin_build():

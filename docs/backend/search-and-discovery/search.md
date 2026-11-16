@@ -31,7 +31,7 @@ A course matches when the query is contained in its official code or in the name
 
 ### Fuzzy search
 
-Fuzzy search scores the displayed official name of each course against the query from 0 to 100 and keeps every course at or above the cutoff, so a name with a typo or a different word order can match as well. A course with no displayed official name takes no part in the scoring.
+Fuzzy search scores the displayed summary name of each course against the query from 0 to 100 and keeps every course at or above the cutoff, so a name with a typo or a different word order can match as well. A course with no displayed summary name takes no part in the scoring.
 
 The score starts from the stronger of two 0 to 100 values. The first is the whole-name similarity, which is symmetric and rewards a shared prefix, so a long query cannot raise a short unrelated name. The second is the coverage of the query tokens, which compares each query token with the tokens of the name. The weaker of the two values then closes part of the gap to 100, so two names that both cover the query order by their whole-name similarity. The stronger value alone decides whether a course reaches the cutoff, so the tie-break never removes a match.
 
@@ -41,7 +41,9 @@ The whole-name similarity runs over the projection's name list for the request's
 
 ### Semantic
 
-The semantic method embeds the query and measures that vector against the stored vectors of the represented courses. A course's relevance is its best chunk. The read takes the completed chunks of the course's current representative version that were written under the configured embedding configuration, and a chunk of another version, a pending chunk, and a failed chunk contribute no score. A score is a cosine measured after the embedding hub is subtracted from the query vector and from the stored vector, so a score runs from -1 to 1 and an unrelated course scores close to zero. Every course whose best chunk reaches the threshold is returned. `SEMANTIC_SEARCH_MIN_SCORE` in `config/search.toml` sets the threshold. [Exact and approximate semantic retrieval](/docs/experiments/search-and-translation/semantic-retrieval.md) records the measurements of the exact read and the approximate alternatives.
+The semantic method embeds the query and measures that vector against the stored vectors of the represented courses. A course's relevance is its best chunk. The read takes the completed chunks of the course's current representative version that were written under the configured embedding configuration, and a chunk of another version, a pending chunk, and a failed chunk contribute no score. A score is a cosine measured after the embedding hub is subtracted from the query vector and from the stored vector, so a score runs from -1 to 1 and an unrelated course scores close to zero. Every course whose best chunk reaches the threshold is returned.
+
+The scan compares the query against every compatible stored teaching-text chunk across the configured languages. `SEMANTIC_SEARCH_MIN_SCORE` in `config/search.toml` sets the threshold. [Exact and approximate semantic retrieval](/docs/experiments/search-and-translation/semantic-retrieval.md) records the measurements of the exact read and the approximate alternatives.
 
 ## The packed exact read
 
@@ -91,13 +93,13 @@ Each method orders its own results before the merge. Exact code and Substring li
 
 ## Language and activity
 
-The app language decides which official name the string methods read: the official name in that language when the version carries one, otherwise the other official name. A version that carries the name of the app language is matched on that name alone, so a search matches the name the app shows. An exact code match reads the official code, which is the same in Finnish and in English, and the semantic method measures the embedded teaching text, so its matches follow the meaning of the query in either language.
+The app language decides which official display name the string methods read: the first nonblank exact official value in that interface language's configured fallback order. A version whose exact official cell for the app language is nonblank is matched on that name, so a search matches the name the app shows. An exact code match reads the official code, which is the same in every language, and the semantic method measures the embedded teaching text, so its matches follow the meaning of the query across the configured languages.
 
 Whether inactive courses take part is one setting of a request, and every method honours it, so a search limited to active courses returns active courses only. The Search tab offers that setting as its Active only switch.
 
 ## Validation outcomes
 
-The search refuses a blank query, an app language other than Finnish or English, a semantic threshold outside -1 to 1, and a fuzzy cutoff outside 0 to 100. It decides all four before it loads any settings or reads the database, and its report repeats the thresholds, the inactive-course setting, and the semantic availability it used.
+The search refuses a blank query, an app language other than Finnish or English, a semantic threshold outside -1 to 1, and a fuzzy cutoff outside 0 to 100. The interface is Finnish and English even when a university publishes further official languages. It decides all four before it loads any settings or reads the database, and its report repeats the thresholds, the inactive-course setting, and the semantic availability it used.
 
 ## Other reads over official identity
 
@@ -107,7 +109,7 @@ Two reads serve the other tabs: the minimal official catalogue and the id-or-cod
 
 The catalogue read returns every represented course's canonical identity, code, FI and EN names, credits and activity flag, and every canonical module's eligible version candidates for the current academic year with their exact version identity, kind, code, FI and EN names, validity bounds and curriculum-period memberships. It carries no official URL, course representative source identity, teaching text, description or prerequisite, and it applies no activity filter to the module candidates. A module with no eligible candidate is absent.
 
-The browser's narrowing boxes filter that one list locally. The matching is the substring rule above: a course matches when its displayed official name or code contains the normalized query, and a module candidate matches when its displayed name or code does. Two orders apply to module rows. The matching candidates of one group are compared by displayed name and code and then by exact version identity, so that order picks the candidate whose code and name the row displays. Result groups are compared with degree programmes before other modules, then by the row's displayed name and code, then by canonical group identity. Neither order selects a version for the structure. A canonical group appears as one row when any of its eligible candidates matches, the row shows the displayed candidate's code and name, and it carries the group's full eligible candidate list. The version picker of the group offers a candidate the query does not match.
+The browser's narrowing boxes filter that one list locally. The matching is the substring rule above: a course matches when its displayed summary name or code contains the normalized query, and a module candidate matches when its displayed name or code does. Two orders apply to module rows. The matching candidates of one group are compared by displayed name and code and then by exact version identity, so that order picks the candidate whose code and name the row displays. Result groups are compared with degree programmes before other modules, then by the row's displayed name and code, then by canonical group identity. Neither order selects a version for the structure. A canonical group appears as one row when any of its eligible candidates matches, the row shows the displayed candidate's code and name, and it carries the group's full eligible candidate list. The version picker of the group offers a candidate the query does not match.
 
 ### The id-or-code resolver
 

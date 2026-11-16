@@ -22,11 +22,11 @@ class CourseCentroidCache:
     def position(
         self,
         group_id: str,
-        sisu_course_unit_id: str,
+        source_version_id: str,
         representative_source_hash: str,
     ) -> int | None:
         """Return the centroid row index for one current representative, or `None`."""
-        return self._store.position(group_id, sisu_course_unit_id, representative_source_hash)
+        return self._store.position(group_id, source_version_id, representative_source_hash)
 
     def centroids(self, positions: Sequence[int]) -> numpy.ndarray:
         """Return the requested mapped centroid rows as one float64 matrix."""

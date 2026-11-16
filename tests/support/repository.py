@@ -1,10 +1,10 @@
 """One temporary repository root whose tracked product files resolve from this checkout.
 
-The product reads its tracked configuration, migrations, native libraries and frontend bundle
-relative to the one ``course_explorer.administration.repository_root`` owner. A test that redirects
-that owner to a temporary root gets the same reads through links to this checkout. Product state,
-usage and serving writes resolve under the root and land in the temporary root. Each linked entry
-is the checkout's own path, so a write through a link reaches this checkout.
+The product reads its tracked configuration, university table, migrations, native libraries and
+frontend bundle relative to the one ``course_explorer.administration.repository_root`` owner. A test
+that redirects that owner to a temporary root gets the same reads through links to this checkout.
+Product state, usage and serving writes resolve under the root and land in the temporary root. Each
+linked entry is the checkout's own path, so a write through a link reaches this checkout.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ _PRODUCT_ENTRIES = (
     "pyproject.toml",
     "scripts",
     "tests",
+    "universities.toml",
     "uv.lock",
     "web",
 )

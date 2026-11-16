@@ -23,7 +23,7 @@ _SUCCESS_MARKER = b"COURSE_EXPLORER_TRANSPORT_RESULT command 0\n"
 
 
 def controller_settings(
-    worker_project_root: str = "/home/test-user/tuni-course-explorer",
+    worker_project_root: str = "/home/test-user/course-explorer",
 ) -> WorkerConnectionSettings:
     return WorkerConnectionSettings(
         TRANSLATION_CONTROLLER_SSH_TARGET="test-worker",
@@ -149,7 +149,7 @@ def test_upload_reuses_only_exact_matching_remote_file(tmp_path: Path) -> None:
             "course_explorer_admin.translation.controller_worker",
             "status",
         ),
-        cwd=PurePosixPath("/home/test-user/tuni-course-explorer"),
+        cwd=PurePosixPath("/home/test-user/course-explorer"),
         env={"POSTGRES_DB": "course_translation_worker_" + SESSION_ID},
     )
     assert output == b"ok"
@@ -228,9 +228,7 @@ def test_streamed_transfer_preserves_hash_and_never_captures_payload(tmp_path: P
     source.write_bytes(payload)
     digest = hashlib.sha256(payload).hexdigest()
 
-    transport.upload(
-        source, PurePosixPath("/home/test-user/tuni-course-explorer/state/s/code.bundle")
-    )
+    transport.upload(source, PurePosixPath("/home/test-user/course-explorer/state/s/code.bundle"))
     upload_call = runner.calls[-1]
     assert upload_call[1]["stdin_path"] == source
     joined = " ".join(upload_call[0])
@@ -437,7 +435,7 @@ def test_transport_rejects_unapproved_environment_before_io() -> None:
     with pytest.raises(ValueError) as excinfo:
         transport.run(
             ("printf", "ready"),
-            cwd=PurePosixPath("/home/test-user/tuni-course-explorer"),
+            cwd=PurePosixPath("/home/test-user/course-explorer"),
             env=environment,
         )
     assert runner.calls == []

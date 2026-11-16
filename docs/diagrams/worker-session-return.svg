@@ -1,66 +1,64 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 612" role="img"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 616" role="img"
      aria-labelledby="t d" font-family="system-ui, sans-serif">
   <title id="t">Worker session and dataset return</title>
-  <desc id="d">The Working dataset becomes a verified input copy that the worker restores into its
-  own copy, where the remote stage runs and records checkpoints. The stage exports a verified return
-  snapshot, that snapshot is restored and assigned as Working, and the worker copy cleanup drops the
-  worker's own database after the verified receipt exists. A worker session box owns the session
-  commands, and its dashed links show the run control and the cleanup it performs.</desc>
+  <desc id="d">The Working dataset is snapshotted into a verified input copy that the worker restores
+  into its own database, where the worker stage runs with its checkpoints. The stage exports a
+  verified return snapshot, and the dataset return downloads it, restores it and verifies it before
+  it publishes it as Working. The worker database cleanup drops the worker's copy after the import
+  receipt and the returned dataset receipt exist, and a dashed link shows the worker session's run
+  control.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
             markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" fill="#a3a4b8"/>
     </marker>
   </defs>
-  <rect width="960" height="612" rx="12" fill="#232434"/>
-
-  <rect x="48" y="232" width="320" height="64" rx="8" fill="#2e3045" stroke="#a98ae0" stroke-width="1.5"/>
-  <text x="208" y="258" text-anchor="middle" font-size="16" fill="#ececf2">Worker session</text>
-  <text x="208" y="280" text-anchor="middle" font-size="14" fill="#a3a4b8">run, pause, stop, finalize</text>
-
-  <rect x="48" y="328" width="320" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
-  <text x="208" y="354" text-anchor="middle" font-size="16" fill="#ececf2">Worker copy cleanup</text>
-  <text x="208" y="376" text-anchor="middle" font-size="14" fill="#a3a4b8">drops the worker database</text>
+  <rect width="960" height="616" rx="12" fill="#232434"/>
 
   <rect x="400" y="40" width="512" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
   <text x="656" y="66" text-anchor="middle" font-size="16" fill="#ececf2">Working dataset</text>
-  <text x="656" y="88" text-anchor="middle" font-size="14" fill="#a3a4b8">Read by the pipeline stages</text>
+  <text x="656" y="88" text-anchor="middle" font-size="14" fill="#a3a4b8">Snapshotted when the session starts</text>
 
   <rect x="400" y="136" width="512" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
   <text x="656" y="162" text-anchor="middle" font-size="16" fill="#ececf2">Verified input copy</text>
-  <text x="656" y="184" text-anchor="middle" font-size="14" fill="#a3a4b8">Checked when the worker restores it</text>
+  <text x="656" y="184" text-anchor="middle" font-size="14" fill="#a3a4b8">Full dump with its digest and verification</text>
 
   <rect x="400" y="232" width="512" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
   <text x="656" y="258" text-anchor="middle" font-size="16" fill="#ececf2">Worker stage and checkpoints</text>
-  <text x="656" y="280" text-anchor="middle" font-size="14" fill="#a3a4b8">Runs on the worker's own copy</text>
+  <text x="656" y="280" text-anchor="middle" font-size="14" fill="#a3a4b8">Runs on the worker database</text>
 
   <rect x="400" y="328" width="512" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
-  <text x="656" y="354" text-anchor="middle" font-size="16" fill="#ececf2">Verified return</text>
-  <text x="656" y="376" text-anchor="middle" font-size="14" fill="#a3a4b8">Digest and verification are checked</text>
+  <text x="656" y="354" text-anchor="middle" font-size="16" fill="#ececf2">Verified return snapshot</text>
+  <text x="656" y="376" text-anchor="middle" font-size="14" fill="#a3a4b8">Exported and verified on the worker</text>
 
-  <rect x="400" y="424" width="512" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
-  <text x="656" y="450" text-anchor="middle" font-size="16" fill="#ececf2">Working dataset return</text>
-  <text x="656" y="472" text-anchor="middle" font-size="14" fill="#a3a4b8">Restored into the derived database</text>
+  <rect x="400" y="424" width="512" height="64" rx="8" fill="#2e3045" stroke="#a98ae0" stroke-width="1.5"/>
+  <text x="656" y="450" text-anchor="middle" font-size="16" fill="#ececf2">Dataset return</text>
+  <text x="656" y="472" text-anchor="middle" font-size="14" fill="#a3a4b8">Verified, then published as Working</text>
+
+  <rect x="400" y="520" width="512" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
+  <text x="656" y="546" text-anchor="middle" font-size="16" fill="#ececf2">Worker database cleanup</text>
+  <text x="656" y="568" text-anchor="middle" font-size="14" fill="#a3a4b8">Dropped after the receipts exist</text>
+
+  <rect x="48" y="232" width="320" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
+  <text x="208" y="258" text-anchor="middle" font-size="16" fill="#ececf2">Worker session</text>
+  <text x="208" y="280" text-anchor="middle" font-size="14" fill="#a3a4b8">Run, pause, stop and finalize</text>
 
   <line x1="656" y1="104" x2="656" y2="136" stroke="#a3a4b8" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="664" y="126" font-size="14" fill="#a3a4b8">full snapshot</text>
+  <text x="668" y="126" font-size="14" fill="#a3a4b8">full snapshot</text>
   <line x1="656" y1="200" x2="656" y2="232" stroke="#a3a4b8" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="664" y="222" font-size="14" fill="#a3a4b8">worker restore</text>
+  <text x="668" y="222" font-size="14" fill="#a3a4b8">worker restore</text>
   <line x1="656" y1="296" x2="656" y2="328" stroke="#a3a4b8" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="664" y="318" font-size="14" fill="#a3a4b8">return snapshot</text>
+  <text x="668" y="318" font-size="14" fill="#a3a4b8">return snapshot</text>
   <line x1="656" y1="392" x2="656" y2="424" stroke="#a3a4b8" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="664" y="414" font-size="14" fill="#a3a4b8">restore and verify</text>
+  <text x="668" y="414" font-size="14" fill="#a3a4b8">download, restore and verify</text>
+  <line x1="656" y1="488" x2="656" y2="520" stroke="#a3a4b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="668" y="510" font-size="14" fill="#a3a4b8">receipts</text>
 
-  <line x1="368" y1="248" x2="400" y2="248" stroke="#a3a4b8"
+  <line x1="368" y1="264" x2="400" y2="264" stroke="#a3a4b8"
         stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
 
-  <polyline points="368,360 384,360 384,280 400,280" fill="none" stroke="#a3a4b8"
-            stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
-
-  <rect x="48" y="504" width="320" height="76" rx="8" fill="none" stroke="#4a4c6b" stroke-width="1.5"/>
-  <line x1="64" y1="532" x2="104" y2="532" stroke="#a3a4b8" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="116" y="537" font-size="14" fill="#a3a4b8">Snapshot and restore flow</text>
-  <line x1="64" y1="560" x2="104" y2="560" stroke="#a3a4b8" stroke-width="1.5"
+  <rect x="48" y="520" width="320" height="48" rx="8" fill="none" stroke="#4a4c6b" stroke-width="1.5"/>
+  <line x1="64" y1="544" x2="104" y2="544" stroke="#a3a4b8" stroke-width="1.5"
         stroke-dasharray="5 4" marker-end="url(#arrow)"/>
-  <text x="116" y="565" font-size="14" fill="#a3a4b8">Session control and cleanup</text>
+  <text x="116" y="549" font-size="14" fill="#a3a4b8">Session control</text>
 </svg>

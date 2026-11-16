@@ -60,7 +60,7 @@ const courseSummary = (id: string, code: string): CourseSummary => ({
 });
 const moduleSummary = (id: string, code: string): ModuleSummary => ({
   group_id: id,
-  sisu_module_id: `sisu-${id}`,
+  source_version_id: `sisu-${id}`,
   module_type: "Module",
   code,
   name_fi: null,

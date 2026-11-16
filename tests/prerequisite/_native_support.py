@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from sqlalchemy import delete, select
 
-from course_explorer.config import load_database_settings
+from course_explorer.config import SearchSettings, load_database_settings
 from course_explorer.curriculum import (
     CatalogueCourse,
     CatalogueModule,
@@ -30,6 +30,8 @@ from course_explorer.db.models import (
     ModuleRuleNode,
     ModuleVersion,
     ModuleVersionCurriculumPeriod,
+    OfficialCourseText,
+    OfficialModuleText,
     OfficialPrerequisiteOption,
     OfficialPrerequisiteOptionMember,
     OfficialSubstitutionOption,
@@ -38,6 +40,7 @@ from course_explorer.db.models import (
 )
 from course_explorer.db.session import session_scope
 from course_explorer.enums import IngestionRunStatus, SourceObjectType
+from course_explorer.instance import UniversityMetadata
 from course_explorer.prerequisite import native_compiler, native_handle
 from course_explorer.prerequisite.domain import (
     CurrentEquivalenceGroup,
@@ -50,6 +53,7 @@ from tests.prerequisite._graph_support import (
     RecordingEquivalenceGroupRead,
     RecordingInferredSetRead,
 )
+from tests.support import settings_factory
 
 
 def _period_year(period_id: str) -> int:
@@ -129,10 +133,8 @@ def _seed_course(session, course: CatalogueCourse, ordinal: int) -> None:
     snapshot = _snapshot(session, SourceObjectType.COURSE_UNIT, ordinal)
     version_row = CourseVersion(
         course_id=row.id,
-        sisu_course_unit_id=version.sisu_course_unit_id,
+        source_version_id=version.source_version_id,
         code=version.code,
-        name_fi=version.name_fi,
-        name_en=version.name_en,
         credits_min=version.credits_min,
         credits_max=version.credits_max,
         official_url=version.official_url,
@@ -143,6 +145,16 @@ def _seed_course(session, course: CatalogueCourse, ordinal: int) -> None:
     )
     session.add(version_row)
     session.flush()
+    for field, values in version.texts.items():
+        for language, text in values.items():
+            session.add(
+                OfficialCourseText(
+                    course_version_id=version_row.id,
+                    field=field,
+                    language=language,
+                    text=text,
+                )
+            )
     for period_id in period_ids:
         session.add(
             CourseVersionCurriculumPeriod(
@@ -220,11 +232,9 @@ def _seed_module(session, module: CatalogueModule, ordinal: int) -> None:
         snapshot = _snapshot(session, SourceObjectType.MODULE, ordinal)
         version_row = ModuleVersion(
             module_id=row.id,
-            sisu_module_id=version.sisu_module_id,
+            source_version_id=version.source_version_id,
             module_type=version.module_type,
             code=version.code,
-            name_fi=version.name_fi,
-            name_en=version.name_en,
             target_credits_min=version.target_credits_min,
             target_credits_max=version.target_credits_max,
             document_state=version.document_state,
@@ -234,6 +244,15 @@ def _seed_module(session, module: CatalogueModule, ordinal: int) -> None:
         )
         session.add(version_row)
         session.flush()
+        for language, text in version.names.items():
+            session.add(
+                OfficialModuleText(
+                    module_version_id=version_row.id,
+                    field="name",
+                    language=language,
+                    text=text,
+                )
+            )
         for period in version.curriculum_periods:
             session.add(
                 ModuleVersionCurriculumPeriod(
@@ -376,12 +395,16 @@ def reset_worker_handle() -> None:
     native_handle.reset_worker_handle()
 
 
-def open_native_compiler(factory: object) -> PrerequisiteGraphCompiler:
+def open_native_compiler(
+    factory: object, *, university: UniversityMetadata | None = None
+) -> PrerequisiteGraphCompiler:
     """Open one compiler handle against the configured disposable database."""
     settings = load_database_settings()
     if not settings.postgres_db.endswith("_test"):
         raise ValueError("native compiler tests require a _test database")
-    handle = native_handle.open_database(native_handle.database_conninfo(settings))
+    handle = native_handle.open_database(
+        native_handle.database_conninfo(settings), university=university
+    )
     return PrerequisiteGraphCompiler(native_handle=handle)
 
 
@@ -397,10 +420,12 @@ def native_compiler_for(
     curriculum: FakeCurriculumRead,
     inferred: RecordingInferredSetRead | None = None,
     equivalence: RecordingEquivalenceGroupRead | None = None,
+    *,
+    university: UniversityMetadata | None = None,
 ) -> PrerequisiteGraphCompiler:
     """Seed one fixture catalogue and return a compiler over the native fact loader."""
     seed_native_facts(factory, curriculum, inferred, equivalence)
-    return open_native_compiler(factory)
+    return open_native_compiler(factory, university=university)
 
 
 def native_requirement_state(
@@ -431,7 +456,11 @@ def native_requirement_state(
         solver = bundle.structures[0].solver
         if solver.root_use_id is None:
             return "satisfied"
-        outcome = bundle.evaluate(tuple(basis_group_ids), mode=0)[0]
+        outcome = bundle.evaluate(
+            tuple(basis_group_ids),
+            mode=0,
+            assumed_course_credits=settings_factory(SearchSettings).assumed_course_credits,
+        )[0]
         return "satisfied" if outcome.has_outcome else "unsatisfied"
     finally:
         bundle.close()

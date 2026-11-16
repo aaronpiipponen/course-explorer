@@ -1,1 +1,1 @@
-"""Tampere University curriculum ingestion and course exploration package."""
+"""University curriculum ingestion and course exploration package."""

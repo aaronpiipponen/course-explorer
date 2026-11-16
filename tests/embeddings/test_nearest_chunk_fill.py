@@ -16,7 +16,8 @@ from course_explorer.embeddings.centroids import CourseCentroid
 from course_explorer.embeddings.generation import embedding_configuration_sha256
 from course_explorer.embeddings.read import TeachingEmbeddingRepository
 from course_explorer.embeddings.shared_store import SharedServingStore
-from course_explorer.enums import TeachingTextField, TeachingTextLanguage
+from course_explorer.enums import TeachingTextField
+from course_explorer.instance import UNIVERSITIES
 from tests.search._repository_support import (
     CURRENT_YEAR,
     _add_chunk,
@@ -60,7 +61,7 @@ def test_nearest_chunk_read_fills_the_requested_limit_under_filters(
             version_id=basis_version,
             source_hash="7" * 64,
             field=TeachingTextField.CONTENT,
-            language=TeachingTextLanguage.EN,
+            language="en",
             chunk_index=0,
             text="basis chunk",
             cosine=1.0,
@@ -84,7 +85,7 @@ def test_nearest_chunk_read_fills_the_requested_limit_under_filters(
                 version_id=version_id,
                 source_hash=f"{index:02d}" * 32,
                 field=TeachingTextField.CONTENT,
-                language=TeachingTextLanguage.EN,
+                language="en",
                 chunk_index=0,
                 text=f"eligible chunk {index}",
                 cosine=0.99 - index * 0.01,
@@ -107,7 +108,7 @@ def test_nearest_chunk_read_fills_the_requested_limit_under_filters(
                 version_id=version_id,
                 source_hash=f"{index + 50:02d}" * 32,
                 field=TeachingTextField.CONTENT,
-                language=TeachingTextLanguage.EN,
+                language="en",
                 chunk_index=0,
                 text=f"excluded chunk {index}",
                 cosine=1.0,
@@ -130,7 +131,7 @@ def test_nearest_chunk_read_fills_the_requested_limit_under_filters(
                 version_id=version_id,
                 source_hash=f"{index + 60:02d}" * 32,
                 field=TeachingTextField.CONTENT,
-                language=TeachingTextLanguage.EN,
+                language="en",
                 chunk_index=0,
                 text=f"inactive chunk {index}",
                 cosine=1.0,
@@ -138,7 +139,9 @@ def test_nearest_chunk_read_fills_the_requested_limit_under_filters(
 
     configuration_hash = embedding_configuration_sha256(embedding_settings())
     top_k = load_search_settings().recommendation_chunk_top_k
-    represented = CurriculumRepository(factory).get_represented_summaries(["group-basis"])
+    represented = CurriculumRepository(
+        factory, university=UNIVERSITIES["example"]
+    ).get_represented_summaries(["group-basis"])
     seed_neighbors(factory, rows_per_chunk=128)
     repository = TeachingEmbeddingRepository(factory)
     all_chunks = repository.read_stored_chunks(
@@ -152,7 +155,7 @@ def test_nearest_chunk_read_fills_the_requested_limit_under_filters(
         centroids=(
             CourseCentroid(
                 group_id="group-basis",
-                sisu_course_unit_id="source-basis",
+                source_version_id="source-basis",
                 representative_source_hash="0" * 64,
                 chunk_count=1,
                 centroid=(0.0,) * COURSE_EMBEDDING_DIMENSION,

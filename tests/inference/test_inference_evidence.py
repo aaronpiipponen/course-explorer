@@ -19,7 +19,7 @@ INPUT_SHA256 = "3" * 64
 def work_request(**overrides: object) -> InferenceTargetWorkRequest:
     """Build one otherwise valid target-work request."""
     values: dict[str, object] = {
-        "target_group_id": "tut-cu-g-27096",
+        "target_group_id": "course-group-a",
         "activity_as_of_academic_year_start": 2026,
         "activity_window_years": 3,
     }
@@ -60,7 +60,7 @@ def test_work_key_changes_for_target_activity_input_or_execution_identity_only()
     key = work_key_sha256(base, identity, INPUT_SHA256)
 
     assert (
-        work_key_sha256(work_request(target_group_id="tut-cu-g-27086"), identity, INPUT_SHA256)
+        work_key_sha256(work_request(target_group_id="course-group-b"), identity, INPUT_SHA256)
         != key
     )
     assert (

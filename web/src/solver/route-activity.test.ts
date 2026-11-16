@@ -20,6 +20,7 @@ describe("route activity", () => {
     const requiredResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.required_inactive`),
       [],
+      "5",
     );
     expect(requiredResult.state).toBe("no_solution");
     expect(requiredResult.new_courses).toEqual([]);
@@ -28,26 +29,30 @@ describe("route activity", () => {
     const alternativeResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.alternative`),
       [],
+      "5",
     );
     expect(alternativeResult.state).toBe("exact");
     expect(selectedGroupIds(alternativeResult)).toEqual(["active-alt"]);
     expect(creditsOf(alternativeResult.total_new_credits)).toBe(300);
 
     const retainedBasis = loadStructure(fixtures, `${prefix}.retained_basis`);
-    const retainedResult = calculateMinimumNewCredits(retainedBasis, [
-      "inactive-leaf",
-    ]);
+    const retainedResult = calculateMinimumNewCredits(
+      retainedBasis,
+      ["inactive-leaf"],
+      "5",
+    );
     expect(retainedResult.state).toBe("exact");
     expect(selectedGroupIds(retainedResult)).toEqual([]);
     expect(creditsOf(retainedResult.total_new_credits)).toBe(0);
 
-    const retainedOnly = calculateMinimumNewCredits(retainedBasis, []);
+    const retainedOnly = calculateMinimumNewCredits(retainedBasis, [], "5");
     expect(retainedOnly.state).toBe("no_solution");
     expect(selectedGroupIds(retainedOnly)).toEqual([]);
 
     const allCoursesResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.all_courses`),
       [],
+      "5",
     );
     expect(allCoursesResult.state).toBe("exact");
     expect(selectedGroupIds(allCoursesResult)).toEqual(["inactive-leaf"]);
@@ -59,6 +64,7 @@ describe("route activity", () => {
     const alternativeResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.alternative`),
       [],
+      "5",
     );
     expect(alternativeResult.state).toBe("exact");
     expect(selectedGroupIds(alternativeResult)).toEqual(["alt"]);
@@ -68,6 +74,7 @@ describe("route activity", () => {
     const onlyResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.only`),
       [],
+      "5",
     );
     expect(onlyResult.state).toBe("no_solution");
     expect(onlyResult.new_courses).toEqual([]);
@@ -82,6 +89,7 @@ describe("route activity", () => {
         "excluded_substitution_option_requires_every_member.compilation",
       ),
       [],
+      "5",
     );
     expect(result.state).toBe("exact");
     expect(selectedGroupIds(result)).toEqual(["a"]);
@@ -96,6 +104,7 @@ describe("route activity", () => {
         "excluded_course_does_not_poison_descendant_on_another_route.compilation",
       ),
       [],
+      "5",
     );
     expect(result.state).toBe("exact");
     expect(selectedGroupIds(result)).toEqual(["shared", "y"]);
@@ -113,6 +122,7 @@ describe("route activity", () => {
     const result = calculateMinimumNewCredits(
       loadStructure(fixtures, prefix),
       [],
+      "5",
     );
     expect(result.state).toBe("no_solution");
     const sharedProblems = result.problems.filter(

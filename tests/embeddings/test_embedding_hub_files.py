@@ -26,7 +26,7 @@ def _chunk(
     # The hub and centroid arithmetic reads the field and the representative identity.
     return CourseEmbeddingChunkInput.model_construct(
         group_id=group_id,
-        sisu_course_unit_id=sisu,
+        source_version_id=sisu,
         representative_source_hash=source_hash,
         field=field,
     )
@@ -68,7 +68,7 @@ def test_hubs_average_every_unit_chunk_and_only_outcome_chunks_and_write_compact
     assert len(centroids) == 1
     centroid = centroids[0]
     assert centroid.group_id == "course-a"
-    assert centroid.sisu_course_unit_id == "sisu-a"
+    assert centroid.source_version_id == "sisu-a"
     assert centroid.chunk_count == 2
     assert centroid.centroid == pytest.approx((1 / 2**0.5, 1 / 2**0.5))
 

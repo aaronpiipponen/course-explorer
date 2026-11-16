@@ -13,6 +13,7 @@ from course_explorer.config import (
     SearchSettings,
     load_database_settings,
     load_embedding_runtime_settings,
+    load_instance_settings,
     load_search_settings,
 )
 from course_explorer.curriculum import RepresentedCourseSummary
@@ -113,10 +114,12 @@ def run_recommendations_command(
     resolved_settings = (
         database_settings if database_settings is not None else load_database_settings()
     )
+    search_settings = search_settings or load_search_settings()
     next_report = read_next_courses(
         inputs,
         resolved_settings,
         report_cache=next_course_cache,
+        search_settings=search_settings,
         projection=projection,
         session_factory=session_factory,
     )
@@ -128,7 +131,6 @@ def run_recommendations_command(
     if not chosen_ids:
         return RecommendationsReport(similarity_results=())
 
-    search_settings = search_settings or load_search_settings()
     embedding_settings = embedding_settings or load_embedding_runtime_settings()
     if hub is None or outcomes_hub is None:
         raise ValueError("recommendations require the serving artifact hub pair")
@@ -137,7 +139,7 @@ def run_recommendations_command(
     )
     excluded = set(chosen_ids) | {result.course.group_id for result in next_report.results}
     with database_context(resolved_settings, factory=session_factory) as factory:
-        curriculum = CurriculumRepository(factory)
+        curriculum = CurriculumRepository(factory, university=load_instance_settings().university)
         embedding_repository = TeachingEmbeddingRepository(factory)
         basis_records = _represented_records(projection, curriculum, chosen_ids, active_only=None)
         basis_chunks = embedding_repository.get_chunks(

@@ -32,7 +32,7 @@ __all__ = [
 
 
 def module_version(
-    sisu_module_id: str,
+    source_version_id: str,
     *,
     module_type: ModuleType = ModuleType.STUDY_MODULE,
     code: str | None = None,
@@ -44,11 +44,14 @@ def module_version(
 ) -> CatalogueModuleVersionIdentity:
     """Build one projected module-version identity fixture."""
     return CatalogueModuleVersionIdentity(
-        sisu_module_id=sisu_module_id,
+        source_version_id=source_version_id,
         module_type=module_type,
         code=code,
-        name_fi=name_fi,
-        name_en=name_en,
+        names={
+            language: value
+            for language, value in (("fi", name_fi), ("en", name_en))
+            if value is not None
+        },
         validity_start=validity_start,
         validity_end=validity_end,
         curriculum_periods=curriculum_periods,

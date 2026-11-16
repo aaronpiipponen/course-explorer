@@ -125,7 +125,7 @@ def _table_state(factory: object) -> tuple[object, ...]:
             sorted(
                 (
                     row.group_id,
-                    row.sisu_course_unit_id,
+                    row.source_version_id,
                     row.representative_source_hash,
                     row.chunk_count,
                     bytes(row.centroid),
@@ -139,7 +139,7 @@ def _table_state(factory: object) -> tuple[object, ...]:
                 (
                     row.group_no,
                     row.group_id,
-                    row.sisu_course_unit_id,
+                    row.source_version_id,
                     row.representative_source_hash,
                 )
                 for row in session.scalars(select(CourseEmbeddingSearchGroup))

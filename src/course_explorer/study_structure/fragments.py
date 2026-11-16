@@ -29,7 +29,7 @@ from course_explorer.study_structure.service import (
 # Fragment file identity: the magic bytes and format version the reader checks, and the name the
 # artifact build writes under its build directory.
 MAGIC = b"CSTFRAG1"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 FILE_NAME = "study-fragments.bin"
 
 _ROOT = 0

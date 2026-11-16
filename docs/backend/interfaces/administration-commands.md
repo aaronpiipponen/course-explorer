@@ -59,7 +59,8 @@ whatever operation raised it.
 | `self-host-example` | `use the operator menu for interactive entry, check the prepared environment, the host tools and the loopback ports, confirm the pinned model download, and run the workflow again after the reported step succeeds. A failed import leaves the copied working files, .env, the account and the example schema in place; clear the example database explicitly before a retry.` |
 | `self-host-real-database` | `use the operator menu for interactive entry, run the example workflow first, keep the database and embedding services running, stop every stage and end the foreground pair before running this workflow again. A failed build or proof keeps the named database, its initial receipt and Selected; inspect them with `datasets list` and use the dataset owners for explicit maintenance before a retry.` |
 | any, on a configuration error | `check config/*.toml and this device's ignored .env, then retry the same command` |
-- `coverage` and `summary` also print a fixed note to standard error, stating that the reports read the named role and not unreturned worker progress.
+
+`coverage` and `summary` also print a fixed note to standard error, stating that the reports read the named role and not unreturned worker progress.
 
 ## The self-host setup commands
 
@@ -67,14 +68,18 @@ whatever operation raised it.
 
 | Verb | Input fields |
 |---|---|
-| `example` | `app_url`, `username`, `password`, `mode`, `confirm_download`, `publication_token` |
+| `example` | `instance_key`, `web_port`, `admin_web_port`, `postgres_port`, `embedding_port`, `shared_root`, `app_url`, `admin_origin`, `username`, `password`, `mode`, `confirm_download`, `publication_token` |
 | `real-database` | `database_name`, `mode` |
 
-`app_url` is the feature site's external root address, and an absent value keeps the example's configured address. `mode` is `user` or `foreground`. `password` and `publication_token` are hidden from the input model's representation and its serialized form, and a validation error never echoes their inputs. The two commands take no secret flag.
+`instance_key` selects one entry of the finite university map, which lists the implemented source families. The four ports must differ, and each validates as a TCP port. `shared_root` is an optional absolute or home-prefixed directory outside the checkout, and an absent value uses the configured `ADMIN_SHARED_ROOT`. `app_url` is the feature site's external root address, and an absent value derives `http://localhost:<web_port>/`. `admin_origin` is the administration backend's exact HTTPS origin, and an absent value derives `https://localhost:<admin_web_port>`. `mode` is `user` or `foreground`. `password` and `publication_token` are hidden from the input model's representation and its serialized form, and a validation error never echoes their inputs. The two commands take no secret flag.
 
 The two commands accept one closed input contract each, with a process runner and a writer. The report is transient: the address to open and the Selected dataset id, which is `null` for the example path.
 
-`self-host example` materializes absent templates, applies the supplied key edits, generates the two database passwords when it creates the environment file, creates the administration account when its leaf is absent, prepares the pinned artifact, builds and starts the two services, migrates and loads the example dataset, prepares the feedback application store, runs the documented builds, and starts and proves the chosen mode. `self-host real-database` enrolls the named empty database as Selected, builds its artifacts, starts or restarts serving, and proves the Selected catalogue and identity. Both resolve the process runner once.
+`self-host example` names its checkout `course-explorer-<key>`. On a clean checkout the first run renames the folder, rebuilds its `.venv` and returns with the new path, and the same command from that path continues. The continuing run materializes the absent templates, applies the supplied instance key, ports, origins, feature-switch defaults and shared directory, generates the two database passwords when it creates the environment file, creates the administration account when its leaf is absent, prepares the pinned artifact, builds and starts the two services, migrates and loads the example dataset, prepares the feedback application store, runs the documented builds, and starts and proves the chosen mode.
+
+The workflow writes the embedding and inference switches off, and it writes the prerequisites switch on when the configured entry's [source family](/docs/reference/glossary.md#configuration) is `sisu` and off for every other family.
+
+`self-host real-database` enrolls the named empty database as Selected, builds its artifacts, starts or restarts serving, and proves the Selected catalogue and identity. Both resolve the process runner once.
 
 No step list, hash, version, manifest, saved success record or installer log is retained. The two workflows appear in the operator menu as Setup choices 12 and 13, and the administration console offers no self-host action.
 
@@ -191,7 +196,7 @@ The detailed `summary inference` report holds, beside its coverage, publication 
 | `website` | The site's own web unit: its measured systemd state, its main PID, its start time and uptime, the configured loopback bind and process count, the checkout-relative entry point, and the branch and revision of the checkout this command reads |
 | `host` | The host's measured uptime, CPU usage sampled over a short interval, total and used memory, the filesystem total and free bytes, and the total bytes of `data`, `models` and `data/backups` |
 | `database` | The database service's container state, image and health, the resolved database name, the database's own migration revision beside this checkout's expected head, its size, its connection count, and the container's shared-memory size |
-| `embedding` | The embedding service's container state, image and health, and the configured model, artifact path, bind, context size, thread count, pooling and normalization |
+| `embedding` | The embedding service's container state, image and health, and the configured model, resolved artifact path, bind, context size, thread count, pooling and normalization. The artifact path is the configured `EMBEDDING_ARTIFACT_PATH`, resolved under `ADMIN_SHARED_ROOT` when it is relative and used as written when it is absolute. |
 | `serving` | The site's embedding feature switch, whether a Selected pointer exists, and the Selected receipt's id, kind, predecessor, pointer and recorded database head |
 | `hubs` | On a site that serves the embedding features, both embedding hub files of the configured embedding directory: their name, their repository-relative path, their modification time, and whether each is newer than the measured web start. On a site with them off the member is empty and no artifact path is resolved. |
 
@@ -290,6 +295,8 @@ uv run python scripts/admin.py usage --hours 24
 
 ## The example data loader
 
-`scripts/mock_data.py` is data preparation rather than a feature read. Its four actions import the invented example dataset, add the bundled vectors of that dataset, write the serving artifact set the site's switch selects, and rewrite the tracked bundled vector file. The loader refuses an enrolled state root, so it fills a bootstrap configured database, and it requires that database at the running code's migration head. The two import actions print one report each, and the artifact action prints one JSON report of the built artifact paths and its counts. The artifact action builds artifacts alone and rewrites no tracked file, so a deployment never changes the checkout, and `write-bundle` is the explicit rewrite of `data/mock/embeddings.json`. [The example dataset](/docs/getting-started/example-dataset.md) describes when the loader runs.
+`scripts/mock_data.py` is data preparation rather than a feature read. Its four actions import the invented example dataset, add the bundled vectors of that dataset, write the serving artifact set the site's switch selects, and rewrite the tracked bundled vector file. The loader refuses an enrolled state root, so it fills a bootstrap configured database, and it requires that database at the running code's migration head.
+
+The two import actions print one report each, and the artifact action prints one JSON report of the built artifact paths and its counts. The artifact action builds artifacts alone and rewrites no tracked file, so a deployment never changes the checkout, and `write-bundle` is the explicit rewrite of `data/mock/embeddings.json`. `src/course_explorer/example_data.py` owns `EXAMPLE_SOURCE_ATTRIBUTION`, the attribution of the example dataset, which the loader in `src/course_explorer/mock_data.py` and the feature route in `src/course_explorer_web/routes/features.py` import. [The example dataset](/docs/getting-started/example-dataset.md) describes when the loader runs.
 
 The stage actions, the dataset operations, and the worker operations are described in [Stage lifecycle](/docs/operations/stage-lifecycle.md), [Datasets](/docs/operations/datasets.md), and [Worker sessions](/docs/operations/worker-sessions.md).

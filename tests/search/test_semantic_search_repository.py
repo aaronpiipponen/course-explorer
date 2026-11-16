@@ -17,9 +17,9 @@ from course_explorer.embeddings.read import TeachingEmbeddingRepository
 from course_explorer.embeddings.search_blocks import CourseEmbeddingSearchRepository
 from course_explorer.enums import (
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
 )
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.recommendations.service import rank_recommendation_candidates
 from course_explorer.search.repository import SemanticSearchRepository
 from course_explorer.search.service import CourseSearchService
@@ -64,7 +64,7 @@ def test_exact_cosine_uses_best_completed_compatible_chunk_without_cap(
             version_id=seeded["group_b_version"],
             source_hash="2" * 64,
             field=TeachingTextField.OUTCOMES,
-            language=TeachingTextLanguage.FI,
+            language="fi",
             chunk_index=1,
             text="outcomes b",
             cosine=0.85,
@@ -74,7 +74,7 @@ def test_exact_cosine_uses_best_completed_compatible_chunk_without_cap(
             version_id=seeded["group_b_version"],
             source_hash="2" * 64,
             field=TeachingTextField.NAME,
-            language=TeachingTextLanguage.FI,
+            language="fi",
             chunk_index=2,
             text="name b",
             cosine=0.49,
@@ -91,7 +91,7 @@ def test_exact_cosine_uses_best_completed_compatible_chunk_without_cap(
     assert set(by_group) == {"group-a", "group-b"}
     # The group score is the best matching chunk's 0.8. The seeded chunk average is 0.7.
     assert by_group["group-a"].score == pytest.approx(0.8)
-    assert by_group["group-a"].sisu_course_unit_id == "source-a"
+    assert by_group["group-a"].source_version_id == "source-a"
     assert by_group["group-b"].score == pytest.approx(0.9)
 
     active_only = repository.search(
@@ -113,7 +113,7 @@ def test_exact_cosine_uses_best_completed_compatible_chunk_without_cap(
     # The scoped vector read returns only the requested current representatives' completed,
     # compatible chunks: the inactive group-b is retained while the incompatible group-c and
     # pending group-d rows are absent, and an empty request opens no session.
-    curriculum = CurriculumRepository(factory)
+    curriculum = CurriculumRepository(factory, university=UNIVERSITIES["example"])
     represented = curriculum.list_represented_summaries()
     requested = tuple(
         record
@@ -133,17 +133,13 @@ def test_exact_cosine_uses_best_completed_compatible_chunk_without_cap(
     assert {
         (chunk.group_id, chunk.field, chunk.language, chunk.chunk_index) for chunk in chunks
     } == {
-        ("group-a", TeachingTextField.CONTENT, TeachingTextLanguage.FI, 0),
-        ("group-a", TeachingTextField.CONTENT, TeachingTextLanguage.EN, 1),
-        ("group-b", TeachingTextField.CONTENT, TeachingTextLanguage.EN, 0),
-        ("group-b", TeachingTextField.OUTCOMES, TeachingTextLanguage.FI, 1),
-        ("group-b", TeachingTextField.NAME, TeachingTextLanguage.FI, 2),
+        ("group-a", TeachingTextField.CONTENT, "fi", 0),
+        ("group-a", TeachingTextField.CONTENT, "en", 1),
+        ("group-b", TeachingTextField.CONTENT, "en", 0),
+        ("group-b", TeachingTextField.OUTCOMES, "fi", 1),
+        ("group-b", TeachingTextField.NAME, "fi", 2),
     }
-    a_fi = next(
-        chunk
-        for chunk in chunks
-        if chunk.group_id == "group-a" and chunk.language == TeachingTextLanguage.FI
-    )
+    a_fi = next(chunk for chunk in chunks if chunk.group_id == "group-a" and chunk.language == "fi")
     assert a_fi.character_count == len("chunk a0")
     assert a_fi.text_origin is TeachingTextOrigin.OFFICIAL
     assert len(a_fi.embedding) == COURSE_EMBEDDING_DIMENSION
@@ -151,11 +147,7 @@ def test_exact_cosine_uses_best_completed_compatible_chunk_without_cap(
         (0.6, 0.8) + (0.0,) * (COURSE_EMBEDDING_DIMENSION - 2)
     )
 
-    a_en = next(
-        chunk
-        for chunk in chunks
-        if chunk.group_id == "group-a" and chunk.language is TeachingTextLanguage.EN
-    )
+    a_en = next(chunk for chunk in chunks if chunk.group_id == "group-a" and chunk.language == "en")
     basis = (a_en, a_fi)
     # An empty neighbour table returns no hit, and the opened artifact set owns the refusal.
     assert (
@@ -201,7 +193,7 @@ def test_service_returns_current_summary_for_derived_only_match_and_ignores_obso
     _seed_derived_and_obsolete(database)
     _, factory = database
     provider = FakeQueryProvider()
-    curriculum = CurriculumRepository(factory)
+    curriculum = CurriculumRepository(factory, university=UNIVERSITIES["example"])
     service = CourseSearchService(
         SemanticSearchRepository(factory, group_count=_packed(factory)),
         provider,
@@ -223,7 +215,7 @@ def test_service_returns_current_summary_for_derived_only_match_and_ignores_obso
     assert result.score == pytest.approx(0.6)
     assert result.course.code == "CUR.1"
     assert result.course.name_fi == "Nykyinen kurssi"
-    assert result.course.name_en is None  # derived text never appears as an official summary name
+    assert result.course.name_en == "Nykyinen kurssi"  # exact official fallback, never derived text
 
     # The scoped read keeps only the current representative's own compatible chunk: both the
     # stale-source-hash cell on the current version and the obsolete version's chunk are absent.
@@ -238,7 +230,7 @@ def test_service_returns_current_summary_for_derived_only_match_and_ignores_obso
     )
     assert [
         (chunk.field, chunk.language, chunk.chunk_index, chunk.text_origin) for chunk in scoped
-    ] == [(TeachingTextField.CONTENT, TeachingTextLanguage.EN, 0, TeachingTextOrigin.DERIVED)]
+    ] == [(TeachingTextField.CONTENT, "en", 0, TeachingTextOrigin.DERIVED)]
     seed_neighbors(factory)
     neighbors = TeachingEmbeddingRepository(factory).find_nearest_chunks(
         scoped,
@@ -246,7 +238,7 @@ def test_service_returns_current_summary_for_derived_only_match_and_ignores_obso
         top_k=10,
         active_only=True,
     )
-    assert {(hit.sisu_course_unit_id, hit.representative_source_hash) for hit in neighbors} == {
+    assert {(hit.source_version_id, hit.representative_source_hash) for hit in neighbors} == {
         ("source-current", "1" * 64),
         ("source-current", "3" * 64),
         ("source-obsolete", "2" * 64),
@@ -269,7 +261,7 @@ def test_service_returns_current_summary_for_derived_only_match_and_ignores_obso
     assert report.course_b.group_id == "group-current"
     assert report.course_a.code == "CUR.1"
     assert report.course_a.name_fi == "Nykyinen kurssi"
-    assert report.course_a.name_en is None
+    assert report.course_a.name_en == "Nykyinen kurssi"
     assert report.uses_derived_text is True
     assert report.meters.content_similarity == pytest.approx(100.0)
     assert report.meters.learning_outcome_similarity is None

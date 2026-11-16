@@ -1,5 +1,11 @@
-# External app address, loopback bind, process supervision, browser-drawing and
-# served-feature policy for read-only HTTP serving.
+# Instance key, display label, external app address, loopback bind, process supervision,
+# browser-drawing and served-feature policy for read-only HTTP serving.
+# The university instance this site presents, as one key of the university map.
+INSTANCE_KEY = "example"
+# Optional override of the map label for this instance, `INSTANCE_DISPLAY_LABEL`: lowercase and the
+# same in both interface languages. When it is absent, the configured university's map label
+# applies.
+
 # External root address of this site. The administration console's App link and the feedback
 # exact Host and Origin boundary both read this key. One absolute address at the root: HTTPS, or
 # plain HTTP for a loopback hostname, without credentials, wildcard, whitespace, query or fragment.
@@ -21,6 +27,9 @@ PREREQUISITE_GRAPH_MAX_ELEMENTS = 500
 WEB_EMBEDDINGS_ENABLED = true
 # Serve inferred prerequisite data and the Inferred controls on every surface.
 WEB_INFERENCE_ENABLED = true
+# Serve the prerequisite graph and Next courses. Discover is hidden only when this switch and the
+# embeddings switch are both off.
+WEB_PREREQUISITES_ENABLED = true
 # Retained serving caches. Each key gives the byte size of one supervisor-owned cache region, and
 # every region lives as long as the supervisor that created it. The artifact store, shared centroid
 # and chunk stores and the native fact handles are charged to the worker cgroup, not to this Python
@@ -36,10 +45,11 @@ USAGE_RETENTION_DAYS = 30
 # many identities, and each identity, official code and module-version key or value holds at most
 # this many characters.
 WEB_REQUEST_MAX_COURSE_ITEMS = 500
-WEB_REQUEST_MAX_IDENTIFIER_LENGTH = 40
+WEB_REQUEST_MAX_IDENTIFIER_LENGTH = 254
 # Maximum characters of one search query text.
 WEB_REQUEST_MAX_QUERY_LENGTH = 500
-# Bytes of one request body the front router reads. A larger body is refused with 413. The largest
-# legitimate body is a study-structure request with every input at its bound, about 64.6 KB, so this
-# leaves about 9 KB of headroom.
-WEB_REQUEST_BODY_MAX_BYTES = 73728
+# Bytes of one request body the front router reads. A larger body is refused with 413.
+# One request inside the per-input bounds can carry 500 identities of 254 characters in
+# `root_group_ids` and 500 key/value pairs of 254 characters in `module_versions`, about 385 KB
+# before JSON overhead, so the bound is 512 KiB.
+WEB_REQUEST_BODY_MAX_BYTES = 524288

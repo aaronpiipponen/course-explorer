@@ -2,7 +2,7 @@
 
 The Feedback tab lists the submissions stored in the feedback application store with their answers, images, publication state and local deletion.
 
-![The Feedback tab with the search box, the filters row and two submissions, one private and one awaiting publication](/docs/screenshots/admin-console-feedback.png)
+![The Feedback tab with the search box, the filters row and three submissions, one private and two with their GitHub publication pending](/docs/screenshots/admin-console-feedback.png)
 
 ## The listing
 

@@ -25,6 +25,7 @@ from course_explorer import administration
 from course_explorer.config import (
     DatabaseSettings,
     load_database_settings,
+    load_instance_settings,
     load_search_settings,
 )
 from course_explorer.curriculum_repository import CurriculumRepository
@@ -115,7 +116,7 @@ def _prepare_prerequisite_command(
         database_settings if database_settings is not None else load_database_settings()
     )
     with _database_context(connection_settings, factory=session_factory) as factory:
-        curriculum = CurriculumRepository(factory)
+        curriculum = CurriculumRepository(factory, university=load_instance_settings().university)
         resolver = CourseResolver(curriculum, projection=projection)
         resolved = resolver.resolve_courses(
             (target_code, *selected_inputs, *completed_inputs, *excluded_inputs)
@@ -203,12 +204,14 @@ def _run_node_solver(request: dict[str, Any]) -> Any:
 
 def _node_route(context: _PrerequisiteCommandContext) -> dict[str, Any]:
     """Run the TypeScript route solver over one prepared context."""
+    search = load_search_settings()
     return _run_node_solver(
         {
             "operation": "route",
             "structure": context.solver.model_dump(mode="json"),
             "basis_group_ids": list(context.basis_group_ids),
-            "max_compact_nodes": load_search_settings().prerequisite_path_max_compact_nodes,
+            "assumed_course_credits": str(search.assumed_course_credits),
+            "max_compact_nodes": search.prerequisite_path_max_compact_nodes,
         }
     )
 
@@ -270,8 +273,9 @@ def run_minimum_route_command(
 ) -> dict[str, Any]:
     """Compose one lookup and one compile, then solve through the bundled TypeScript solver.
 
-    The result is the JSON object the Node process wrote, without a drawing. The size limit is the
-    configured `prerequisite_path_max_compact_nodes`, read here and passed to the solver.
+    The result is the JSON object the Node process wrote, without a drawing. The size limit and
+    the assumed course credits are the configured `prerequisite_path_max_compact_nodes` and
+    `ASSUMED_COURSE_CREDITS`, read here and passed to the solver.
     """
     context = _prepare_prerequisite_command(
         target_code,

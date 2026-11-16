@@ -205,8 +205,8 @@ function moduleIndex(
         const keyOrder = compareKeys(left.key[language], right.key[language]);
         if (keyOrder !== 0) return keyOrder;
         return compareCodePoints(
-          left.candidate.sisu_module_id,
-          right.candidate.sisu_module_id,
+          left.candidate.source_version_id,
+          right.candidate.source_version_id,
         );
       });
     return {

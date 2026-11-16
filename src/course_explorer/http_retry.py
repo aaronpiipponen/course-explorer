@@ -1,8 +1,8 @@
 """Neutral retry/backoff and outer-JSON decode mechanics for product HTTP clients.
 
-This module is the single product owner of the two shared mechanics that the Kori, embedding,
-translation, local-inference and external-provider clients use: a bounded
-request/status retry loop and the outer HTTP response JSON decode. Each caller keeps its own
+This module is the single product owner of the two shared mechanics that the Sisu, guide, Peppi
+legacy, Peppi PSG, embedding, translation, local-inference and external-provider clients use: a
+bounded request/status retry loop and the outer HTTP response JSON decode. Each caller keeps its own
 request shape, response validation, DTO models, error types, credential protocol and retry
 policy. This module never receives or inspects a request body, URL, header, prompt, schema,
 model output or setting. It records only a caller-supplied fixed ``method + endpoint`` prefix,
@@ -49,7 +49,7 @@ class RequestNotStarted(RuntimeError):
     """
 
 
-def request_json_with_retries(  # noqa: UP047 - one module-level ResultT is the shared contract
+def request_json_with_retries(  # noqa: UP047 (one module-level ResultT is the shared contract)
     *,
     request: Callable[[], httpx.Response],
     validate: Callable[[httpx.Response], ResultT],
@@ -66,6 +66,7 @@ def request_json_with_retries(  # noqa: UP047 - one module-level ResultT is the 
     request_scope: Callable[[], AbstractContextManager[None]] | None = None,
     classify_request_error: Callable[[int | type[httpx.TransportError]], type[RuntimeError]]
     | None = None,
+    final_status_error: Callable[[int], type[RuntimeError]] | None = None,
 ) -> ResultT:
     """Run one caller request with the shared bounded retry and status policy.
 
@@ -78,12 +79,17 @@ def request_json_with_retries(  # noqa: UP047 - one module-level ResultT is the 
     terminal immediately, and no status reports a response body or header.
 
     An optional pure ``classify_request_error`` maps the raw HTTP status or transport exception
-    type to the safe exception class to raise. It is a producer-owned data/type classification and
-    never inspects an error message or a cause. With no classifier, behaviour is the same and the
-    supplied ``request_error`` owns every failure. With one, a returned class that is not the
-    supplied ``request_error`` names an infrastructure category that is never retried. Only the
-    target class keeps the retryable transport/429/5xx policy. The classifier receives only the
-    integer status or the exception type, never an exception value, body or header.
+    type to the class to raise and decides whether the caller's ordinary ``request_error`` keeps
+    the retry policy. It never inspects a message or a cause, and the supplied ``request_error``
+    owns every failure when it is absent. A returned class that is not ``request_error`` names an
+    infrastructure category that is never retried, and only the ordinary class keeps the retryable
+    transport, 429 and 5xx policy. The classifier receives only the integer status or the exception
+    type, never an exception value, body or header.
+
+    An optional ``final_status_error`` maps only the final non-200 status to the raised class and
+    never changes the retry decision. A retryable status still retries to the attempt budget, a
+    non-retryable status runs the callable once, and a retryable status skipped by a refused retry
+    keeps the caller's ordinary request error.
     """
     scope = request_scope if request_scope is not None else nullcontext
     last_failed_index = max_attempts - 1
@@ -131,6 +137,12 @@ def request_json_with_retries(  # noqa: UP047 - one module-level ResultT is the 
                 sleep(retry_backoff_seconds * 2**failed_index)
                 if not refused():
                     continue
+            # A refused retry leaves the attempt budget unexhausted, so the final-status mapping
+            # does not apply and the caller sees the ordinary request error.
+            if final_status_error is not None and (
+                not retryable or failed_index == last_failed_index
+            ):
+                raise final_status_error(status)(f"{error_prefix}: HTTP {status}")
             raise error_class(f"{error_prefix}: HTTP {status}")
 
         try:

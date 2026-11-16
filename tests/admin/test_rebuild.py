@@ -18,7 +18,7 @@ import pytest
 
 from course_explorer import administration
 from course_explorer.config import ENVIRONMENT_ONLY_SETTINGS_SOURCE, SETTINGS_SOURCE_MARKER
-from course_explorer_admin import mechanics, rebuild, server
+from course_explorer_admin import machine_locks, mechanics, rebuild, server
 from course_explorer_admin.lifecycle import InferenceProgress, LifecycleState, write_lifecycle_state
 from tests.admin._rebuild_support import (
     _ADMIN_UNIT,
@@ -63,6 +63,8 @@ def _bind_rebuild_roots(
     monkeypatch.setenv("ADMIN_STOP_TIMEOUT_SECONDS", _STOP_TIMEOUT_SECONDS)
     monkeypatch.setenv("ADMIN_STARTUP_ATTEMPTS", _STARTUP_ATTEMPTS)
     monkeypatch.setenv("ADMIN_POLL_INTERVAL_SECONDS", _POLL_INTERVAL_SECONDS)
+    monkeypatch.setenv("INSTANCE_KEY", "hanken")
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(tmp_path / "shared"))
     root = tmp_path / "checkout"
     root.mkdir()
     monkeypatch.setattr(administration, "repository_root", lambda: root)
@@ -232,6 +234,34 @@ def test_rebuild_runs_only_the_remaining_fixed_steps(
     assert list(root.rglob("*")) == []
 
 
+def test_rebuild_is_refused_while_a_preparation_holds_the_checkout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A held checkout reservation refuses the rebuild before any npm or Compose command."""
+    root = _bind_rebuild_roots(monkeypatch, tmp_path)
+    boundary = _RebuildProcessBoundary(
+        root=root,
+        unit=_UNIT,
+        listeners=((f"127.0.0.1:{_WEB_PORT}", _OWNED_PROCESS),),
+    )
+    shared = tmp_path / "shared"
+    holder = machine_locks.Reservation(
+        instance_key="hanken", operation="ingestion", session_id="c" * 32
+    )
+    assert machine_locks.acquire(shared, "checkout", instance_key="hanken", owner=holder) is True
+    try:
+        with pytest.raises(RuntimeError, match="held by ingestion in hanken"):
+            rebuild.rebuild_site(runner=boundary)
+        assert boundary.calls == []
+    finally:
+        machine_locks.release(shared, "checkout", instance_key="hanken", owner=holder)
+
+    # The release removes the lock file, and the rebuild runs its four steps.
+    assert not (shared / "locks" / "checkout-hanken.lock").exists()
+    report = rebuild.rebuild_site(runner=boundary)
+    assert report.steps == ("frontend", "containers", "web", "bind")
+
+
 @pytest.mark.parametrize("site_scope", ["user", "system"])
 @pytest.mark.parametrize(
     "action",
@@ -356,6 +386,8 @@ def test_deploy_refuses_busy_stages_before_mutation(tmp_path: Path) -> None:
     (deploy / "serving.conf").write_bytes(
         (REPO_ROOT / "examples" / "deploy" / "serving.conf").read_bytes()
     )
+    # The guard child imports the package, which loads the tracked table from this root.
+    (root / "universities.toml").write_bytes((REPO_ROOT / "universities.toml").read_bytes())
     (root / ".venv" / "bin").mkdir(parents=True)
     stubs = tmp_path / "bin"
     stubs.mkdir()

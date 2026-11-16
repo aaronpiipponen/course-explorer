@@ -78,7 +78,20 @@ describe("Search semantic fallback notice", () => {
               value: {
                 embeddings_enabled: embeddingsEnabled,
                 inference_enabled: true,
+                prerequisites_enabled: true,
                 dataset_identity: identity,
+                display_label: "example-uni",
+                university_names: {
+                  en: "Example University",
+                  fi: "Esimerkkiyliopisto",
+                },
+                source_attribution: {
+                  en: "Source attribution",
+                  fi: "Lähdemerkintä",
+                },
+                assumed_course_credits: "5",
+                study_plan_script: null,
+                study_plan_formats: [],
               },
             },
             createElement(SearchResults, {

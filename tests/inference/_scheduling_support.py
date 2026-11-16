@@ -19,17 +19,18 @@ from course_explorer.config import load_inference_settings
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.db.models import (
     Course,
-    CourseText,
     CourseVersion,
     CourseVersionCurriculumPeriod,
     CurriculumPeriod,
     InferenceCourseProcessing,
     IngestionRun,
+    OfficialCourseText,
     SourceSnapshot,
 )
 from course_explorer.db.session import session_scope
 from course_explorer.enums import (
     IngestionRunStatus,
+    OfficialTextField,
     SourceObjectType,
 )
 from course_explorer.inference.context import (
@@ -37,8 +38,8 @@ from course_explorer.inference.context import (
     InferenceCourseReference,
     InferenceSelectionReferences,
     InferenceTargetPacket,
-    _course_reference,
     _packet_course,
+    course_reference,
     processing_text_sha256,
     request_descriptors_from_packet,
     selection_references_sha256,
@@ -72,6 +73,7 @@ from course_explorer.inference.target_pass import (
     request_sha256,
     target_input_sha256,
 )
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.prerequisite.domain import (
     InferredCoverageState,
     InferredProducerKind,
@@ -133,10 +135,8 @@ def seed_courses(factory: object, specs: list[tuple[str, str, bool]]) -> None:
             session.flush()
             version = CourseVersion(
                 course_id=course.id,
-                sisu_course_unit_id=f"sisu-{group_id}",
+                source_version_id=f"sisu-{group_id}",
                 code=code,
-                name_fi=f"Nimi {code}",
-                name_en=f"Name {code}",
                 credits_min=5,
                 credits_max=None,
                 official_url=f"https://example.test/courses/{code}",
@@ -151,13 +151,34 @@ def seed_courses(factory: object, specs: list[tuple[str, str, bool]]) -> None:
                     course_version_id=version.id, curriculum_period_id=period_id
                 )
             )
-            session.add(CourseText(course_version_id=version.id, content_fi=f"Sisalto {code}"))
+            session.add_all(
+                (
+                    OfficialCourseText(
+                        course_version_id=version.id,
+                        field=OfficialTextField.NAME,
+                        language="fi",
+                        text=f"Nimi {code}",
+                    ),
+                    OfficialCourseText(
+                        course_version_id=version.id,
+                        field=OfficialTextField.NAME,
+                        language="en",
+                        text=f"Name {code}",
+                    ),
+                    OfficialCourseText(
+                        course_version_id=version.id,
+                        field=OfficialTextField.CONTENT,
+                        language="fi",
+                        text=f"Sisalto {code}",
+                    ),
+                )
+            )
         session.flush()
 
 
 def read_effective(factory: object):
     """Return the current canonical courses and their resolved effective teaching text."""
-    curriculum = CurriculumRepository(factory)
+    curriculum = CurriculumRepository(factory, university=UNIVERSITIES["example"])
     courses = curriculum.list_courses(active_only=None)
     effective = TeachingTextService(
         curriculum, DerivedTranslationRepository(factory)
@@ -267,7 +288,7 @@ def _catalogue_maps(factory: object) -> tuple[dict, dict]:
 
 def _reference(factory: object, group_id: str) -> InferenceCourseReference:
     courses_by_group, effective_by_group = _catalogue_maps(factory)
-    return _course_reference(courses_by_group[group_id], effective_by_group[group_id])
+    return course_reference(courses_by_group[group_id], effective_by_group[group_id])
 
 
 def materialize(factory: object, references: InferenceSelectionReferences) -> InferenceTargetPacket:
@@ -276,7 +297,10 @@ def materialize(factory: object, references: InferenceSelectionReferences) -> In
 
     def course(reference: InferenceCourseReference):
         return _packet_course(
-            courses_by_group[reference.group_id], effective_by_group[reference.group_id]
+            courses_by_group[reference.group_id],
+            effective_by_group[reference.group_id],
+            prompt_fields=tuple(OfficialTextField),
+            prompt_languages=("fi", "en"),
         )
 
     return InferenceTargetPacket(
@@ -380,9 +404,7 @@ def complete_target(
     descriptors = request_descriptors_from_packet(packet)
     facts = InferenceCompletionFacts(
         target_teaching_text_sha256=processing_text_sha256(
-            tuple(
-                (cell.field.value, cell.language.value, cell.text) for cell in packet.target.texts
-            )
+            tuple((cell.field.value, cell.language, cell.text) for cell in packet.target.texts)
         ),
         candidate_count=len(packet.candidates),
     )

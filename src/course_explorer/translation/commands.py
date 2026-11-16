@@ -14,6 +14,7 @@ from pathlib import Path
 from course_explorer.config import (
     DatabaseSettings,
     load_database_settings,
+    load_instance_settings,
     load_translation_settings,
 )
 from course_explorer.curriculum_repository import CurriculumRepository
@@ -47,16 +48,21 @@ def run_translation_command(
         load_database_settings(role="working") if database_settings is None else database_settings
     )
     translation_settings = load_translation_settings()
+    university = load_instance_settings().university
     with _database_context(database_settings) as factory:
-        curriculum = CurriculumRepository(factory)
-        translations = DerivedTranslationRepository(factory)
+        curriculum = CurriculumRepository(factory, university=university)
+        translations = DerivedTranslationRepository(factory, university=university)
         with TranslationProvider(
             translation_settings,
             before_request=before_request,
             request_scope=request_scope,
         ) as provider:
             service = TranslationWorkerService(
-                curriculum, translations, provider, translation_settings
+                curriculum,
+                translations,
+                provider,
+                translation_settings,
+                university=university,
             )
             return service.run(
                 output_path=output_path,

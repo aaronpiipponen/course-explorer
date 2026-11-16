@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include "records.h"
 #include "support.h"
@@ -77,6 +78,24 @@ public:
             low = handle;
             high = ZERO;
         }
+    }
+
+    /* Whether any subset in the family includes one of the supplied variables. */
+    bool any_var_in(int handle, const std::unordered_set<int> &variables) const
+    {
+        if (handle < 2) return false;
+        std::vector<int> pending{handle};
+        std::unordered_set<int> visited;
+        while (!pending.empty()) {
+            int current = pending.back();
+            pending.pop_back();
+            if (current < 2 || !visited.insert(current).second) continue;
+            const Node &node = nodes_[current - 2];
+            if (variables.count(node.var) != 0) return true;
+            pending.push_back(node.low);
+            pending.push_back(node.high);
+        }
+        return false;
     }
 
     int union_of(int first, int second)
@@ -253,12 +272,19 @@ struct EvalRes {
 class Evaluator {
 public:
     Evaluator(const Compilation &compilation, const Compiled &compiled, Family &family,
-              const std::unordered_set<std::string> &basis)
+              const std::unordered_set<std::string> &basis, int64_t assumed_course_credits)
         : compilation_(compilation), compiled_(compiled), family_(family), basis_(basis)
     {
         for (const auto &[group, summary] : compilation.summaries) {
             auto rank = compiled.ranks->find(group);
-            if (rank != compiled.ranks->end()) weights_[rank->second] = summary.credits_min;
+            if (rank != compiled.ranks->end()) {
+                if (summary.credits_min < 0) {
+                    weights_[rank->second] = assumed_course_credits;
+                    assumed_ranks_.insert(rank->second);
+                } else {
+                    weights_[rank->second] = summary.credits_min;
+                }
+            }
         }
         count_weights_.reserve(weights_.size());
         for (const auto &[rank, credits] : weights_) {
@@ -283,6 +309,7 @@ public:
     }
 
     bool failed = false;
+    bool uses_assumed_credits = false;
 
 private:
     EvalRes fold(const Node &node)
@@ -327,8 +354,11 @@ private:
                 EvalRes child = evaluate(node.children[0]);
                 int64_t lower = node.credits_min < 0 ? 0 : node.credits_min;
                 bool has_upper = node.credits_max >= 0;
+                if (lower == 0 && !has_upper) return child;
                 int filtered = family_.filter(child.family, weights_, lower, has_upper,
                                               node.credits_max);
+                if (family_.any_var_in(filtered, assumed_ranks_))
+                    uses_assumed_credits = true;
                 return {filtered, child.unresolved};
             }
             case N_COUNT: {
@@ -409,6 +439,9 @@ private:
     std::unordered_map<int, EvalRes> memo_;
     std::unordered_map<int, int64_t> weights_;
     std::unordered_map<int, int64_t> count_weights_;
+    /* Ranks whose minimum credit the assumed value substitutes. A credit-bound piece sets the
+     * outcome flag only when its retained family includes one of them. */
+    std::unordered_set<int> assumed_ranks_;
 };
 
 struct Coverage {
@@ -528,8 +561,13 @@ private:
 
 
 int evaluate_bundle(const StructureBundle &holder, const std::unordered_set<std::string> &basis,
-                    int mode, NativeOutcome *outcomes, int capacity)
+                    int mode, int64_t assumed_course_credits, NativeOutcome *outcomes,
+                    int capacity)
 {
+    if (assumed_course_credits <= 0) {
+        set_error("native assumed course credits must be positive");
+        return -1;
+    }
     const Compiled &compiled = *holder.compiled;
     if ((int) compiled.compilations.size() > capacity) {
         set_error("native outcome buffer is too small");
@@ -552,7 +590,7 @@ int evaluate_bundle(const StructureBundle &holder, const std::unordered_set<std:
         if (compilation.active_only && !summary->second.active) continue;
         if (compilation.required < 0 && compilation.recommended < 0) continue;
         Family family;
-        Evaluator evaluator(compilation, compiled, family, basis);
+        Evaluator evaluator(compilation, compiled, family, basis, assumed_course_credits);
         CoverageEvaluator coverage(compilation, evaluator);
         Coverage required;
         Coverage recommended;
@@ -579,6 +617,7 @@ int evaluate_bundle(const StructureBundle &holder, const std::unordered_set<std:
             return -1;
         }
         outcome.has_outcome = 1;
+        outcome.uses_assumed_credits = evaluator.uses_assumed_credits ? 1 : 0;
         outcome.required_coverage = required.denominator() == 0
             ? -1.0 : required.fraction();
         outcome.recommended_coverage = recommended.denominator() == 0

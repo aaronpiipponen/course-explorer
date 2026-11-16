@@ -12,9 +12,11 @@ test(
     try {
       await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
       await page.locator(".app-shell").waitFor({ state: "visible" });
+      assert.equal(await page.title(), "course-explorer/example-uni");
       await page.locator('.docs-link[href="/docs"]').click();
       await page.waitForFunction(() => location.pathname === "/docs");
       await page.locator(".docs-shell").waitFor({ state: "visible" });
+      assert.equal(await page.title(), "Docs · course-explorer");
 
       await page.locator('.docs-cards a[href="/docs#quickstart"]').click();
       await page.waitForFunction(() => location.hash === "#quickstart");
@@ -49,6 +51,11 @@ test(
       await page.locator(".docs-button.primary").click();
       await page.waitForFunction(() => location.pathname === "/");
       await page.locator(".app-shell").waitFor({ state: "visible" });
+      assert.equal(await page.title(), "course-explorer/example-uni");
+      assert.equal(
+        await page.locator(".app-footer-source").innerText(),
+        "Fictional example data.",
+      );
       assert.deepEqual(pageErrors, []);
     } finally {
       await context.close();

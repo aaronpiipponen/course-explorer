@@ -6,9 +6,9 @@ The console uses a narrow desktop layout. A phone renders that layout scaled to 
 
 ## Signing in
 
-Open the console's address. The sign-in screen appears before any panel, with the site name, the **Administration** heading, the **Username** and **Password** fields and the **Sign in** button.
+Open the console's address. The sign-in screen appears before any panel, with the `course-explorer/<display label>` mark, the **Administration** heading, the **Username** and **Password** fields and the **Sign in** button.
 
-![The sign-in card with the course-explorer/tuni mark, the Administration heading, the empty Username and Password fields and the Sign in button](/docs/screenshots/admin-console-sign-in.png)
+![The sign-in card with the site mark, the Administration heading, the empty Username and Password fields and the Sign in button](/docs/screenshots/admin-console-sign-in.png)
 
 Enter the site's username and password, then select **Sign in**. A wrong username or password shows **Invalid username or password.** and clears the password field. A network or server failure shows **The sign-in attempt failed.**, and a console that cannot read its session at start shows **The administration console is unavailable.**
 
@@ -18,9 +18,9 @@ Opening many fresh sign-in sessions within a short time can temporarily delay an
 
 ## The header
 
-The signed-in header carries the site name, the **Admin** label and the six tabs: **Dashboard**, **Data preparation**, **Inference**, **Logs**, **Settings** and **Feedback**. The right side holds **GitHub**, **Docs**, **App** and **Sign out**. At 1180 px wide or narrower the header and the tab row wrap onto more than one row, and every tab and control is reachable.
+The signed-in header carries the `course-explorer/<display label>` mark, the **Admin** label and the six tabs: **Dashboard**, **Data preparation**, **Inference**, **Logs**, **Settings** and **Feedback**. The right side holds **GitHub**, **Docs**, **App** and **Sign out**. At 1180 px wide or narrower the header and the tab row wrap onto more than one row, and every tab and control is reachable.
 
-![The console header with the site name, the Admin label, the tabs and the GitHub, Docs, App and Sign out controls](/docs/screenshots/admin-console-header.png)
+![The console header with the site mark, the Admin label, the tabs and the GitHub, Docs, App and Sign out controls](/docs/screenshots/admin-console-header.png)
 
 - **GitHub** opens the project's repository in another browser tab.
 - **Docs** opens the documentation home of the course-exploration site.
@@ -43,7 +43,7 @@ Some actions ask for confirmation before they run. Each dialog names the action 
 
 Actions that do not ask for confirmation run immediately when selected. A stage's **Start**, **Pause** and **Resume** are examples.
 
-The administration rebuild signs every operator out. Its confirmation states that, and a successful build returns the console to the sign-in screen with **The admin panel is restarting. Sign in again.** The console's server process restarts after the build, and every session ends with it.
+The administration rebuild signs every operator out. Its confirmation states that, and a successful build returns the console to the sign-in screen with **The administration console is restarting. Sign in again.** The console's server process restarts after the build, and every session ends with it.
 
 ## Failures
 

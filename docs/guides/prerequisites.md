@@ -19,9 +19,9 @@ Once a course is open, **Change** reopens the picker with the same filter box, a
 
 ## Read the drawing
 
-The drawing runs from the graph root at the top down through everything that course requires. A drawing with only its root shows a bottom notice **No prerequisites with these options.** with a hint that names a setting to change, such as **Consider turning Recommended on.** or **Consider turning Active only off.** The hint changes with the settings that could keep a prerequisite out of the drawing, and the notice stays until the drawing changes.
+The drawing runs from the graph root at the top down through everything that course requires. A drawing with only its root shows a bottom notice **No prerequisites with these options. Consider turning Recommended on.**, and the sentence changes with the settings that could keep a prerequisite out of the drawing, such as **No prerequisites with these options. Consider turning Active only off.** The notice stays until the drawing changes.
 
-- A course box holds the course code and name, its credits, and an **active** or **inactive** label. **Complete** and **Exclude** sit along the bottom of the box.
+- A course box holds the course code and name, its credits or **Credits unknown**, and an **active** or **inactive** label. **Complete** and **Exclude** sit along the bottom of the box.
 - **AND** joins requirements that all have to be met, and **OR** joins requirements of which one is enough. A group that reads **pick 2** states how many of its options are needed, and other group boxes state a number of courses or a credit amount.
 - A box such as **5 cr other** is a credit requirement that the official data does not break into courses. It carries the same **Complete** and **Exclude** controls as a module.
 - A module box names the module and the number of courses it holds. Select the box to open the list of those member courses. The courses of a module inside another module join the outer module's list, so the drawing shows one box for the outermost module and that box lists every course. For a module, that list ends with **Add all module courses to structure**, which adds every member course to your selection and to your structure of studies, in the same way as the route's add button described below. The action reports the number of courses it added in a bottom notice whose **Unplaced studies** words open that list.
@@ -100,6 +100,8 @@ The minimum route is the set of courses that meets the requirements with the few
 The calculation runs in your browser. Selecting **Find minimum route** again with the same options, graph root, course sets and marks shows the result at once. Changing the graph root, an option, your course sets or a mark clears the shown route and returns the plain drawing, and returning to the earlier choices leaves the plain drawing until you select **Find minimum route** again.
 
 ## Read the route panel
+
+A course with no official credit amount shows **Credits unknown**. A route or graph that counts such a course at the configured assumed value shows one **Assumed credits used** caption.
 
 The panel reports the result. On a desktop it sits at the top right of the drawing. On a phone **Find minimum route** is a wide button above the bottom of the drawing, and its result opens as a sheet over the bottom of the drawing. The sheet scrolls inside itself, the lit path is visible above it, and a clear control in its header returns to the plain drawing. Its header gives the new credits first and the credits of the whole route second, for example "6 cr new · 14 cr full route", where the full route also counts the courses on the route that your basis already covers. When there is no total to show, the header carries the outcome name itself. Selecting **Expand** grows the sheet over the drawing so the course list scrolls inside it, with **Add all missing courses to structure** fixed at the foot below the list.
 

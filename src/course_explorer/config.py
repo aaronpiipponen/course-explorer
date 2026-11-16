@@ -11,6 +11,7 @@ import math
 import os
 import re
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Self
 from urllib.parse import urlsplit
@@ -35,7 +36,15 @@ from sqlalchemy.engine import URL
 
 from course_explorer import administration
 from course_explorer.constants import COURSE_EMBEDDING_DIMENSION
-from course_explorer.enums import TeachingTextField
+from course_explorer.enums import OfficialTextField, TeachingTextField
+from course_explorer.instance import (
+    UNIVERSITIES,
+    SisuSourceMetadata,
+    UniversityMetadata,
+    academic_year_start,
+    validate_display_label,
+    validate_prompt_fields,
+)
 from course_explorer.validation import (
     require_nonblank_text as _require_nonblank_text,
 )
@@ -48,14 +57,6 @@ if TYPE_CHECKING:
 
 _ANY_HTTP_URL_ADAPTER = TypeAdapter(AnyHttpUrl)
 _GITHUB_REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*")
-
-
-def _academic_year_start(value: str) -> int:
-    """Validate consecutive academic-year syntax and return its starting year."""
-    match = re.fullmatch(r"([0-9]{4})-([0-9]{4})", value)
-    if match is None or int(match.group(2)) != int(match.group(1)) + 1:
-        raise ValueError("academic years must match YYYY-YYYY with consecutive years")
-    return int(match.group(1))
 
 
 def _require_nonblank_secret(value: SecretStr, *, message: str) -> SecretStr:
@@ -124,6 +125,7 @@ def _require_exact_origin(
 # long-lived child (or a test supplies synthetic input), this marker restricts the settings layer
 # to the constructor and process sources.
 SETTINGS_SOURCE_MARKER = "COURSE_EXPLORER_SETTINGS_SOURCE"
+# Marker value that restricts a settings read to the constructor and process sources.
 ENVIRONMENT_ONLY_SETTINGS_SOURCE = "environment"
 
 
@@ -209,6 +211,56 @@ class ConfiguredSettings(BaseSettings):
         )
 
 
+class InstanceSettings(ConfiguredSettings):
+    """The one configured university instance and its metadata.
+
+    ``instance_key`` selects one entry of the finite university map, so an instance presents one
+    university and one curriculum source. ``instance_display_label`` is an optional lowercase brand
+    label that overrides the map entry's label. The read-only ``university`` property returns that
+    map entry, and the read-only ``display_label`` property returns the override or the map label.
+    """
+
+    model_config = SettingsConfigDict(extra="ignore", env_prefix="")
+
+    instance_key: str = Field(validation_alias="INSTANCE_KEY")
+    instance_display_label: str | None = Field(
+        default=None, validation_alias="INSTANCE_DISPLAY_LABEL"
+    )
+
+    @field_validator("instance_key")
+    @classmethod
+    def validate_instance_key(cls, value: str) -> str:
+        """Require one configured university key without echoing the value."""
+        if value not in UNIVERSITIES:
+            raise ValueError("INSTANCE_KEY must name one configured university")
+        return value
+
+    @field_validator("instance_display_label")
+    @classmethod
+    def validate_instance_display_label(cls, value: str | None) -> str | None:
+        """Validate an optional override through the shared display-label owner."""
+        if value is None:
+            return None
+        return validate_display_label(value)
+
+    @property
+    def university(self) -> UniversityMetadata:
+        """Return the configured university's map entry."""
+        return UNIVERSITIES[self.instance_key]
+
+    @property
+    def display_label(self) -> str:
+        """Return the override label or the configured university's map label."""
+        if self.instance_display_label is not None:
+            return self.instance_display_label
+        return self.university.display_label
+
+
+def load_instance_settings() -> InstanceSettings:
+    """Read the configured instance key through the automatic composition."""
+    return InstanceSettings()
+
+
 class WebAppSettings(ConfiguredSettings):
     """The one external web app address shared by the administration App link and the feedback
     exact-site boundary.
@@ -238,11 +290,12 @@ class WebAppSettings(ConfiguredSettings):
         return self.web_app_url[:-1] if self.web_app_url.endswith("/") else self.web_app_url
 
 
-class WebSettings(WebAppSettings):
+class WebSettings(WebAppSettings, InstanceSettings):
     """Validated loopback bind, process count, malloc arena cap, child respawn limits, drawing,
     served-feature and retained-cache region settings for HTTP serving.
 
-    The class inherits the one external app address from :class:`WebAppSettings`."""
+    The class inherits the one external app address from :class:`WebAppSettings` and the configured
+    instance key and display label from :class:`InstanceSettings`."""
 
     model_config = SettingsConfigDict(extra="ignore", env_prefix="")
 
@@ -257,6 +310,7 @@ class WebSettings(WebAppSettings):
     )
     embeddings_enabled: bool = Field(validation_alias="WEB_EMBEDDINGS_ENABLED")
     inference_enabled: bool = Field(validation_alias="WEB_INFERENCE_ENABLED")
+    prerequisites_enabled: bool = Field(validation_alias="WEB_PREREQUISITES_ENABLED")
     web_next_course_report_cache_bytes: int = Field(
         validation_alias="WEB_NEXT_COURSE_REPORT_CACHE_BYTES", gt=0
     )
@@ -503,7 +557,7 @@ def load_usage_settings() -> UsageSettings:
     return UsageSettings()
 
 
-class AdminWebSettings(WebAppSettings):
+class AdminWebSettings(WebAppSettings, InstanceSettings):
     """Validated loopback bind, exact site origin and session and log bounds of the administration
     backend.
 
@@ -666,6 +720,52 @@ class DatabaseSettings(ConfiguredSettings):
 def load_raw_database_settings() -> DatabaseSettings:
     """Read the configured database fields without resolving a dataset role."""
     return DatabaseSettings()
+
+
+class SharedStorageSettings(ConfiguredSettings):
+    """The machine-wide directory the example setup workflow creates or adopts.
+
+    ``ADMIN_SHARED_ROOT`` is one absolute path, or one beginning with ``~/`` that expands against
+    the home directory. A blank or relative value fails the read. The setup workflow resolves the
+    path, requires it outside the checkout and creates it with its parents, its ``models`` directory
+    and its ``locks`` directory when absent. A relative embedding artifact path resolves inside this
+    directory.
+    """
+
+    model_config = SettingsConfigDict(extra="ignore", env_prefix="")
+
+    shared_root: Path = Field(validation_alias="ADMIN_SHARED_ROOT")
+
+    @field_validator("shared_root", mode="before")
+    @classmethod
+    def validate_shared_root(cls, value: object) -> object:
+        """Require an absolute or home-prefixed path and expand the home prefix."""
+        raw = str(value)
+        if not raw.strip():
+            raise ValueError("ADMIN_SHARED_ROOT must not be blank")
+        expanded = Path(raw).expanduser()
+        if not expanded.is_absolute():
+            raise ValueError("ADMIN_SHARED_ROOT must be an absolute or home-prefixed path")
+        return expanded
+
+    @property
+    def models_root(self) -> Path:
+        """Return the machine shared model directory."""
+        return self.shared_root / "models"
+
+    @property
+    def locks_root(self) -> Path:
+        """Return the machine shared reservation directory."""
+        return self.shared_root / "locks"
+
+    def resolve_embedding_artifact(self, configured: Path) -> Path:
+        """Resolve a relative embedding artifact path under the machine shared directory."""
+        return configured if configured.is_absolute() else self.shared_root / configured
+
+
+def load_shared_storage_settings() -> SharedStorageSettings:
+    """Read the machine-wide shared directory through the automatic composition."""
+    return SharedStorageSettings()
 
 
 def load_database_settings_with_identity(
@@ -958,14 +1058,18 @@ def load_local_lifecycle_settings() -> LocalLifecycleSettings:
     return LocalLifecycleSettings()
 
 
-class KoriSettings(ConfiguredSettings):
-    """Validated settings for the anonymous public Kori source."""
+class KoriSettings(InstanceSettings):
+    """Validated anonymous public source policy for the configured university instance.
+
+    The class and its ``KORI_*`` request-policy keys serve every implemented HTTP source family.
+    The Sisu client's base and university root identity come from the instance's Sisu source
+    block, and the first academic year comes from the configured family's source block, so a
+    change of the configured university changes the source and no constructor or environment value
+    overrides those facts. The remaining fields are operator policy shared by every family.
+    """
 
     model_config = SettingsConfigDict(extra="ignore", env_prefix="")
 
-    kori_base_url: AnyHttpUrl = Field(validation_alias="KORI_BASE_URL")
-    tuni_university_id: str = Field(validation_alias="TUNI_UNIVERSITY_ID")
-    kori_first_academic_year: str = Field(validation_alias="KORI_FIRST_ACADEMIC_YEAR")
     current_academic_year: str = Field(validation_alias="CURRENT_ACADEMIC_YEAR")
     kori_search_page_size: int = Field(validation_alias="KORI_SEARCH_PAGE_SIZE", ge=1, le=1000)
     kori_batch_size: int = Field(validation_alias="KORI_BATCH_SIZE", ge=1, le=100)
@@ -978,53 +1082,55 @@ class KoriSettings(ConfiguredSettings):
     )
     kori_concurrency: int = Field(validation_alias="KORI_CONCURRENCY", ge=1, le=8)
     kori_max_partition_depth: int = Field(validation_alias="KORI_MAX_PARTITION_DEPTH", ge=1, le=12)
+    kori_request_interval_seconds: float = Field(
+        validation_alias="KORI_REQUEST_INTERVAL_SECONDS", gt=0, allow_inf_nan=False
+    )
 
-    @field_validator("tuni_university_id")
-    @classmethod
-    def reject_blank_university_id(cls, value: str) -> str:
-        """Require a meaningful university root identifier without changing it."""
-        return _require_nonblank_text(value, message="TUNI_UNIVERSITY_ID must not be blank")
-
-    @field_validator("kori_base_url")
-    @classmethod
-    def validate_kori_base_url(cls, value: AnyHttpUrl) -> AnyHttpUrl:
-        """Allow only the canonical anonymous HTTPS Kori base URL."""
-        if (
-            value.scheme != "https"
-            or value.host != "sisu.tuni.fi"
-            or value.port not in (None, 443)
-            or value.username is not None
-            or value.password is not None
-            or value.query is not None
-            or value.fragment is not None
-            or value.path.removesuffix("/") != "/kori"
-        ):
-            raise ValueError("KORI_BASE_URL must be canonical https://sisu.tuni.fi/kori")
-        return value
-
-    @field_validator("kori_first_academic_year", "current_academic_year")
+    @field_validator("current_academic_year")
     @classmethod
     def validate_academic_year(cls, value: str) -> str:
         """Require consecutive four-digit academic-year bounds."""
-        _academic_year_start(value)
+        academic_year_start(value)
         return value
 
     @model_validator(mode="after")
     def validate_academic_year_order(self) -> Self:
-        """Reject a first academic year after the configured current year."""
+        """Reject a mapped first academic year after the configured current year."""
         if self.first_academic_year_start > self.current_academic_year_start:
             raise ValueError("first academic year must not exceed current academic year")
         return self
 
+    def _require_sisu_source(self) -> SisuSourceMetadata:
+        """Return the configured university's Sisu source block or raise one clear error."""
+        source = self.university.sisu
+        if source is None:
+            raise ValueError("the configured university has no Sisu source block")
+        return source
+
+    @property
+    def kori_base_url(self) -> AnyHttpUrl:
+        """Return the mapped anonymous HTTPS Kori base of the configured university."""
+        return _ANY_HTTP_URL_ADAPTER.validate_python(self._require_sisu_source().kori_base_url)
+
+    @property
+    def university_id(self) -> str:
+        """Return the mapped university root identity the source requests name."""
+        return self._require_sisu_source().university_id
+
+    @property
+    def kori_first_academic_year(self) -> str:
+        """Return the mapped earliest academic year whose curriculum periods are captured."""
+        return self._require_sisu_source().first_academic_year
+
     @property
     def first_academic_year_start(self) -> int:
-        """Return the configured first academic-year start."""
-        return _academic_year_start(self.kori_first_academic_year)
+        """Return the mapped first academic-year start of the configured source family."""
+        return self.university.first_academic_year_start
 
     @property
     def current_academic_year_start(self) -> int:
         """Return the configured current academic-year start."""
-        return _academic_year_start(self.current_academic_year)
+        return academic_year_start(self.current_academic_year)
 
 
 def load_kori_settings() -> KoriSettings:
@@ -1033,8 +1139,13 @@ def load_kori_settings() -> KoriSettings:
     return KoriSettings()
 
 
-class NormalizationSettings(ConfiguredSettings):
-    """Validated settings for curriculum normalization."""
+class NormalizationSettings(InstanceSettings):
+    """Validated normalization policy for the configured university instance.
+
+    The course-guide base comes from the configured instance's source block, so a change of the
+    configured university changes the official page address and no constructor or environment
+    value overrides it.
+    """
 
     model_config = SettingsConfigDict(extra="ignore", env_prefix="")
 
@@ -1042,44 +1153,45 @@ class NormalizationSettings(ConfiguredSettings):
     active_academic_year_window: int = Field(
         validation_alias="ACTIVE_ACADEMIC_YEAR_WINDOW", ge=1, le=100
     )
-    course_guide_base_url: AnyHttpUrl = Field(validation_alias="COURSE_GUIDE_BASE_URL")
 
     @field_validator("current_academic_year")
     @classmethod
     def validate_current_academic_year(cls, value: str) -> str:
         """Require consecutive four-digit academic-year bounds."""
-        _academic_year_start(value)
+        academic_year_start(value)
         return value
-
-    @field_validator("course_guide_base_url")
-    @classmethod
-    def validate_course_guide_base_url(cls, value: AnyHttpUrl) -> AnyHttpUrl:
-        """Require the canonical HTTPS course-guide base without URL decorations."""
-        return validate_course_guide_base_url(value)
 
     @property
     def current_academic_year_start(self) -> int:
         """Return configured current academic-year start."""
-        return _academic_year_start(self.current_academic_year)
+        return academic_year_start(self.current_academic_year)
+
+    @property
+    def course_guide_base_url(self) -> AnyHttpUrl:
+        """Return the mapped course-guide base of the configured university."""
+        return validate_course_guide_base_url(self.university.course_guide_base_url)
+
+
+# The canonical course-guide bases of the finite university map.
+_COURSE_GUIDE_BASE_URLS = frozenset(
+    metadata.course_guide_base_url for metadata in UNIVERSITIES.values()
+)
 
 
 def validate_course_guide_base_url(value: object) -> AnyHttpUrl:
-    """Validate and return the canonical HTTPS course-guide base URL."""
-    value = _ANY_HTTP_URL_ADAPTER.validate_python(value)
+    """Validate and return one canonical HTTPS course-guide base of the university map."""
+    url = _ANY_HTTP_URL_ADAPTER.validate_python(value)
     if (
-        value.scheme != "https"
-        or value.host != "sisu.tuni.fi"
-        or value.port not in (None, 443)
-        or value.username is not None
-        or value.password is not None
-        or value.query is not None
-        or value.fragment is not None
-        or value.path.removesuffix("/") != "/student/courseunit"
+        url.scheme != "https"
+        or url.port not in (None, 443)
+        or url.username is not None
+        or url.password is not None
+        or url.query is not None
+        or url.fragment is not None
+        or f"https://{url.host}{url.path.removesuffix('/')}" not in _COURSE_GUIDE_BASE_URLS
     ):
-        raise ValueError(
-            "COURSE_GUIDE_BASE_URL must be canonical https://sisu.tuni.fi/student/courseunit"
-        )
-    return value
+        raise ValueError("course-guide base must be one canonical university course-guide base")
+    return url
 
 
 def load_normalization_settings() -> NormalizationSettings:
@@ -1390,6 +1502,7 @@ _INFERENCE_REPOSITORY_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
 )
 _INFERENCE_GGUF_FILE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.gguf$")
+_INFERENCE_QUANTIZATION_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)*$")
 
 
 class InferenceLocalVariantSettings(BaseModel):
@@ -1560,7 +1673,7 @@ class InferenceSettings(WorkerRuntimeSettings):
     inference_primary_artifact_sha256: str = Field(
         validation_alias="INFERENCE_PRIMARY_ARTIFACT_SHA256"
     )
-    inference_primary_artifact_quant: Literal["IQ3_MIX"] = Field(
+    inference_primary_artifact_quant: str = Field(
         validation_alias="INFERENCE_PRIMARY_ARTIFACT_QUANT"
     )
     inference_runtime_revision: str = Field(validation_alias="INFERENCE_RUNTIME_REVISION")
@@ -1651,11 +1764,24 @@ class InferenceSettings(WorkerRuntimeSettings):
             raise ValueError("INFERENCE_PRIMARY_ARTIFACT_FILE must be a GGUF file name")
         return value
 
+    @field_validator("inference_primary_artifact_quant")
+    @classmethod
+    def validate_artifact_quant(cls, value: str) -> str:
+        """Require one quantization token of alphanumeric groups joined by `_` or `-`."""
+        if _INFERENCE_QUANTIZATION_PATTERN.fullmatch(value) is None:
+            raise ValueError(
+                "INFERENCE_PRIMARY_ARTIFACT_QUANT must be alphanumeric groups joined by '_' or '-'"
+            )
+        return value
+
     @field_validator("inference_primary_artifact_path", mode="before")
     @classmethod
     def validate_artifact_path(cls, value: object) -> object:
-        """Require one repository-relative artifact path without dot components."""
-        return _require_relative_path(value, setting_name="INFERENCE_PRIMARY_ARTIFACT_PATH")
+        """Require a raw nonblank artifact path before Pydantic coerces it to `Path`."""
+        _require_nonblank_text(
+            str(value), message="INFERENCE_PRIMARY_ARTIFACT_PATH must not be blank"
+        )
+        return value
 
     @field_validator("inference_gpu_layers")
     @classmethod
@@ -1677,7 +1803,7 @@ class InferenceSettings(WorkerRuntimeSettings):
 
     @model_validator(mode="after")
     def validate_artifact_path_matches_file(self) -> Self:
-        """Require the configured relative path to name exactly the configured artifact file."""
+        """Require the configured artifact path to name exactly the configured artifact file."""
         if self.inference_primary_artifact_path.name != self.inference_primary_artifact_file:
             raise ValueError(
                 "INFERENCE_PRIMARY_ARTIFACT_PATH basename must equal "
@@ -1855,12 +1981,14 @@ _INFERENCE_MULTIVIEW_FIELD_ORDER: tuple[str, ...] = tuple(
 
 
 class InferenceContextSettings(ConfiguredSettings):
-    """Validated label-blind multiview field-view and fusion settings for live selection.
+    """Validated label-blind multiview field-view, fusion and prompt-field settings for live selection.
 
-    These two values own the accepted multiview field views and the reciprocal-rank fusion offset
-    consumed by the operational cross-encoder selection. They are operational selection mechanics
-    apart from the runtime contract in ``InferenceSettings``. Loading composes the subsystem files
-    under ``config/`` and the device-local ignored ``.env``, and no code default applies.
+    The two multiview values own the accepted field views and the reciprocal-rank fusion offset
+    consumed by the operational cross-encoder selection. The two prompt-field values are optional
+    overrides of the configured university map entry's target and pool defaults. They are operations
+    selection and prompt policy apart from the runtime contract in ``InferenceSettings``. Loading
+    composes the subsystem files under ``config/`` and the device-local ignored ``.env``, and no code
+    default applies to the required values.
     """
 
     model_config = SettingsConfigDict(extra="ignore", env_prefix="")
@@ -1871,6 +1999,14 @@ class InferenceContextSettings(ConfiguredSettings):
     inference_multiview_fusion_rank_offset: int = Field(
         validation_alias="INFERENCE_MULTIVIEW_FUSION_RANK_OFFSET"
     )
+    inference_target_fields: (
+        tuple[Literal["name", "content", "outcomes", "prerequisite_text", "additional_info"], ...]
+        | None
+    ) = Field(default=None, validation_alias="INFERENCE_TARGET_FIELDS")
+    inference_pool_fields: (
+        tuple[Literal["name", "content", "outcomes", "prerequisite_text", "additional_info"], ...]
+        | None
+    ) = Field(default=None, validation_alias="INFERENCE_POOL_FIELDS")
 
     @field_validator("inference_multiview_evaluation_fields")
     @classmethod
@@ -1900,6 +2036,25 @@ class InferenceContextSettings(ConfiguredSettings):
             raise ValueError("INFERENCE_MULTIVIEW_EVALUATION_FIELDS must not repeat a value")
         return value
 
+    @field_validator("inference_target_fields", "inference_pool_fields")
+    @classmethod
+    def validate_prompt_fields(
+        cls,
+        value: tuple[
+            Literal["name", "content", "outcomes", "prerequisite_text", "additional_info"], ...
+        ]
+        | None,
+    ) -> (
+        tuple[Literal["name", "content", "outcomes", "prerequisite_text", "additional_info"], ...]
+        | None
+    ):
+        """Require an absent or nonempty, unique field tuple in canonical official-field order."""
+        if value is None:
+            return None
+        converted = tuple(OfficialTextField(item) for item in value)
+        validate_prompt_fields(converted, "inference prompt fields")
+        return value
+
     @field_validator("inference_multiview_fusion_rank_offset")
     @classmethod
     def validate_multiview_fusion_rank_offset(cls, value: int) -> int:
@@ -1910,6 +2065,42 @@ class InferenceContextSettings(ConfiguredSettings):
             minimum=1,
             maximum=1000,
         )
+
+    def resolved_target_fields(
+        self, university: UniversityMetadata
+    ) -> tuple[OfficialTextField, ...]:
+        """Return the configured target-field override or the university map's target defaults."""
+        if self.inference_target_fields is None:
+            return university.inference_target_fields
+        return tuple(OfficialTextField(field) for field in self.inference_target_fields)
+
+    def resolved_pool_fields(self, university: UniversityMetadata) -> tuple[OfficialTextField, ...]:
+        """Return the configured pool-field override or the university map's pool defaults."""
+        if self.inference_pool_fields is None:
+            return university.inference_pool_fields
+        return tuple(OfficialTextField(field) for field in self.inference_pool_fields)
+
+    def prompt_field_policy(self, university: UniversityMetadata) -> dict[str, object]:
+        """Return the prompt-field selection only when it differs from the teaching-field baseline.
+
+        The baseline is the name, content and outcomes prompt field set for the target and for the
+        pool. A selection equal to the baseline produces an empty mapping, so its compatibility
+        identity equals one built with no override. A nondefault selection carries both the target
+        and pool fields.
+        """
+        target = self.resolved_target_fields(university)
+        pool = self.resolved_pool_fields(university)
+        baseline = (
+            OfficialTextField.NAME,
+            OfficialTextField.CONTENT,
+            OfficialTextField.OUTCOMES,
+        )
+        if target == baseline and pool == baseline:
+            return {}
+        return {
+            "target": [field.value for field in target],
+            "pool": [field.value for field in pool],
+        }
 
 
 def load_inference_context_settings() -> InferenceContextSettings:
@@ -2067,8 +2258,11 @@ class InferenceRerankSettings(ConfiguredSettings):
     @field_validator("inference_rerank_artifact_path", mode="before")
     @classmethod
     def validate_artifact_path(cls, value: object) -> object:
-        """Require one repository-relative artifact path without dot components."""
-        return _require_relative_path(value, setting_name="INFERENCE_RERANK_ARTIFACT_PATH")
+        """Require a raw nonblank artifact path before Pydantic coerces it to `Path`."""
+        _require_nonblank_text(
+            str(value), message="INFERENCE_RERANK_ARTIFACT_PATH must not be blank"
+        )
+        return value
 
     @field_validator("inference_rerank_batch_size", mode="before")
     @classmethod
@@ -2581,6 +2775,12 @@ class SearchSettings(ConfiguredSettings):
     prerequisite_path_max_compact_nodes: int = Field(
         validation_alias="PREREQUISITE_PATH_MAX_COMPACT_NODES", gt=0
     )
+    assumed_course_credits: Decimal = Field(
+        validation_alias="ASSUMED_COURSE_CREDITS",
+        gt=0,
+        max_digits=6,
+        decimal_places=2,
+    )
     recommendation_chunk_top_k: int = Field(validation_alias="RECOMMENDATION_CHUNK_TOP_K", gt=0)
     recommendation_min_relatedness: float = Field(
         validation_alias="RECOMMENDATION_MIN_RELATEDNESS",
@@ -2664,11 +2864,13 @@ def load_search_settings() -> SearchSettings:
 # listed on its own. Alias membership comes from each class's own fields. A caller that adds
 # validation families passes them to the configuration editor alongside this base inventory.
 CONFIGURATION_SETTINGS_FAMILIES: tuple[type[ConfiguredSettings], ...] = (
+    InstanceSettings,
     WebSettings,
     UsageSettings,
     AdmissionSettings,
     AdminWebSettings,
     DatabaseSettings,
+    SharedStorageSettings,
     FeedbackSettings,
     FeedbackIntakeSettings,
     FeedbackSenderCredentialsSettings,

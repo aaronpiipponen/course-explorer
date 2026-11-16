@@ -1,10 +1,20 @@
-"""Activity scope, excluded nodes, and inactive non-root pruning."""
+"""Exercise activity scoping, retained inactive requirements and drawn excluded nodes."""
 
 from __future__ import annotations
+
+from decimal import Decimal
 
 import pytest
 
 from course_explorer.enums import PrerequisiteRequirementKind
+from course_explorer.prerequisite.domain import (
+    CourseRequirement,
+    InferenceEvidenceKind,
+    InferenceEvidenceReference,
+    InferenceNodeMetadata,
+    InferredPrerequisiteCategory,
+    PrerequisiteOrigin,
+)
 from tests.prerequisite._graph_support import (
     FakeCurriculumRead,
     RecordingEquivalenceGroupRead,
@@ -14,7 +24,6 @@ from tests.prerequisite._graph_support import (
     course_nodes,
     current_result,
     leaf_group_ids,
-    piece_of,
     prerequisite_course_member,
     prerequisite_option,
     substitution_option,
@@ -24,8 +33,17 @@ from tests.prerequisite._path_support import solve_route
 pytestmark = pytest.mark.integration
 
 
-def test_compiler_stops_inactive_non_root_leaves_before_child_reads(native_graph) -> None:
-    """An inactive non-root course never reads inferred sets, substitutions, or descendants."""
+def test_allowed_inactive_courses_expose_retained_requirements(native_graph) -> None:
+    """An inactive non-root course exposes retained official, substitution and inferred requirements."""
+    inferred_metadata = InferenceNodeMetadata(
+        confidence=Decimal("0.5"),
+        requirement_ids=(),
+        evidence=(
+            InferenceEvidenceReference(
+                kind=InferenceEvidenceKind.EXPRESSION_PROPOSAL, reference_id="proposal-1"
+            ),
+        ),
+    )
     inactive_leaf_courses = (
         catalogue_course(
             "root",
@@ -53,7 +71,19 @@ def test_compiler_stops_inactive_non_root_leaves_before_child_reads(native_graph
         catalogue_course("hidden-substitute"),
     )
     inferred_read = RecordingInferredSetRead(
-        {"root": current_result("root")},
+        {
+            "root": current_result("root"),
+            "inactive-leaf": current_result(
+                "inactive-leaf",
+                expression=CourseRequirement(
+                    type="course",
+                    origin=PrerequisiteOrigin.INFERRED,
+                    inferred_category=InferredPrerequisiteCategory.REQUIRED,
+                    course_group_id="hidden-child",
+                    inference=inferred_metadata,
+                ),
+            ),
+        },
     )
     compiler = native_graph(
         FakeCurriculumRead(inactive_leaf_courses), inferred_read, RecordingEquivalenceGroupRead()
@@ -61,13 +91,11 @@ def test_compiler_stops_inactive_non_root_leaves_before_child_reads(native_graph
 
     compilation = compiler.compile("root", include_inferred=True)
     tree = compilation.solver
-    assert "hidden-child" not in {summary.group_id for summary in tree.courses}
-    assert "hidden-substitute" not in {summary.group_id for summary in tree.courses}
-    # The singleton compulsory option collapses to its bare inactive leaf.
-    assert tree.root_use_id is not None
-    requirements = piece_of(tree, tree.root_use_id)
-    assert requirements.kind == "course"
-    assert requirements.course_group_id == "inactive-leaf"
+    assert {"inactive-leaf", "hidden-child", "hidden-substitute"} <= {
+        summary.group_id for summary in tree.courses
+    }
+    assert {"hidden-child", "hidden-substitute"} <= leaf_group_ids(tree, tree.root_use_id)
+    assert any(fact.origin is PrerequisiteOrigin.INFERRED for fact in tree.facts)
 
 
 def test_active_scope_drops_unretained_inactive_courses_from_the_compiled_tree(

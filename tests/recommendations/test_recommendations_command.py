@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from course_explorer.config import DatabaseSettings
+from course_explorer.config import DatabaseSettings, SearchSettings
 from course_explorer.next_courses import commands as next_courses_commands
 from course_explorer.recommendations import commands as command_module
 from tests.support import settings_factory
@@ -16,7 +16,11 @@ def test_recommendations_command_preserves_validation_and_empty_basis(monkeypatc
     def fail(*_args, **_kwargs):
         pytest.fail("recommendation settings/database I/O reached")
 
-    monkeypatch.setattr(command_module, "load_search_settings", fail)
+    monkeypatch.setattr(
+        command_module,
+        "load_search_settings",
+        lambda: settings_factory(SearchSettings),
+    )
     monkeypatch.setattr(command_module, "load_embedding_runtime_settings", fail)
     monkeypatch.setattr(command_module, "load_database_settings", fail)
     monkeypatch.setattr(command_module, "database_context", fail)

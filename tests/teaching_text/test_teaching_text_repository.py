@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 
 import pytest
 from sqlalchemy import Engine, event, select
@@ -10,19 +11,20 @@ from sqlalchemy import Engine, event, select
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.db.models import (
     Course,
-    CourseText,
     CourseVersion,
     CourseVersionCurriculumPeriod,
     DerivedCourseText,
+    OfficialCourseText,
     SourceSnapshot,
 )
 from course_explorer.db.session import session_scope
 from course_explorer.enums import (
+    OfficialTextField,
     SourceObjectType,
     TeachingTextField,
-    TeachingTextLanguage,
     TranslationMethod,
 )
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.teaching_text.repository import DerivedTranslationRepository
 from course_explorer.teaching_text.service import TeachingTextService, teaching_text_sha256
 from tests.teaching_text._repository_support import (
@@ -41,20 +43,20 @@ def test_repository_upserts_reads_and_updates_self_written_translation(
     """Imports insert once, a rerun is a no-op, and update only changed translated text."""
     active_source, _ = seed_representative_catalogue(database)
     _, factory = database
-    repository = DerivedTranslationRepository(factory)
+    repository = DerivedTranslationRepository(factory, university=UNIVERSITIES["hanken"])
     first = manual_input(
         active_source,
         TeachingTextField.CONTENT,
-        TeachingTextLanguage.EN,
-        TeachingTextLanguage.FI,
-        "Matriisit",
+        "en",
+        "sv",
+        "Matriser",
         "Matrices",
     )
     second = manual_input(
         active_source,
         TeachingTextField.OUTCOMES,
-        TeachingTextLanguage.FI,
-        TeachingTextLanguage.EN,
+        "fi",
+        "en",
         "Use matrices",
         "Käytä matriiseja",
     )
@@ -67,23 +69,17 @@ def test_repository_upserts_reads_and_updates_self_written_translation(
         rows = list(session.scalars(select(DerivedCourseText).order_by(DerivedCourseText.field)))
         identity = {row.field: row.id for row in rows}
         active_version_id = rows[0].course_version_id
-        official_before = (
-            session.scalar(
-                select(CourseVersion.name_fi).where(CourseVersion.id == active_version_id)
-            ),
-            session.scalar(
-                select(CourseText.content_fi).where(
-                    CourseText.course_version_id == active_version_id
-                )
-            ),
-            session.scalar(
-                select(CourseText.outcomes_en).where(
-                    CourseText.course_version_id == active_version_id
-                )
-            ),
+        official_before = tuple(
+            session.scalars(
+                select(OfficialCourseText.text)
+                .where(OfficialCourseText.course_version_id == active_version_id)
+                .order_by(OfficialCourseText.field, OfficialCourseText.language)
+            )
         )
         assert len(rows) == 2
-        assert rows[0].source_text_hash == teaching_text_sha256("Matriisit")
+        assert rows[0].language == "en"
+        assert rows[0].source_language == "sv"
+        assert rows[0].source_text_hash == teaching_text_sha256("Matriser")
         assert rows[1].source_text_hash == teaching_text_sha256("Use matrices")
 
     assert repository.upsert((first, second)).unchanged_count == 2
@@ -91,9 +87,9 @@ def test_repository_upserts_reads_and_updates_self_written_translation(
     changed = manual_input(
         active_source,
         TeachingTextField.CONTENT,
-        TeachingTextLanguage.EN,
-        TeachingTextLanguage.FI,
-        "Matriisit",
+        "en",
+        "sv",
+        "Matriser",
         "Matrices revisited",
     )
     report = repository.upsert((changed, second))
@@ -107,27 +103,22 @@ def test_repository_upserts_reads_and_updates_self_written_translation(
         persisted = next(row for row in rows if row.field is TeachingTextField.CONTENT)
         assert persisted.text == "Matrices revisited"
         assert (
-            session.scalar(
-                select(CourseVersion.name_fi).where(CourseVersion.id == active_version_id)
-            ),
-            session.scalar(
-                select(CourseText.content_fi).where(
-                    CourseText.course_version_id == active_version_id
+            tuple(
+                session.scalars(
+                    select(OfficialCourseText.text)
+                    .where(OfficialCourseText.course_version_id == active_version_id)
+                    .order_by(OfficialCourseText.field, OfficialCourseText.language)
                 )
-            ),
-            session.scalar(
-                select(CourseText.outcomes_en).where(
-                    CourseText.course_version_id == active_version_id
-                )
-            ),
-        ) == official_before
+            )
+            == official_before
+        )
 
     read = repository.list_for_course_versions((active_source,))
     assert [(row.field, row.language, row.text) for row in read] == [
-        (TeachingTextField.CONTENT, TeachingTextLanguage.EN, "Matrices revisited"),
-        (TeachingTextField.OUTCOMES, TeachingTextLanguage.FI, "Käytä matriiseja"),
+        (TeachingTextField.CONTENT, "en", "Matrices revisited"),
+        (TeachingTextField.OUTCOMES, "fi", "Käytä matriiseja"),
     ]
-    assert read[0].source_text_hash == teaching_text_sha256("Matriisit")
+    assert read[0].source_text_hash == teaching_text_sha256("Matriser")
     assert read[0].translation_method is TranslationMethod.MANUAL
     assert read[0].translation_model is None
     assert repository.list_for_course_versions(()) == ()
@@ -148,7 +139,7 @@ def test_repository_rejects_unknown_nonrepresentative_official_target_and_wrong_
         active_run_id = session.scalar(
             select(SourceSnapshot.ingestion_run_id)
             .join(CourseVersion, CourseVersion.source_snapshot_id == SourceSnapshot.id)
-            .where(CourseVersion.sisu_course_unit_id == "course-active-2026")
+            .where(CourseVersion.source_version_id == "course-active-2026")
         )
         older_snapshot_id = uuid.uuid4()
         session.add(
@@ -169,9 +160,8 @@ def test_repository_rejects_unknown_nonrepresentative_official_target_and_wrong_
             CourseVersion(
                 id=older_version_id,
                 course_id=active_course_id,
-                sisu_course_unit_id="course-active-2025",
+                source_version_id="course-active-2025",
                 code="CODE.0",
-                name_fi="Lineaarialgebra",
                 credits_min=5,
                 credits_max=5,
                 official_url="https://example.test/course",
@@ -181,6 +171,14 @@ def test_repository_rejects_unknown_nonrepresentative_official_target_and_wrong_
         )
         session.flush()
         session.add(
+            OfficialCourseText(
+                course_version_id=older_version_id,
+                field=OfficialTextField.NAME,
+                language="fi",
+                text="Lineaarialgebra",
+            )
+        )
+        session.add(
             CourseVersionCurriculumPeriod(
                 course_version_id=older_version_id, curriculum_period_id="period-2025"
             )
@@ -189,8 +187,8 @@ def test_repository_rejects_unknown_nonrepresentative_official_target_and_wrong_
     with session_scope(factory) as session:
         assert (
             session.scalar(
-                select(CourseVersion.sisu_course_unit_id).where(
-                    CourseVersion.sisu_course_unit_id == "course-active-2025"
+                select(CourseVersion.source_version_id).where(
+                    CourseVersion.source_version_id == "course-active-2025"
                 )
             )
             == "course-active-2025"
@@ -206,8 +204,8 @@ def test_repository_rejects_unknown_nonrepresentative_official_target_and_wrong_
                 manual_input(
                     "missing-version",
                     TeachingTextField.NAME,
-                    TeachingTextLanguage.EN,
-                    TeachingTextLanguage.FI,
+                    "en",
+                    "fi",
                     "Lineaarialgebra",
                     "Linear algebra",
                 ),
@@ -221,8 +219,8 @@ def test_repository_rejects_unknown_nonrepresentative_official_target_and_wrong_
                 manual_input(
                     "course-active-2025",
                     TeachingTextField.NAME,
-                    TeachingTextLanguage.EN,
-                    TeachingTextLanguage.FI,
+                    "en",
+                    "fi",
                     "Lineaarialgebra",
                     "Linear algebra",
                 ),
@@ -236,8 +234,8 @@ def test_repository_rejects_unknown_nonrepresentative_official_target_and_wrong_
                 manual_input(
                     "course-active-2026",
                     TeachingTextField.NAME,
-                    TeachingTextLanguage.FI,
-                    TeachingTextLanguage.EN,
+                    "fi",
+                    "en",
                     "Linear algebra",
                     "Lineaarialgebra",
                 ),
@@ -251,18 +249,70 @@ def test_repository_rejects_unknown_nonrepresentative_official_target_and_wrong_
                 manual_input(
                     "course-active-2026",
                     TeachingTextField.OUTCOMES,
-                    TeachingTextLanguage.FI,
-                    TeachingTextLanguage.EN,
+                    "fi",
+                    "en",
                     "Use matrices",
                     "Käytä matriiseja",
                 ),
                 manual_input(
                     "course-active-2026",
                     TeachingTextField.CONTENT,
-                    TeachingTextLanguage.EN,
-                    TeachingTextLanguage.FI,
+                    "en",
+                    "fi",
                     "Wrong matrices",
                     "Matrices",
+                ),
+            )
+        )
+    assert_no_rows()
+
+    # An unconfigured target language is refused before any row is written.
+    with pytest.raises(ValueError):
+        repository.upsert(
+            (
+                manual_input(
+                    "course-active-2026",
+                    TeachingTextField.NAME,
+                    "de",
+                    "fi",
+                    "Lineaarialgebra",
+                    "Lineare Algebra",
+                ),
+            )
+        )
+    assert_no_rows()
+
+    # An unmapped configured target is refused even when its source is official.
+    with pytest.raises(ValueError):
+        repository.upsert(
+            (
+                manual_input(
+                    "course-active-2026",
+                    TeachingTextField.NAME,
+                    "sv",
+                    "fi",
+                    "Lineaarialgebra",
+                    "Linjär algebra",
+                ),
+            )
+        )
+    assert_no_rows()
+
+    # A configured source that the target's priority list omits is an unaccepted pair.
+    unlisted = replace(
+        UNIVERSITIES["hanken"],
+        translation_priority={"fi": ("en",), "en": ("fi",)},
+    )
+    with pytest.raises(ValueError):
+        DerivedTranslationRepository(factory, university=unlisted).upsert(
+            (
+                manual_input(
+                    "course-active-2026",
+                    TeachingTextField.NAME,
+                    "fi",
+                    "sv",
+                    "Linjär algebra",
+                    "Lineaarialgebra",
                 ),
             )
         )
@@ -281,30 +331,32 @@ def test_real_repository_and_service_resolve_staleness_and_coverage(
             manual_input(
                 active_source,
                 TeachingTextField.CONTENT,
-                TeachingTextLanguage.EN,
-                TeachingTextLanguage.FI,
+                "en",
+                "fi",
                 "Matriisit",
                 "Matrices",
             ),
             manual_input(
                 active_source,
                 TeachingTextField.OUTCOMES,
-                TeachingTextLanguage.FI,
-                TeachingTextLanguage.EN,
+                "fi",
+                "en",
                 "Use matrices",
                 "Käytä matriiseja",
             ),
             manual_input(
                 "course-inactive-2020",
                 TeachingTextField.NAME,
-                TeachingTextLanguage.FI,
-                TeachingTextLanguage.EN,
+                "fi",
+                "en",
                 "Programming",
                 "Ohjelmointi",
             ),
         )
     )
-    service = TeachingTextService(CurriculumRepository(factory), repository)
+    service = TeachingTextService(
+        CurriculumRepository(factory, university=UNIVERSITIES["example"]), repository
+    )
 
     catalogue = service.build_catalogue()
     coverage = catalogue.coverage
@@ -314,19 +366,19 @@ def test_real_repository_and_service_resolve_staleness_and_coverage(
         "course-inactive",
         "course-no-period",
     )
-    assert coverage.unrepresented_group_ids == ("course-no-period",)
+    assert coverage.unrepresented_group_ids == ()
     active_hash = next(
         course.representative_source_hash
         for course in catalogue.courses
-        if course.sisu_course_unit_id == active_source
+        if course.source_version_id == active_source
     )
     assert active_hash == "a" * 64
     assert (
         coverage.canonical_course_count,
         coverage.representative_course_count,
         coverage.no_representative_course_count,
-    ) == (4, 3, 1)
-    assert (coverage.name_only_course_count, coverage.unembeddable_course_count) == (1, 1)
+    ) == (4, 4, 0)
+    assert (coverage.name_only_course_count, coverage.unembeddable_course_count) == (1, 2)
     assert coverage.stale_texts == ()
     # The projected coverage read agrees with the full resolved catalogue and never reads official
     # prerequisite/substitution structures.
@@ -347,88 +399,90 @@ def test_real_repository_and_service_resolve_staleness_and_coverage(
     )
     counts = {(count.field, count.language): count for count in coverage.fields}
     assert (
-        counts[(TeachingTextField.NAME, TeachingTextLanguage.FI)].official_count,
-        counts[(TeachingTextField.NAME, TeachingTextLanguage.FI)].derived_count,
-        counts[(TeachingTextField.NAME, TeachingTextLanguage.FI)].stale_count,
-        counts[(TeachingTextField.NAME, TeachingTextLanguage.FI)].missing_count,
-    ) == (1, 1, 0, 1)
+        counts[(TeachingTextField.NAME, "fi")].official_count,
+        counts[(TeachingTextField.NAME, "fi")].derived_count,
+        counts[(TeachingTextField.NAME, "fi")].stale_count,
+        counts[(TeachingTextField.NAME, "fi")].missing_count,
+    ) == (1, 1, 0, 2)
     assert (
-        counts[(TeachingTextField.NAME, TeachingTextLanguage.EN)].official_count,
-        counts[(TeachingTextField.NAME, TeachingTextLanguage.EN)].derived_count,
-        counts[(TeachingTextField.NAME, TeachingTextLanguage.EN)].stale_count,
-        counts[(TeachingTextField.NAME, TeachingTextLanguage.EN)].missing_count,
-    ) == (1, 0, 0, 2)
+        counts[(TeachingTextField.NAME, "en")].official_count,
+        counts[(TeachingTextField.NAME, "en")].derived_count,
+        counts[(TeachingTextField.NAME, "en")].stale_count,
+        counts[(TeachingTextField.NAME, "en")].missing_count,
+    ) == (1, 0, 0, 3)
     assert (
-        counts[(TeachingTextField.CONTENT, TeachingTextLanguage.FI)].official_count,
-        counts[(TeachingTextField.CONTENT, TeachingTextLanguage.FI)].derived_count,
-        counts[(TeachingTextField.CONTENT, TeachingTextLanguage.FI)].stale_count,
-        counts[(TeachingTextField.CONTENT, TeachingTextLanguage.FI)].missing_count,
-    ) == (1, 0, 0, 2)
+        counts[(TeachingTextField.CONTENT, "fi")].official_count,
+        counts[(TeachingTextField.CONTENT, "fi")].derived_count,
+        counts[(TeachingTextField.CONTENT, "fi")].stale_count,
+        counts[(TeachingTextField.CONTENT, "fi")].missing_count,
+    ) == (1, 0, 0, 3)
     assert (
-        counts[(TeachingTextField.CONTENT, TeachingTextLanguage.EN)].official_count,
-        counts[(TeachingTextField.CONTENT, TeachingTextLanguage.EN)].derived_count,
-        counts[(TeachingTextField.CONTENT, TeachingTextLanguage.EN)].stale_count,
-        counts[(TeachingTextField.CONTENT, TeachingTextLanguage.EN)].missing_count,
-    ) == (0, 1, 0, 2)
+        counts[(TeachingTextField.CONTENT, "en")].official_count,
+        counts[(TeachingTextField.CONTENT, "en")].derived_count,
+        counts[(TeachingTextField.CONTENT, "en")].stale_count,
+        counts[(TeachingTextField.CONTENT, "en")].missing_count,
+    ) == (0, 1, 0, 3)
     assert (
-        counts[(TeachingTextField.OUTCOMES, TeachingTextLanguage.FI)].official_count,
-        counts[(TeachingTextField.OUTCOMES, TeachingTextLanguage.FI)].derived_count,
-        counts[(TeachingTextField.OUTCOMES, TeachingTextLanguage.FI)].stale_count,
-        counts[(TeachingTextField.OUTCOMES, TeachingTextLanguage.FI)].missing_count,
-    ) == (0, 1, 0, 2)
+        counts[(TeachingTextField.OUTCOMES, "fi")].official_count,
+        counts[(TeachingTextField.OUTCOMES, "fi")].derived_count,
+        counts[(TeachingTextField.OUTCOMES, "fi")].stale_count,
+        counts[(TeachingTextField.OUTCOMES, "fi")].missing_count,
+    ) == (0, 1, 0, 3)
     assert (
-        counts[(TeachingTextField.OUTCOMES, TeachingTextLanguage.EN)].official_count,
-        counts[(TeachingTextField.OUTCOMES, TeachingTextLanguage.EN)].derived_count,
-        counts[(TeachingTextField.OUTCOMES, TeachingTextLanguage.EN)].stale_count,
-        counts[(TeachingTextField.OUTCOMES, TeachingTextLanguage.EN)].missing_count,
-    ) == (1, 0, 0, 2)
+        counts[(TeachingTextField.OUTCOMES, "en")].official_count,
+        counts[(TeachingTextField.OUTCOMES, "en")].derived_count,
+        counts[(TeachingTextField.OUTCOMES, "en")].stale_count,
+        counts[(TeachingTextField.OUTCOMES, "en")].missing_count,
+    ) == (1, 0, 0, 3)
 
     active_course = next(
-        course for course in catalogue.courses if course.sisu_course_unit_id == active_source
+        course for course in catalogue.courses if course.source_version_id == active_source
     )
     resolved_cells = {(cell.field, cell.language): cell for cell in active_course.texts}
-    assert resolved_cells[(TeachingTextField.CONTENT, TeachingTextLanguage.EN)].text == "Matrices"
-    assert resolved_cells[(TeachingTextField.OUTCOMES, TeachingTextLanguage.FI)].text == (
-        "Käytä matriiseja"
-    )
+    assert resolved_cells[(TeachingTextField.CONTENT, "en")].text == "Matrices"
+    assert resolved_cells[(TeachingTextField.OUTCOMES, "fi")].text == ("Käytä matriiseja")
 
     with session_scope(factory) as session:
-        text = session.get(
-            CourseText,
-            session.scalar(
-                select(CourseVersion.id).where(CourseVersion.sisu_course_unit_id == active_source)
-            ),
+        version_id = session.scalar(
+            select(CourseVersion.id).where(CourseVersion.source_version_id == active_source)
+        )
+        text = session.scalar(
+            select(OfficialCourseText).where(
+                OfficialCourseText.course_version_id == version_id,
+                OfficialCourseText.field == OfficialTextField.CONTENT,
+                OfficialCourseText.language == "fi",
+            )
         )
         assert text is not None
-        text.content_fi = "Muuttuneet matriisit"
+        text.text = "Muuttuneet matriisit"
 
     catalogue = service.build_catalogue()
     coverage = catalogue.coverage
     assert len(coverage.stale_texts) == 1
     assert service.coverage() == coverage
     stale = coverage.stale_texts[0]
-    assert stale.sisu_course_unit_id == active_source
+    assert stale.source_version_id == active_source
     assert stale.field is TeachingTextField.CONTENT
-    assert stale.language is TeachingTextLanguage.EN
-    assert stale.source_language is TeachingTextLanguage.FI
+    assert stale.language == "en"
+    assert stale.source_language == "fi"
     assert stale.stored_source_text_hash == teaching_text_sha256("Matriisit")
     assert stale.current_source_text_hash == teaching_text_sha256("Muuttuneet matriisit")
     counts = {(count.field, count.language): count for count in coverage.fields}
     assert (
-        counts[(TeachingTextField.CONTENT, TeachingTextLanguage.EN)].derived_count,
-        counts[(TeachingTextField.CONTENT, TeachingTextLanguage.EN)].stale_count,
-        counts[(TeachingTextField.CONTENT, TeachingTextLanguage.EN)].missing_count,
-    ) == (0, 1, 2)
+        counts[(TeachingTextField.CONTENT, "en")].derived_count,
+        counts[(TeachingTextField.CONTENT, "en")].stale_count,
+        counts[(TeachingTextField.CONTENT, "en")].missing_count,
+    ) == (0, 1, 3)
     assert coverage.name_only_course_count == 1
-    assert coverage.unembeddable_course_count == 1
-    assert (coverage.canonical_course_count, coverage.representative_course_count) == (4, 3)
+    assert coverage.unembeddable_course_count == 2
+    assert (coverage.canonical_course_count, coverage.representative_course_count) == (4, 4)
     active_course = next(
-        course for course in catalogue.courses if course.sisu_course_unit_id == active_source
+        course for course in catalogue.courses if course.source_version_id == active_source
     )
-    assert (TeachingTextField.CONTENT, TeachingTextLanguage.EN) not in {
+    assert (TeachingTextField.CONTENT, "en") not in {
         (cell.field, cell.language) for cell in active_course.texts
     }
     empty_course = next(
-        course for course in catalogue.courses if course.sisu_course_unit_id == empty_source
+        course for course in catalogue.courses if course.source_version_id == empty_source
     )
     assert empty_course.texts == ()

@@ -15,6 +15,7 @@ import json
 import subprocess
 import warnings
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
@@ -28,6 +29,7 @@ from course_explorer.config import (
     load_database_settings,
     load_inference_selection_settings,
     load_inference_settings,
+    load_instance_settings,
     load_usage_settings,
     load_web_settings,
 )
@@ -54,6 +56,7 @@ from course_explorer.inference.diagnostics import (
 from course_explorer.inference.publication import read_inference_publication_diagnostics
 from course_explorer.inference.scheduling import TargetDisposition, TargetFailureRecord
 from course_explorer.inference.scheduling_repository import InferenceSchedulingRepository
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.serving_build import (
     ServingArtifactsPruneReport,
     ServingArtifactsReport,
@@ -89,10 +92,12 @@ from course_explorer_admin.provisioning import (
 )
 from course_explorer_admin.rebuild import AdminRebuildReport, AdminRestartReport, RebuildReport
 from course_explorer_admin.self_host import (
+    CheckoutRenamed,
     ExampleSetupInput,
     RealDatabaseSetupInput,
     SelfHostReport,
     StartupMode,
+    prepare_checkout_path,
     setup_example,
     setup_real_database,
 )
@@ -172,10 +177,28 @@ def run_administrative_example_setup(
     *,
     runner: mechanics.ProcessRunner | None = None,
     write: Callable[[str], None] = print,
+    checkout_suffix: str = "",
 ) -> SelfHostReport:
-    """Delegate once to the example self-host workflow with one resolved runner."""
+    """Delegate once to the example self-host workflow with one resolved runner.
+
+    The checkout path is prepared first, so a clean clone is renamed and its environment rebuilt
+    before the workflow runs. A ``checkout_suffix`` adds its segment to the generated checkout and
+    user-unit names.
+    """
     process_runner = runner if runner is not None else mechanics.SubprocessRunner()
-    return setup_example(options, runner=process_runner, write=write)
+    prepare_checkout_path(
+        administration.repository_root(),
+        options.instance_key,
+        checkout_suffix,
+        runner=process_runner,
+        write=write,
+    )
+    return setup_example(
+        options,
+        runner=process_runner,
+        write=write,
+        checkout_suffix=checkout_suffix,
+    )
 
 
 def run_administrative_real_database_setup(
@@ -326,9 +349,20 @@ def run_administrative_config_set(
     *,
     settings_families: tuple[type[ConfiguredSettings], ...] = (),
 ) -> ConfigurationWriteReport:
-    """Delegate once to the configuration save owner with its validation families."""
-    from course_explorer_admin import configuration
+    """Delegate one configuration save to its owning composition.
 
+    The two activity policy keys of the curriculum file also refresh every present dataset role's
+    stored activity through the dataset owner. Every other key keeps the pure file-save path.
+    """
+    from course_explorer_admin import configuration, datasets
+
+    if file == "config/curriculum.toml" and key in {
+        "CURRENT_ACADEMIC_YEAR",
+        "ACTIVE_ACADEMIC_YEAR_WINDOW",
+    }:
+        return datasets.save_activity_configuration(
+            file, key, value, settings_families=settings_families
+        )
     return configuration.set_configuration_value(
         file, key, value, settings_families=settings_families
     )
@@ -512,12 +546,15 @@ def run_administrative_coverage(kind: AdministrativeCoverage, *, role: DatasetRo
     if kind not in _COVERAGE_KINDS:
         raise ValueError("coverage kind must be teaching-text, embedding, or inference")
     with database_context(_dataset_settings(role)) as factory:
+        university = load_instance_settings().university
         if kind == "teaching-text":
             return TeachingTextService(
-                CurriculumRepository(factory), DerivedTranslationRepository(factory)
+                CurriculumRepository(factory, university=university),
+                DerivedTranslationRepository(factory, university=university),
+                university=university,
             ).coverage()
         if kind == "embedding":
-            return CourseEmbeddingRepository(factory).coverage()
+            return CourseEmbeddingRepository(factory, university=university).coverage()
         return InferenceSchedulingRepository(factory).read_coverage()
 
 
@@ -526,8 +563,9 @@ def run_administrative_summary(kind: AdministrativeSummary, *, role: DatasetRole
     if kind not in _SUMMARY_KINDS:
         raise ValueError("summary kind must be catalogue or inference")
     with database_context(_dataset_settings(role)) as factory:
+        university = load_instance_settings().university
         if kind == "catalogue":
-            return CurriculumRepository(factory).summary()
+            return CurriculumRepository(factory, university=university).summary()
         repository = InferenceSchedulingRepository(factory)
         coverage = repository.read_coverage()
         failures = (
@@ -540,6 +578,7 @@ def run_administrative_summary(kind: AdministrativeSummary, *, role: DatasetRole
             cohort,
             generation,
             load_inference_selection_settings(),
+            university=university,
         )
         return InferenceAdministrativeSummary(
             coverage=coverage,
@@ -780,7 +819,7 @@ _SETUP_OPTIONS = (
     ("8", "Configuration"),
     ("9", "Rebuild app"),
     ("10", "Administration password"),
-    ("11", "Rebuild admin panel"),
+    ("11", "Rebuild administration console"),
     ("12", "Set up example site"),
     ("13", "Set up real empty database"),
     ("0", "Back"),
@@ -949,6 +988,8 @@ def _perform(
         result = call()
     except EOFError:
         raise
+    except CheckoutRenamed:
+        raise
     except Exception as exc:
         write(format_operator_error(exc))
         write(operator_guidance(operation, configuration_error=isinstance(exc, ValidationError)))
@@ -1098,13 +1139,13 @@ def _rebuild_menu(read: Callable[[str], str], write: Callable[[str], None]) -> N
 
 
 def _admin_rebuild_menu(read: Callable[[str], str], write: Callable[[str], None]) -> None:
-    """Confirm the administration panel's rebuild, then build and queue its restart once.
+    """Confirm the administration console's rebuild, then build and queue its restart once.
 
     The build delegate runs first, so a raised build failure stops the callback before the
     restart delegate is reached and restarts nothing. The restart delegate's own acknowledgment is
     the report the entry prints.
     """
-    question = "Rebuild the admin panel? This signs all operators out."
+    question = "Rebuild the administration console? This signs all operators out."
     if _prompt(read, write, question, _REBUILD_OPTIONS) != "1":
         return
 
@@ -1170,26 +1211,82 @@ def _startup_mode(read: Callable[[str], str], write: Callable[[str], None]) -> S
     return _STARTUP_MODES.get(_prompt(read, write, "Startup mode", _STARTUP_OPTIONS))
 
 
-def _example_setup_menu(read: Callable[[str], str], write: Callable[[str], None]) -> None:
-    """Ask the example workflow's device choices, then run it once.
+def _prompt_port(read: Callable[[str], str], title: str, default: int) -> int | None:
+    """Return one entered TCP port, the default for a blank answer, or ``None`` for other text."""
+    answer = read(f"{title} [{default}]: ").strip()
+    if not answer:
+        return default
+    try:
+        return int(answer, 10)
+    except ValueError:
+        return None
 
-    The app URL defaults to the example's own address. The two administration password entries and
-    the optional publication token come from the hidden reader, never from the ordinary input
-    callback. A cancel, an end of input, an interrupt or a refused hidden entry writes nothing and
-    runs nothing.
+
+def _example_setup_menu(
+    read: Callable[[str], str],
+    write: Callable[[str], None],
+    *,
+    checkout_suffix: str = "",
+) -> None:
+    """Ask the example workflow's instance and device choices, then run it once.
+
+    The university menu lists the implemented map entries. The four ports default to the example
+    files, and a blank shared directory keeps the configured one. The app URL and administration
+    origin default to addresses derived from the chosen ports. The two administration password
+    entries and the optional publication token come from the hidden reader, never from the ordinary
+    input callback. A cancel, an end of input, an interrupt or a refused hidden entry writes nothing
+    and runs nothing. A ``checkout_suffix`` adds its segment to the generated checkout and user-unit
+    names.
     """
     try:
-        default_url = str(
-            read_public_configuration(
-                administration.repository_root() / "examples", aliases=("WEB_APP_URL",)
-            )["WEB_APP_URL"]
+        defaults = read_public_configuration(
+            administration.repository_root() / "examples",
+            aliases=(
+                "WEB_PORT",
+                "ADMIN_WEB_PORT",
+                "POSTGRES_PORT",
+                "EMBEDDING_PORT",
+                "ADMIN_SHARED_ROOT",
+            ),
         )
+        default_web_port = int(defaults["WEB_PORT"])
+        default_admin_port = int(defaults["ADMIN_WEB_PORT"])
+        default_postgres_port = int(defaults["POSTGRES_PORT"])
+        default_embedding_port = int(defaults["EMBEDDING_PORT"])
+        default_shared_root = str(defaults["ADMIN_SHARED_ROOT"])
     except Exception as exc:
         write(format_operator_error(exc))
         write(operator_guidance("self-host-example"))
         return
+    instance_keys = tuple(UNIVERSITIES)
+    university_options = tuple(
+        (str(index), metadata.name_en)
+        for index, metadata in enumerate(UNIVERSITIES.values(), start=1)
+    )
+    choice = _prompt(read, write, "University", (*university_options, ("0", "Cancel")))
+    if not choice.isdigit() or not 1 <= int(choice) <= len(instance_keys):
+        return
+    instance_key = instance_keys[int(choice) - 1]
+    web_port = _prompt_port(read, "Feature web port", default_web_port)
+    admin_web_port = _prompt_port(read, "Administration port", default_admin_port)
+    postgres_port = _prompt_port(read, "Database port", default_postgres_port)
+    embedding_port = _prompt_port(read, "Embedding port", default_embedding_port)
+    if (
+        web_port is None
+        or admin_web_port is None
+        or postgres_port is None
+        or embedding_port is None
+    ):
+        write("the four ports must be whole numbers; nothing was written")
+        return
+    shared_answer = read(f"Shared directory [{default_shared_root}]: ").strip()
+    shared_root = Path(shared_answer) if shared_answer else None
+    default_url = f"http://localhost:{web_port}/"
     answer = read(f"App URL [{default_url}]: ").strip()
     app_url: str | None = answer or None
+    default_origin = f"https://localhost:{admin_web_port}"
+    answer = read(f"Administration origin [{default_origin}]: ").strip()
+    admin_origin: str | None = answer or None
     username = read("Administration username (0 to cancel): ").strip()
     if username == "0":
         return
@@ -1229,12 +1326,20 @@ def _example_setup_menu(read: Callable[[str], str], write: Callable[[str], None]
         lambda: run_administrative_example_setup(
             ExampleSetupInput(
                 app_url=app_url,
+                admin_origin=admin_origin,
+                instance_key=instance_key,
+                web_port=web_port,
+                admin_web_port=admin_web_port,
+                postgres_port=postgres_port,
+                embedding_port=embedding_port,
+                shared_root=shared_root,
                 username=username,
                 password=SecretStr(password),
                 mode=mode,
                 confirm_download=download,
                 publication_token=token,
-            )
+            ),
+            checkout_suffix=checkout_suffix,
         ),
     )
 
@@ -1260,6 +1365,7 @@ def _setup_menu(
     write: Callable[[str], None],
     *,
     configuration_families: tuple[type[ConfiguredSettings], ...] = (),
+    checkout_suffix: str = "",
 ) -> None:
     while True:
         choice = _prompt(read, write, "Setup/preflight", _SETUP_OPTIONS)
@@ -1288,7 +1394,7 @@ def _setup_menu(
         elif choice == "11":
             _admin_rebuild_menu(read, write)
         elif choice == "12":
-            _example_setup_menu(read, write)
+            _example_setup_menu(read, write, checkout_suffix=checkout_suffix)
         elif choice == "13":
             _real_database_setup_menu(read, write)
 
@@ -1552,14 +1658,16 @@ def run_operator_menu(
     run_command: Callable[..., BaseModel] | None = None,
     run_summary: Callable[..., BaseModel] | None = None,
     configuration_families: tuple[type[ConfiguredSettings], ...] = (),
+    checkout_suffix: str = "",
 ) -> int:
     """Run the numbered operator menu until Exit, EOF (0), or interrupt (130).
 
     An absent stage or summary callback resolves to the base command at entry. A supplied
     callback replaces that one call only, so a wrapper injects an extra route without a second menu
     or dispatcher. ``configuration_families`` reach the configuration entry alone, so a wrapper can
-    add the validation families of its own package. Choices, scope, safe failures, disposition and
-    EOF behavior come from the base command.
+    add the validation families of its own package. ``checkout_suffix`` reaches the example setup
+    entry alone, so a wrapper can name its own checkout and unit segment. Choices, scope, safe
+    failures, disposition and EOF behavior come from the base command.
     """
     commands = run_command if run_command is not None else run_administrative_command
     summaries = run_summary if run_summary is not None else run_administrative_summary
@@ -1569,7 +1677,12 @@ def run_operator_menu(
             if choice == "0":
                 return 0
             if choice == "1":
-                _setup_menu(read, write, configuration_families=configuration_families)
+                _setup_menu(
+                    read,
+                    write,
+                    configuration_families=configuration_families,
+                    checkout_suffix=checkout_suffix,
+                )
             elif choice == "2":
                 _tool_menu(read, write, "ingestion", run_command=commands)
             elif choice == "3":
@@ -1582,6 +1695,9 @@ def run_operator_menu(
                 _reports_menu(read, write, run_summary=summaries)
             elif choice == "7":
                 _server_logs_menu(read, write)
+    except CheckoutRenamed as renamed:
+        write(str(renamed))
+        return 0
     except KeyboardInterrupt:
         return 130
     except EOFError:

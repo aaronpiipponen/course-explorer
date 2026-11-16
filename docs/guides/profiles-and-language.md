@@ -15,23 +15,23 @@ A profile holds the language, the [shared course sets](/docs/guides/README.md#sh
 | Compare | The two comparison slots. |
 | Prerequisites | The open course, the search field, the **Recommended**, **Inferred** and **Active only** settings, the [route basis](/docs/guides/prerequisites.md#graph-options), the excluded courses, and the completed and excluded marks on module and requirement nodes. |
 | Discover | The chosen list, the mode, the basis, and the **Active only** setting. |
-| Structure of studies | The ordered [programmes](/docs/guides/structure-of-studies.md#adding-a-programme), the choices, the places of the courses and modules, the order of the course cards, and a captured Sisu plan that the tab has not placed. |
+| Structure of studies | The ordered [programmes](/docs/guides/structure-of-studies.md#adding-a-programme), the choices, the places of the courses and modules, the order of the course cards, and a study plan that the tab has not placed. |
 
 A browser with no saved state starts with one profile named My plan. Each profile holds its own copy, so the courses and the settings of one profile do not appear in another.
 
-A site that serves fewer tabs and features hides their controls. The saved **Compare** slots, the saved **Inferred** setting and the saved **Discover** list are values of the profile, so a site that serves the feature again finds them there. The open tab is not one of them: it belongs to the browser tab, so another tab keeps its own and a reload of one tab restores it. Nothing a profile saves states which features a site serves.
+A site that serves fewer tabs and features hides their controls. The saved **Compare** slots, the saved **Inferred** setting and the saved **Discover** list are values of the profile, so a site that serves the feature again finds them there. The open tab is not one of them: it belongs to the browser tab, so another tab keeps its own and a reload of one tab restores it. A profile saves the same values on every site.
 
 The profiles belong to this browser. They are held in the local storage of the browser, so another browser or another device does not have them.
 
 ## The profile control
 
-On desktop the control in the top bar carries the name of the open profile, and on a phone it is the first row of the **More** sheet at the bottom of the window. On a phone the profile rows and controls are large enough to tap, and a profile name wraps in full. Opening **My plan** hides the language, **Feedback** and **Docs** row and footer and grows the sheet upward with the profile panel, leaving no empty space below it. Select it to open **Profiles**, which lists every profile of this browser. The panel holds the profile list, the **New profile** form, the **Import** area, and a bottom row with a **?** help control, **Copy Sisu import script**, and **Export**. [Using the app on a phone](/docs/guides/phone.md) describes the **More** sheet that holds the control.
+On desktop the control in the top bar carries the name of the open profile, and on a phone it is the first row of the **More** sheet at the bottom of the window. On a phone the profile rows and controls are large enough to tap, and a profile name wraps in full. Opening **My plan** hides the language, **GitHub**, **Feedback** and **Docs** row and footer and grows the sheet upward with the profile panel, leaving no empty space below it. Select it to open **Profiles**, which lists every profile of this browser. The panel holds the profile list, the **New profile** form, the **Import** area, and a bottom row with a **?** help control, **Copy import script** when the site configures a script, and **Export**. [Using the app on a phone](/docs/guides/phone.md) describes the **More** sheet that holds the control.
 
 Every tab of the same browser opens the same saved state, so a change made in one open tab appears in the other open tabs, and a profile switch reaches them as well.
 
 Each row shows the profile name and its counts, written as selected first and completed second, such as "4 selected · 2 completed". The open profile is marked.
 
-![The Profiles panel open, with two profiles and their selected and completed counts, a rename control and a delete control on each row, above the form that creates a profile, the import area and the bottom row with a question-mark help control, Copy Sisu import script and Export.](/docs/screenshots/profile-controls.png)
+![The Profiles panel open, with two profiles and their selected and completed counts, a rename control and a delete control on each row, above the form that creates a profile, the import area and the bottom row with a question-mark help control, Copy import script and Export.](/docs/screenshots/profile-controls.png)
 
 ## Creating a profile
 
@@ -72,7 +72,7 @@ A name that another profile already holds is refused, and the message is **A pro
 
 Exporting a profile leaves the profiles as they are, and it does not open the exported profile. The list is open for several downloads in a row.
 
-The **?** control at the left of the bottom row opens a drawer that explains profiles, export, import and Sisu plan import in four sections.
+The **?** control at the left of the bottom row opens a drawer that explains profiles and export, the import area, each study-plan format the site configures, and the configured import script.
 
 A profile downloads as `course-explorer-profile-<profile name>.json`. Every character that a file name cannot hold becomes `_`, and the spaces, the letters outside the plain Latin alphabet and the other characters of the name are kept. The whole saved data downloads as `course-explorer-saved-data.json`.
 
@@ -81,7 +81,9 @@ A profile downloads as `course-explorer-profile-<profile name>.json`. Every char
 1. Select the profile control to open **Profiles**.
 2. Select **Choose file** in the **Import** area and pick one file, or drop one file onto the area.
 
-The control reads **Choose file** and **or drop a .json or .pdf file**, and it reads four kinds of file: a profile, the whole saved data, a capture of a Sisu plan, or a supported Sisu plan PDF. The file's declared type or a `.pdf` suffix decides which path it takes, and the **?** help drawer of the bottom row explains the kinds and carries links to the profile import guide and the Sisu import guide. While the **Structure of studies** tab holds no programme, its **Import** area below **Add programme** reads **Choose** and **or drop a PDF print of your Sisu study plan or a JSON profile export**, and accepts the same four kinds through the same confirmations. That area also carries **Copy Sisu import script** and a **?** help drawer for the import and the Sisu plan, with links to the import guide and to the whole script, without the export list.
+The control reads **Choose file** and a drop note that names the JSON profile export and the study-plan formats the site configures. A Sisu site reads **or drop a JSON profile export, Sisu saved page, Sisu plan PDF or Sisu capture**, a Peppi site reads **or drop a JSON profile export, Peppi saved page or Peppi capture**, and a site that configures no format reads **or drop a JSON profile export**.
+
+The import accepts a profile, the whole saved data, and exactly the site's configured study-plan formats. A file's `.html` or `.htm` suffix or media type selects a configured saved page, `application/pdf` or a `.pdf` suffix selects a configured plan PDF, and a capture file is selected by its declared type. A file that none of the configured formats recognises is refused with **This file is not one of this site's import formats. Use a file type listed in the import area.** and changes nothing. The **?** help drawer of the bottom row explains the kinds and carries links to the profile import guide and to the Sisu or Peppi guide the site configures. While the **Structure of studies** tab holds no programme, its **Import** area below **Add programme** shows **Choose file** and the same drop note, and accepts the same files through the same confirmations. That area also carries **Copy import script** when the site configures a script, **Export** with the same export list as the profile menu, and a **?** help drawer for the import, each configured format and the configured script.
 
 A file that holds a profile opens the dialog **Import profile “My plan”?**, with the name of the imported profile in place of My plan. Select **Import** to create a profile from the file and open it, or **Cancel**, Escape or a click outside the dialog to leave the profiles as they are. The created profile carries the name and everything the file holds, and it is a separate profile from the one that is open. When a saved profile already holds the imported name, the dialog states that the import replaces that profile's saved data and makes it current, and its action reads **Overwrite**.
 
@@ -91,21 +93,21 @@ A file that holds a profile opens the dialog **Import profile “My plan”?**, 
 
 A file that holds the whole saved data opens the dialog **Replace all saved data?**, which states that the imported saved data takes the place of every profile in this browser. Select **Replace** to replace the saved data and reload the app, or **Cancel** to leave the saved data as it is.
 
-A file that holds a Sisu plan capture opens the dialog **Import Sisu plan**. It names the captured programmes in the order Sisu shows them, and it names every item whose identity the capture could not resolve, with the reason. Type a name in **Profile name** and select **Import** to create the profile, or **Cancel**, Escape or a click outside the dialog to leave the profiles as they are. **Import** is available once the name holds something, and it reads **Overwrite** when a saved profile already holds that name, in which case the import replaces that profile's saved data. [Importing a Sisu plan](/docs/guides/sisu-import.md) covers the capture and what the import places.
+A study-plan file opens the dialog **Import study plan**. [Importing a study plan](/docs/guides/importing-a-study-plan.md) describes the dialog, the outcomes it names and the modules that wait for a version choice.
 
-A supported Sisu plan PDF opens the same **Import Sisu plan** dialog. It names the programmes it found, lists a module that waits for a version choice, and names every omitted item with its reason. An item that matches several official items lists its candidates. The PDF is read in this browser, and the official catalogue and structure reads use this site. No profile is written before **Import**. [Importing a Sisu plan](/docs/guides/sisu-import.md) covers the PDF, its supported print and its personal data warning.
+[Importing a Sisu plan](/docs/guides/sisu-import.md) covers the Sisu saved page, plan PDF, capture and script. [Importing a Peppi plan](/docs/guides/peppi-import.md) covers the Peppi saved page, capture and script.
 
 A file of another kind, or a file whose content is not valid, is refused with a message and changes nothing.
 
-## Copying the Sisu import script
+## Copying an import script
 
-**Copy Sisu import script** in the bottom row of the profile panel copies the console script that captures a Sisu plan to the clipboard, and the panel reports **Sisu import script copied** in a green box that closes on its own after five seconds, the same lifetime as a **Save** or **Rename profile** failure message. A copy that the browser refuses reports **Could not copy Sisu import script**. The script itself, and the steps that use it, are in [Importing a Sisu plan](/docs/guides/sisu-import.md).
+**Copy import script** in the bottom row of the profile panel appears only when the site configures a script. It copies that script to the clipboard, and the panel reports **Import script copied** in a green box that closes on its own after five seconds, the same lifetime as a **Save** or **Rename profile** failure message. A copy that the browser refuses reports **Could not copy import script**. The Sisu script and its steps are in [Importing a Sisu plan](/docs/guides/sisu-import.md#the-script), and the Peppi script and its steps are in [Importing a Peppi plan](/docs/guides/peppi-import.md#the-script).
 
 ## The language control
 
-On desktop the **FI** and **EN** control in the top bar sets the app language of the open profile, and on a phone the same control shares one row of the **More** sheet with the **Docs** button. The pressed side is the language in use, and the control reports it.
+On desktop the **FI** and **EN** control in the top bar sets the app language of the open profile, and on a phone the same control shares one row of the **More** sheet with the **GitHub**, **Feedback** and **Docs** buttons. The pressed side is the language in use, and the control reports it.
 
-![The Profiles panel in Finnish, headed profiilit, listing My plan with four selected and two completed courses and Alternative plan with two selected and one completed, above the form Uusi profiili with its Nimi field and Tallenna button, the file import area reading Valitse tiedosto tai pudota .json- tai .pdf-tiedosto tähän, and the bottom row with the help control, Kopioi Sisu-tuontiskripti and Vie.](/docs/screenshots/profile-language.png)
+![The profile panel in Finnish, headed profiilit, listing My plan with four selected and two completed courses and Alternative plan with two selected and one completed, above the form Uusi profiili with its Nimi field and Tallenna button, the file import area reading Valitse tiedosto tai pudota profiilin JSON-vientitiedosto, Sisusta tallennettu sivu, Sisun opintosuunnitelman PDF tai Sisun kaappaustiedosto, and the bottom row with the help control, Kopioi tuontiskripti and Vie.](/docs/screenshots/profile-language.png)
 
 The language belongs to the profile, so switching profile switches the language with the rest of that profile.
 

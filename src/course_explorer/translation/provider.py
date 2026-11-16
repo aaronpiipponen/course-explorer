@@ -19,7 +19,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from course_explorer.config import TranslationSettings
-from course_explorer.enums import TeachingTextLanguage
+from course_explorer.enums import LanguageCode
 from course_explorer.http_retry import decode_json_response, request_json_with_retries
 
 
@@ -101,19 +101,19 @@ class TranslationProvider:
     @staticmethod
     def _validate_inputs(
         text: str,
-        source_language: TeachingTextLanguage,
-        target_language: TeachingTextLanguage,
+        source_language: LanguageCode,
+        target_language: LanguageCode,
     ) -> None:
         if not isinstance(text, str) or not text.strip():
             raise ValueError("translation text must be a non-blank string")
-        if source_language is target_language:
+        if source_language == target_language:
             raise ValueError("translation source and target languages must differ")
 
     def _payload(
         self,
         text: str,
-        source_language: TeachingTextLanguage,
-        target_language: TeachingTextLanguage,
+        source_language: LanguageCode,
+        target_language: LanguageCode,
     ) -> dict:
         return {
             "model": self._settings.translation_model_alias,
@@ -123,16 +123,16 @@ class TranslationProvider:
                     "content": [
                         {
                             "type": "text",
-                            "source_lang_code": source_language.value,
-                            "target_lang_code": target_language.value,
+                            "source_lang_code": source_language,
+                            "target_lang_code": target_language,
                             "text": text,
                         }
                     ],
                 }
             ],
             "chat_template_kwargs": {
-                "source_lang_code": source_language.value,
-                "target_lang_code": target_language.value,
+                "source_lang_code": source_language,
+                "target_lang_code": target_language,
             },
             "temperature": self._settings.translation_temperature,
             "max_tokens": self._settings.translation_max_tokens,
@@ -177,8 +177,8 @@ class TranslationProvider:
         self,
         text: str,
         *,
-        source_language: TeachingTextLanguage,
-        target_language: TeachingTextLanguage,
+        source_language: LanguageCode,
+        target_language: LanguageCode,
     ) -> str:
         """POST one typed chat-completion request and return exact validated content."""
         if self._client.is_closed:

@@ -3,7 +3,8 @@
 This module owns the retained inference-side candidate-context boundary: one immutable per-course
 teaching identity used as a retrieval key, provenance-complete matched-chunk evidence, the
 label-free multiview fusion helper, and the strict target/candidate packet DTOs with their canonical
-digests. Packets and their hashes contain only effective teaching text and provenance. Official
+digests. Packets carry effective teaching text, provenance and the selected official prompt cells.
+Their canonical digests contain only effective teaching text and provenance. Official
 prerequisite structure and every label-derived rank/score/unmeasurable value are absent, so they
 can never enter a packet, candidate-query input, prompt example, or model input. Canonical digests
 all come from the neutral ``course_explorer.hashing`` owner, so no second JSON/SHA-256
@@ -12,6 +13,7 @@ dialect exists.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import Literal
 
@@ -23,10 +25,15 @@ from pydantic import (
     model_validator,
 )
 
-from course_explorer.curriculum import CatalogueCourse, CatalogueTeachingCourse
+from course_explorer.curriculum import (
+    CatalogueCourse,
+    CatalogueTeachingCourse,
+)
 from course_explorer.enums import (
+    LANGUAGE_CODE_PATTERN,
+    LanguageCode,
+    OfficialTextField,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
 )
 from course_explorer.hashing import canonical_json_sha256
@@ -49,7 +56,6 @@ from course_explorer.validation import (
 
 _CANONICAL_FIELD_ORDER: tuple[TeachingTextField, ...] = tuple(TeachingTextField)
 _VALID_FIELDS = frozenset(field.value for field in TeachingTextField)
-_VALID_LANGUAGES = frozenset(language.value for language in TeachingTextLanguage)
 
 
 class _PacketModel(BaseModel):
@@ -62,10 +68,10 @@ class InferenceCourseEmbeddingIdentity(_PacketModel):
     """One exact current course/representative identity used as a candidate retrieval key."""
 
     group_id: str
-    sisu_course_unit_id: str
+    source_version_id: str
     representative_source_sha256: str
 
-    @field_validator("group_id", "sisu_course_unit_id")
+    @field_validator("group_id", "source_version_id")
     @classmethod
     def validate_identity_text(cls, value: str) -> str:
         """Require meaningful canonical and exact source identities."""
@@ -82,7 +88,7 @@ class InferenceMatchedChunk(_PacketModel):
     """One exact teaching chunk provenances behind a candidate/target cosine match."""
 
     field: TeachingTextField
-    language: TeachingTextLanguage
+    language: LanguageCode
     chunk_index: int = Field(ge=0)
     text_origin: TeachingTextOrigin
     chunk_text_sha256: str
@@ -251,7 +257,7 @@ class InferencePacketText(_PacketModel):
     """
 
     field: TeachingTextField
-    language: TeachingTextLanguage
+    language: LanguageCode
     text: str
     origin: TeachingTextOrigin
     text_sha256: str
@@ -270,8 +276,36 @@ class InferencePacketText(_PacketModel):
         return _require_sha256(value, "packet text hash")
 
 
+class InferencePacketPromptText(_PacketModel):
+    """One prompt cell copied verbatim with its origin and language.
+
+    A prompt cell is an effective teaching cell whose field is selected, whose origin may be
+    derived, or a selected official non-teaching cell. The cell carries no text hashes: the rendered
+    request digest is the one consumer of the prompt bytes, and no retained record needs a second
+    per-cell hash. A selected field with no text for a course contributes no cell.
+    """
+
+    field: OfficialTextField
+    language: LanguageCode
+    text: str
+    origin: TeachingTextOrigin
+
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        """Require meaningful official prompt text."""
+        return _require_text(value, "packet prompt text")
+
+
 class InferencePacketCourse(_PacketModel):
-    """One label-free packet course: identity, activity, and effective teaching cells."""
+    """One label-free packet course: identity, activity, effective teaching and selected prompt cells.
+
+    ``texts`` carries only the effective teaching cells, so retrieval, reranking and embeddings read
+    teaching text. ``prompt_texts`` holds the selected prompt cells: effective teaching cells whose
+    field is selected, whose origin may be derived, plus selected official non-teaching cells in the
+    languages the inference list allows as official. No official prerequisite or substitution
+    structure appears in either tuple.
+    """
 
     identity: InferenceCourseEmbeddingIdentity
     course_code: str
@@ -279,12 +313,21 @@ class InferencePacketCourse(_PacketModel):
     activity_as_of_academic_year_start: int = Field(gt=0)
     activity_window_years: int = Field(gt=0)
     texts: tuple[InferencePacketText, ...]
+    prompt_texts: tuple[InferencePacketPromptText, ...]
 
     @field_validator("course_code")
     @classmethod
     def validate_course_code(cls, value: str) -> str:
         """Require one meaningful official course code."""
         return _require_text(value, "packet course_code")
+
+    @model_validator(mode="after")
+    def validate_prompt_cells(self) -> InferencePacketCourse:
+        """Require unique prompt field/language rows."""
+        keys = tuple((cell.field, cell.language) for cell in self.prompt_texts)
+        if len(set(keys)) != len(keys):
+            raise ValueError("packet prompt cells must be unique per field and language")
+        return self
 
 
 class InferenceCandidatePacket(_PacketModel):
@@ -335,16 +378,25 @@ class InferenceCourseReference(_PacketModel):
     """One exact current course/representative reference for stored selection and work identity.
 
     It carries only the canonical group identity, the current representative's source unit and
-    source digest, and the text-only teaching digest. Teaching text itself is in the
-    effective-text owner and the transient request packet.
+    source digest, and the text-only teaching digest. The serialized and stored key of
+    ``source_version_id`` is ``sisu_course_unit_id``. Teaching text itself is in the effective-text
+    owner and the transient request packet.
     """
 
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
+
     group_id: str
-    sisu_course_unit_id: str
+    source_version_id: str = Field(alias="sisu_course_unit_id")
     representative_source_sha256: str
     teaching_text_sha256: str
 
-    @field_validator("group_id", "sisu_course_unit_id")
+    @field_validator("group_id", "source_version_id")
     @classmethod
     def validate_identity_text(cls, value: str) -> str:
         """Require meaningful canonical and exact source identities."""
@@ -462,8 +514,8 @@ def processing_text_sha256(cells: Sequence[tuple[str, str, str]]) -> str:
         field, language, text = cell
         if field not in _VALID_FIELDS:
             raise ValueError("processing text field must be a known teaching-text field")
-        if language not in _VALID_LANGUAGES:
-            raise ValueError("processing text language must be a known teaching-text language")
+        if not isinstance(language, str) or re.fullmatch(LANGUAGE_CODE_PATTERN, language) is None:
+            raise ValueError("processing text language must be a canonical language code")
         if not isinstance(text, str) or not text.strip():
             raise ValueError("processing text must be a nonblank string")
         key = (field, language)
@@ -506,7 +558,7 @@ def catalogue_identity_sha256(
                 "activity_as_of_academic_year_start": course.activity_as_of_academic_year_start,
                 "activity_window_years": course.activity_window_years,
                 "sisu_course_unit_id": (
-                    None if representative is None else representative.sisu_course_unit_id
+                    None if representative is None else representative.source_version_id
                 ),
                 "representative_source_hash": (
                     None if representative is None else representative.source_hash
@@ -517,7 +569,7 @@ def catalogue_identity_sha256(
                     else [
                         {
                             "field": cell.field.value,
-                            "language": cell.language.value,
+                            "language": cell.language,
                             "origin": cell.origin.value,
                             "text_hash": cell.text_hash,
                             "source_text_hash": cell.source_text_hash,
@@ -533,38 +585,78 @@ def catalogue_identity_sha256(
 
 
 def _packet_course(
-    course: CatalogueCourse | CatalogueTeachingCourse,
+    course: CatalogueTeachingCourse,
     effective: EffectiveCourseTeachingText,
+    *,
+    prompt_fields: tuple[OfficialTextField, ...],
+    prompt_languages: tuple[str, ...],
 ) -> InferencePacketCourse:
-    """Map one canonical course plus its effective cells into one label-free packet course."""
+    """Map one canonical course plus its effective cells into one label-free packet course.
+
+    ``texts`` copies the effective teaching cells. ``prompt_texts`` takes the effective teaching
+    cells whose field is selected, in effective order, then each selected non-teaching official
+    field in canonical order and each language, skipping an absent or blank cell. The caller
+    supplies the inference-list official languages. The settings and map validators own field
+    legality, so the selection is not re-checked here.
+    """
     representative = course.representative
     if representative is None:
         raise ValueError(f"packet course {course.group_id} has no selected representative")
+    teaching_texts = tuple(
+        InferencePacketText(
+            field=cell.field,
+            language=cell.language,
+            text=cell.text,
+            origin=cell.origin,
+            text_sha256=cell.text_hash,
+            source_text_sha256=cell.source_text_hash,
+        )
+        for cell in effective.texts
+    )
+    selected_teaching_fields = {
+        field.value for field in prompt_fields if field.value in _VALID_FIELDS
+    }
+    prompt_texts: list[InferencePacketPromptText] = [
+        InferencePacketPromptText(
+            field=OfficialTextField(cell.field.value),
+            language=cell.language,
+            text=cell.text,
+            origin=cell.origin,
+        )
+        for cell in effective.texts
+        if cell.field.value in selected_teaching_fields
+    ]
+    for field in prompt_fields:
+        if field.value in _VALID_FIELDS:
+            continue
+        for language in prompt_languages:
+            text = representative.texts.get(field, {}).get(language)
+            if text is None or not text.strip():
+                continue
+            prompt_texts.append(
+                InferencePacketPromptText(
+                    field=field,
+                    language=language,
+                    text=text,
+                    origin=TeachingTextOrigin.OFFICIAL,
+                )
+            )
     return InferencePacketCourse(
         identity=InferenceCourseEmbeddingIdentity(
             group_id=course.group_id,
-            sisu_course_unit_id=representative.sisu_course_unit_id,
+            source_version_id=representative.source_version_id,
             representative_source_sha256=representative.source_hash,
         ),
         course_code=representative.code,
         is_active=course.is_active,
         activity_as_of_academic_year_start=course.activity_as_of_academic_year_start,
         activity_window_years=course.activity_window_years,
-        texts=tuple(
-            InferencePacketText(
-                field=cell.field,
-                language=cell.language,
-                text=cell.text,
-                origin=cell.origin,
-                text_sha256=cell.text_hash,
-                source_text_sha256=cell.source_text_hash,
-            )
-            for cell in effective.texts
-        ),
+        texts=teaching_texts,
+        prompt_texts=tuple(prompt_texts),
     )
 
 
-def _course_reference(
+def course_reference(
     course: CatalogueCourse | CatalogueTeachingCourse,
     effective: EffectiveCourseTeachingText,
 ) -> InferenceCourseReference:
@@ -574,9 +666,9 @@ def _course_reference(
         raise ValueError(f"course reference {course.group_id} has no selected representative")
     return InferenceCourseReference(
         group_id=course.group_id,
-        sisu_course_unit_id=representative.sisu_course_unit_id,
+        source_version_id=representative.source_version_id,
         representative_source_sha256=representative.source_hash,
         teaching_text_sha256=processing_text_sha256(
-            tuple((cell.field.value, cell.language.value, cell.text) for cell in effective.texts)
+            tuple((cell.field.value, cell.language, cell.text) for cell in effective.texts)
         ),
     )

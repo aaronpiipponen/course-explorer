@@ -4,13 +4,13 @@ An embedding is a vector that represents the meaning of a piece of teaching text
 
 ## What is embedded
 
-The embedding stage embeds the teaching text of each representative version as one embedding per [chunk](/docs/reference/glossary.md#capture-and-data-preparation). Three fields take part: the course name, the content, and the learning outcomes. Each field is embedded separately for Finnish and English, so one representative version contributes up to six cells, each split into one or more chunks.
+The embedding stage embeds the teaching text of each representative version as one embedding per [chunk](/docs/reference/glossary.md#capture-and-data-preparation). Three fields take part: the course name, the content, and the learning outcomes. Each field is embedded separately for every configured official language, so one representative version contributes one cell per field and configured language, each split into one or more chunks.
 
-The text of a cell is its effective text: the official text when the version carries it, otherwise a translation that is not stale. The stored chunk records whether its text is official or translated and, for a translation, the method, the model, and the time it was made.
+The text of a cell is its effective text: the official text when the version carries it, otherwise a translation accepted by the translation priority map that is not stale. The stored chunk records whether its text is official or translated and, for a translation, the method, the model, and the time it was made.
 
 Prerequisite text takes no part in an embedding. A semantic match reads the stored chunk vectors, so a topic search reaches a course through the text it teaches. [Teaching text and translation](/docs/backend/text-and-vectors/teaching-text.md) resolves the effective text, and [Representative versions and activity](/docs/backend/catalogue/representative-versions.md) selects the version that is embedded.
 
-A representative version whose six cells are all empty contributes no chunk, and the run report counts those courses.
+A representative version whose configured cells are all empty contributes no chunk, and the run report counts those courses.
 
 ## The embedding service
 
@@ -78,7 +78,7 @@ The serving-artifact build replaces the stored centroid rows and writes the same
 
 ## Embedding coverage
 
-The embedding coverage of a dataset counts its chunk rows by lifecycle state: the total, and the pending, completed, and failed counts for each combination of field, language, and text origin. A generation run reports the coverage of the courses it ran over, and the operator menu reports the embedding coverage of the named role as one coverage report. [Data model](/docs/backend/catalogue/data-model.md) describes the table behind the counts.
+The embedding coverage of a dataset counts its chunk rows by lifecycle state: the total, and the pending, completed, and failed counts for each combination of field, configured language, and text origin. A generation run reports the coverage of the courses it ran over, and the operator menu reports the embedding coverage of the named role as one coverage report. A desired chunk language outside the configured official languages is refused at reconciliation. [Data model](/docs/backend/catalogue/data-model.md) describes the table behind the counts.
 
 A similarity read uses completed rows whose configuration hash equals the configured one. A pending chunk and a failed chunk contribute no score, so a semantic search covers the text the embedding stage has already stored.
 

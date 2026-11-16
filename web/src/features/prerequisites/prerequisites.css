@@ -196,3 +196,12 @@
     overflow: hidden;
   }
 }
+
+/* One short assumption caption below a graph. */
+.pane-assumed-note {
+  margin: 8px 0 0;
+  font:
+    12px "JetBrains Mono",
+    ui-monospace,
+    monospace;
+}

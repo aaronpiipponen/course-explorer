@@ -17,6 +17,8 @@ class ServingDataset:
 
     settings: DatabaseSettings
     identity: str
+    # Marks a site with no Selected pointer, which serves the configured bootstrap database.
+    example: bool
 
 
 def resolve_serving_dataset() -> ServingDataset:
@@ -33,4 +35,4 @@ def resolve_serving_dataset() -> ServingDataset:
         raise ValueError(f"{SERVING_GENERATION_ENV} is not set for the serving process")
     settings, dataset_id = load_database_settings_with_identity(role="selected")
     identity = json_sha256([generation, dataset_id], ensure_ascii=False)
-    return ServingDataset(settings=settings, identity=identity)
+    return ServingDataset(settings=settings, identity=identity, example=dataset_id is None)

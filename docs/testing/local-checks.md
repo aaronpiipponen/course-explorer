@@ -14,15 +14,9 @@ The web dependencies are also required by the Python suite. The session fixture 
 
 The web build compiles the pages selected by `config/wiki.json`. Every page it lists and every local image those pages reference must exist in the checkout. The wiki compiler test builds temporary repository trees of its own.
 
-The PostgreSQL selection needs a configured Compose `db` service that is already running. The fixture refuses a database name without the `_test` suffix. The Compose commands use the wrapper described in [The Compose environment file](/docs/backend/configuration.md#the-compose-environment-file).
+The PostgreSQL selection needs a configured Compose `db` service that is already running. The session fixture `_database_session` in `tests/conftest.py` connects to that service through the configured database settings and builds nothing. The Compose commands use the wrapper described in [The Compose environment file](/docs/backend/configuration.md#the-compose-environment-file).
 
-The integration fixture starts its throwaway Compose project from the prepared extension database image and builds nothing. Prepare that image once:
-
-```bash
-uv run python -m course_explorer_admin.compose --non-interactive -- build db
-```
-
-A missing prepared image fails the fixture and prints this preparation command as its guidance.
+The dataset database tests in `tests/admin/test_dataset_database.py` use `isolated_database_cluster`. That fixture sets its own `COMPOSE_PROJECT_NAME` and a free loopback `POSTGRES_PORT`, builds the database image of its throwaway Compose project, starts that project from the built image, and removes the project's volume and image when the test ends. The project image carries the serving extension, and Docker reuses the shared layer cache.
 
 ## Lint and format checks
 
@@ -76,27 +70,28 @@ POSTGRES_DB=course_explorer_test uv run pytest -m "integration and not slow and 
 
 These tests use the raw test connection only to create and drop their own application databases, and they read no feedback credential.
 
-An isolated disposable instance uses its own Compose project and its own published loopback port. Set both values and start the database:
+An isolated disposable instance uses its own Compose project and its own published loopback port. Set both values, build that project's database image, and start the database:
 
 ```bash
 export COMPOSE_PROJECT_NAME=course-explorer-local-verify
 export POSTGRES_PORT=5434
+uv run python -m course_explorer_admin.compose -- build db
 uv run python -m course_explorer_admin.compose -- up -d --wait --no-build --pull never db
 ```
 
-The Compose wrapper forwards `COMPOSE_PROJECT_NAME` as its project name, and the Compose file publishes the database on `127.0.0.1` at `POSTGRES_PORT`. The start uses the already prepared extension image and builds nothing. Create and run the database with the commands above. To reset the disposable database, drop it and recreate it with the create command above:
+The Compose wrapper forwards `COMPOSE_PROJECT_NAME` as its project name, and the Compose file publishes the database on `127.0.0.1` at `POSTGRES_PORT`. The build prepares this project's extension image, and the start uses it and builds nothing. Each Compose project owns its database image, so a different project builds its own. Create and run the database with the commands above. To reset the disposable database, drop it and recreate it with the create command above:
 
 ```bash
 uv run python -m course_explorer_admin.compose -- exec -T db dropdb -U course_explorer --if-exists course_explorer_test
 ```
 
-Remove the project with its volumes when the run ends:
+Remove the project with its volume and image when the run ends:
 
 ```bash
-uv run python -m course_explorer_admin.compose --non-interactive -- down --volumes
+uv run python -m course_explorer_admin.compose --non-interactive -- down --volumes --rmi local
 ```
 
-Narrow the selection to named integration tests when one repository or query changed. The publication proof needs no GitHub credential, network call or real repository, and it runs against the same disposable `_test` database and temporary attachment root as the other feedback tests. Run the whole integration selection for a schema or persistence change. `uv run pytest -m integration` adds the slow tests, and the live tests run only when their own environment variable enables them. The commands above run the integration selection alone.
+Narrow the selection to named integration tests when one repository or query changed. The publication proof needs no GitHub credential, network call or real repository, and it runs against the same disposable `_test` database and temporary attachment root as the other feedback tests. Run the whole integration selection for a schema or persistence change. `uv run pytest -m integration` adds the slow tests, and the live tests run only when their own environment variable enables them. The commands above run the integration selection alone. The opt-in live Kori test selects the highest academic year inside the configured instance's mapped interval and enumerates that period alone.
 
 ## Browser app and console checks
 

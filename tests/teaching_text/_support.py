@@ -8,6 +8,7 @@ database.
 from __future__ import annotations
 
 from course_explorer.curriculum import CatalogueCourse
+from course_explorer.instance import UniversityMetadata
 from course_explorer.teaching_text.service import (
     DerivedTranslation,
     TeachingTextService,
@@ -34,6 +35,15 @@ __all__ = [
 ]
 
 
-def build(courses: tuple[CatalogueCourse, ...], rows: tuple[DerivedTranslation, ...]):
+def build(
+    courses: tuple[CatalogueCourse, ...],
+    rows: tuple[DerivedTranslation, ...],
+    *,
+    university: UniversityMetadata | None = None,
+):
     """Compose the effective-text catalogue over the shared fixture seams."""
-    return TeachingTextService(FakeCurriculum(courses), FakeTranslations(rows)).build_catalogue()
+    return TeachingTextService(
+        FakeCurriculum(courses),
+        FakeTranslations(rows),
+        university=university,
+    ).build_catalogue()

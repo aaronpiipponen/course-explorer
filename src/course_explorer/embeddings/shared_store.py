@@ -2,10 +2,12 @@
 
 The store is one file pair per serving artifact build: a raw float64 centroid matrix with its
 identity index, and a mapped descriptive chunk store with each chunk's carrier facts and float64
-vector. Every worker maps the same files read-only, so the page cache holds one copy. A store with
-no centroid row opens an empty read-only matrix of the fixed embedding dimension. A store is keyed
-by the serving database and academic year and lives in its embedding configuration's directory, so
-a mismatched key raises ``ValueError`` rather than serving a stale hit.
+vector. The chunk metadata carries one sorted language dictionary, and each record holds its
+dictionary index. Every worker maps the same files read-only, so the page cache holds one copy. A
+store with no centroid row opens an empty read-only matrix of the fixed embedding dimension. A
+store is keyed by the serving database and academic year and lives in its embedding
+configuration's directory, so a mismatched key raises ``ValueError`` rather than serving a stale
+hit.
 """
 
 from __future__ import annotations
@@ -26,17 +28,21 @@ from course_explorer.embeddings.read import TeachingEmbeddingChunk
 from course_explorer.enums import (
     DESCRIPTIVE_TEACHING_TEXT_FIELDS,
     TeachingTextField,
-    TeachingTextLanguage,
     TeachingTextOrigin,
 )
 
+# File name of one embedding directory's little-endian float64 centroid matrix.
 CENTROIDS_FILE = "centroids.f64"
+# File name of one embedding directory's centroid metadata, which names the dataset, the academic
+# year and the source identity of every row.
 CENTROIDS_META_FILE = "centroids.json"
+# File name of one embedding directory's descriptive chunk file.
 CHUNKS_FILE = "chunks.f64.bin"
 
-CHUNK_MAGIC = b"CSTCHNK1"
+# Magic bytes opening the descriptive chunk file header.
+CHUNK_MAGIC = b"CSTCHNK2"
 _CHUNK_HEADER = 8 + 4 + 4 + 4
-_CHUNK_RECORD = 16 + 1 + 1 + 1 + 4 + 4
+_CHUNK_RECORD = 16 + 1 + 4 + 1 + 4 + 4
 
 _BUILD_GUIDANCE = "run `scripts/admin.py serving-artifacts` to build the serving artifacts"
 
@@ -59,6 +65,7 @@ class SharedServingStore:
     chunk_records_offset: int
     chunk_vectors_offset: int
     chunk_vectors: numpy.ndarray
+    chunk_languages: tuple[str, ...]
 
     @classmethod
     def build(
@@ -79,7 +86,7 @@ class SharedServingStore:
             rows.append(
                 {
                     "group_id": row.group_id,
-                    "sisu_course_unit_id": row.sisu_course_unit_id,
+                    "source_version_id": row.source_version_id,
                     "source_hash": row.representative_source_hash,
                 }
             )
@@ -101,9 +108,11 @@ class SharedServingStore:
         store_chunks = [
             chunk for chunk in chunks if chunk.field in DESCRIPTIVE_TEACHING_TEXT_FIELDS
         ]
+        languages = tuple(sorted({chunk.language for chunk in store_chunks}))
+        language_index = {code: index for index, code in enumerate(languages)}
         grouped: dict[tuple[str, str, str], list[TeachingEmbeddingChunk]] = {}
         for chunk in store_chunks:
-            triple = (chunk.group_id, chunk.sisu_course_unit_id, chunk.representative_source_hash)
+            triple = (chunk.group_id, chunk.source_version_id, chunk.representative_source_hash)
             grouped.setdefault(triple, []).append(chunk)
         index: list[list[object]] = []
         records = bytearray()
@@ -115,9 +124,9 @@ class SharedServingStore:
             for chunk in grouped_chunks:
                 records += chunk.chunk_id.bytes
                 records += struct.pack(
-                    "<BBBiI",
+                    "<BIBiI",
                     1 if chunk.field is TeachingTextField.OUTCOMES else 0,
-                    1 if chunk.language is TeachingTextLanguage.EN else 0,
+                    language_index[chunk.language],
                     1 if chunk.text_origin is TeachingTextOrigin.DERIVED else 0,
                     chunk.chunk_index,
                     chunk.character_count,
@@ -125,7 +134,9 @@ class SharedServingStore:
                 vectors += numpy.asarray(chunk.embedding, dtype="<f8").tobytes()
                 total += 1
             index.append([*triple, start, len(grouped_chunks)])
-        index_bytes = json.dumps(index, separators=(",", ":")).encode()
+        index_bytes = json.dumps(
+            {"languages": list(languages), "index": index}, separators=(",", ":")
+        ).encode()
         chunk_path = root / CHUNKS_FILE
         with chunk_path.open("wb") as out:
             out.write(
@@ -183,14 +194,16 @@ class SharedServingStore:
         chunks = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
         handle.close()
         if chunks[: len(CHUNK_MAGIC)] != CHUNK_MAGIC:
-            raise ValueError(f"shared chunk store {root} has an invalid header")
+            raise ValueError(f"shared chunk store {root} has an invalid header; {_BUILD_GUIDANCE}")
         dimension, total, index_length = struct.unpack_from("<III", chunks, len(CHUNK_MAGIC))
         if dimension != COURSE_EMBEDDING_DIMENSION:
             raise ValueError(f"shared chunk store {root} has an unexpected dimension")
         index_start = _CHUNK_HEADER
+        metadata = json.loads(chunks[index_start : index_start + index_length])
+        chunk_languages = tuple(metadata["languages"])
         index = {
             (entry[0], entry[1], entry[2]): (int(entry[3]), int(entry[4]))
-            for entry in json.loads(chunks[index_start : index_start + index_length])
+            for entry in metadata["index"]
         }
         records_offset = index_start + index_length
         vectors_offset = records_offset + total * _CHUNK_RECORD
@@ -209,7 +222,7 @@ class SharedServingStore:
             centroid_index={
                 (
                     row["group_id"],
-                    row["sisu_course_unit_id"],
+                    row["source_version_id"],
                     row["source_hash"],
                 ): position
                 for position, row in enumerate(rows)
@@ -217,13 +230,14 @@ class SharedServingStore:
             chunk_records_offset=records_offset,
             chunk_vectors_offset=vectors_offset,
             chunk_vectors=vectors,
+            chunk_languages=chunk_languages,
         )
 
     def position(
-        self, group_id: str, sisu_course_unit_id: str, representative_source_hash: str
+        self, group_id: str, source_version_id: str, representative_source_hash: str
     ) -> int | None:
         """Return the centroid row index for one exact representative, or ``None``."""
-        return self.centroid_index.get((group_id, sisu_course_unit_id, representative_source_hash))
+        return self.centroid_index.get((group_id, source_version_id, representative_source_hash))
 
     def centroid_rows(self, positions: Sequence[int]) -> numpy.ndarray:
         """Return the requested mapped centroid rows as one float64 matrix."""
@@ -241,7 +255,7 @@ class SharedServingStore:
         for position, index in enumerate(indices):
             record = self.chunk_records_offset + int(index) * _CHUNK_RECORD
             field, _language, origin, _chunk_index, count = struct.unpack_from(
-                "<BBBiI", self.chunks, record + 16
+                "<BIBiI", self.chunks, record + 16
             )
             fields[position] = 1 if field else 0
             derived[position] = 1 if origin else 0
@@ -254,7 +268,7 @@ class SharedServingStore:
             {
                 (
                     record.summary.group_id,
-                    record.sisu_course_unit_id,
+                    record.source_version_id,
                     record.source_hash,
                 )
                 for record in represented
@@ -269,15 +283,15 @@ class SharedServingStore:
             for offset in range(start, start + count):
                 record = self.chunk_records_offset + offset * _CHUNK_RECORD
                 chunk_id = uuid.UUID(bytes=bytes(self.chunks[record : record + 16]))
-                field, language, origin, chunk_index, characters = struct.unpack_from(
-                    "<BBBiI", self.chunks, record + 16
+                field, language_index, origin, chunk_index, characters = struct.unpack_from(
+                    "<BIBiI", self.chunks, record + 16
                 )
                 chunks.append(
                     TeachingEmbeddingChunk(
                         chunk_id=chunk_id,
                         group_id=triple[0],
                         field=(TeachingTextField.OUTCOMES if field else TeachingTextField.CONTENT),
-                        language=TeachingTextLanguage.EN if language else TeachingTextLanguage.FI,
+                        language=self.chunk_languages[language_index],
                         chunk_index=chunk_index,
                         text_origin=(
                             TeachingTextOrigin.DERIVED if origin else TeachingTextOrigin.OFFICIAL
@@ -290,7 +304,7 @@ class SharedServingStore:
                             offset=self.chunk_vectors_offset
                             + offset * COURSE_EMBEDDING_DIMENSION * 8,
                         ),
-                        sisu_course_unit_id=triple[1],
+                        source_version_id=triple[1],
                         representative_source_hash=triple[2],
                     )
                 )

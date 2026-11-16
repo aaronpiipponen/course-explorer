@@ -12,13 +12,13 @@ from course_explorer.hashing import json_sha256
 from course_explorer.ingestion.normalization import normalize_curriculum
 from course_explorer.ingestion.normalization_repository import NormalizationRepository
 from course_explorer.ingestion.repository import CaptureRepository
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.search.projection import build_lookup_projection
 from course_explorer.search.resolver import CourseResolver
 from course_explorer_web import serving_cache
 from course_explorer_web.app import app
 from course_explorer_web.dataset import SERVING_GENERATION_ENV
 from tests.ingestion._normalization_repository_support import (
-    GUIDE_URL,
     build_completed_fixture_store,
 )
 from tests.web.conftest import refresh_serving_settings
@@ -36,22 +36,21 @@ def test_course_summaries_route_preserves_resolution(
     store = build_completed_fixture_store(tmp_path, CaptureRepository(factory))
     normalize_curriculum(
         store,
-        NormalizationRepository(factory),
+        NormalizationRepository(factory, university=UNIVERSITIES["example"]),
         current_academic_year_start=2026,
         activity_window_years=3,
-        course_guide_base_url=GUIDE_URL,
     )
     monkeypatch.setattr(
         serving_cache,
         "_preloaded_projection",
-        build_lookup_projection(CurriculumRepository(factory)),
+        build_lookup_projection(CurriculumRepository(factory, university=UNIVERSITIES["example"])),
     )
     generation = "a" * 32
     monkeypatch.setenv(SERVING_GENERATION_ENV, generation)
     refresh_serving_settings()
-    expected_records = CourseResolver(CurriculumRepository(factory)).resolve_courses(
-        ("course-group-inactive", "CS.A2", "course-group-inactive")
-    )
+    expected_records = CourseResolver(
+        CurriculumRepository(factory, university=UNIVERSITIES["example"])
+    ).resolve_courses(("course-group-inactive", "CS.A2", "course-group-inactive"))
     client = TestClient(app)
     response = client.post(
         "/api/course-summaries",

@@ -8,13 +8,15 @@ One algorithm serves all four stages, so ingestion, embedding, translation, and 
 
 | Action | What it does |
 |---|---|
-| start | Continues a session the stage retained, or begins a fresh one, then launches one detached worker. |
-| pause | Publishes a pause request, waits for the owned worker to exit, and unloads the resources the session started. |
-| resume | Re-arms the session the stage retained and launches its worker again. |
-| status | Reads the recorded state and the owned process and reports the lifecycle state. It writes nothing and starts no service. |
-| stop | Publishes a stop request, waits for the owned worker to exit, finalizes the completed work through its owning writer, releases the resources, and returns the stage to idle. |
+| start | Continues a session the stage retained, or begins a fresh one, takes the stage's reservations, then launches one detached worker. |
+| pause | Publishes a pause request, waits for the owned worker to exit, and unloads the resources the session started. A pause releases no reservation. |
+| resume | Re-arms the session the stage retained, takes its reservations again, and launches its worker again. |
+| status | Reads the recorded state and the owned process and reports the lifecycle state. It writes nothing, starts no service and takes no reservation. |
+| stop | Publishes a stop request, waits for the owned worker to exit, finalizes the completed work through its owning writer, releases the resources, releases the reservations, and returns the stage to idle. |
 
 The commands behind the actions are listed in the [Operator menu](/docs/operations/operator-menu.md#the-stage-tools).
+
+A start or resume that another owner refuses names that owner and writes no stage state. [Lifecycle core](/docs/operations/lifecycle-core.md#locks-intent-and-checkpoints) states the three reservations and what each covers.
 
 ## The durable states
 
@@ -30,7 +32,7 @@ One record holds the current state of a stage, and one immutable receipt per ses
 | completed | The work of the session finished. |
 | failed | The run ended with an error, and the stage holds the content-free failure record. |
 
-A status read adds one projected state, interrupted, in place of starting or running when the recorded owned process is not alive. No command writes it, and the projection writes nothing. A start resumes the retained session when its work identity matches this device and refuses it when the identity differs, and the retained work is left in place.
+A status read adds one projected state, interrupted, in place of starting or running when the recorded owned process is not alive. No command writes it, and the projection writes nothing. A start resumes the retained session when its work identity matches this device. Ingestion and embedding retain their work after a stop. A start on an idle session of theirs whose work is incomplete and whose identity differs selects the fresh session's options and takes its reservations before it moves that session's receipt and state to `superseded-<session_id>` under the stage controller directory, and the report names the superseded identity. A refused reservation leaves the retained receipt and state in place. Translation and inference finalize their work at a stop, so a start on their idle state creates a fresh session. A paused, interrupted, stopped or failed session whose identity differs refuses, and it leaves the retained work in place.
 
 ![One stage moves from idle through starting to running as its worker reports, and the run then ends at a durable boundary as completed, failed, paused, or stopped. A status read projects the interrupted state while a starting or running stage has no live owned process, a resume returns a paused stage to starting, and a stop action from any non-idle state finalizes the session and publishes idle.](/docs/diagrams/stage-lifecycle.svg)
 
@@ -46,16 +48,17 @@ A start on a stage with a state continues that session when the retained identit
 | completed | Reports the current status |
 | idle after the work finished | Creates a fresh session |
 | idle on a stage that finalizes its work at a stop | Creates a fresh session |
+| idle with pending work whose identity does not match this device | Takes the fresh session's reservations, moves the receipt and state to `superseded-<session_id>`, and creates a fresh session |
 | Anything else that matches this device | Re-arms the retained session |
-| Anything else that does not match this device | Refuses, and leaves the retained state in place |
+| A paused, interrupted, stopped or failed session that does not match this device | Refuses, and leaves the retained state in place |
 
-A resume follows the same compatibility rule as a start and is refused with a safe error when the stage retained no session.
+A resume follows the same compatibility rule as a start and is refused with a safe error when the stage retained no session. A resume with a mismatched identity refuses with `retained lifecycle work configuration does not match this device; stop the session and use start`. A retained capture whose manifest records a different period selection from the periods the resumed run computes refuses to resume with `selected curriculum periods changed on resume`. Remove that retained run directory before starting a new capture.
 
 ## Pause and stop
 
-A pause publishes a pause request and waits for the owned worker to exit, and the run then ends at its next durable boundary. The stage runs its release hook, which for a remote stage hands the unloaded pause to the worker session and releases the owned worker resources, and the command then releases the services the session started. The session, its receipt, its progress, and its stored work are all retained. A pause never overwrites a pending stop.
+A pause publishes a pause request and waits for the owned worker to exit, and the run then ends at its next durable boundary. The stage runs its release hook, which for a remote stage hands the unloaded pause to the worker session and releases the owned worker resources, and the command then releases the services the session started. The session, its receipt, its progress, and its stored work are all retained. A pause never overwrites a pending stop. A pause releases no reservation of the session, because the retained session resumes under the same owner.
 
-A stop publishes a stop request, waits for the owned worker to exit, and then finalizes the session. Finalization writes the completed work through the owning writer, releases the services the session started, deletes the local runner logs of the session, and publishes idle. The stop records whether the work had finished, so an idle state after a completed run holds the work as complete and an idle state after a partial run holds pending work. Either way, the stage holds the session receipt and the progress it recorded.
+A stop publishes a stop request, waits for the owned worker to exit, and then finalizes the session. Finalization writes the completed work through the owning writer, releases the services the session started, deletes the local runner logs of the session, releases the session's reservations, and publishes idle. In the stop that finalizes a session, a release failure records the content-free stop failure at the local cleanup step and leaves the state non-idle. An idle state releases its reservations without recording a stop failure. The stop records whether the work had finished, so an idle state after a completed run holds the work as complete and an idle state after a partial run holds pending work. Either way, the stage holds the session receipt and the progress it recorded.
 
 Ownership decides what a pause or a stop releases. The state records only the resources this session created or started, so the release never touches a service the session did not start. A local stage requests the database service, and the embedding stage also requests the embedding service, so only the embedding service is a session-owned temporary service that the stage stops and deletes.
 

@@ -18,7 +18,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-from course_explorer.enums import TeachingTextLanguage
 from course_explorer.translation.provider import TranslationProvider
 from course_explorer_admin import mechanics, worker_session
 from course_explorer_admin.translation import controller_worker as worker_module
@@ -342,8 +341,8 @@ def test_worker_control_race_preserves_inflight_success_and_real_failure(
         with provider:
             text = provider.translate(
                 "Nimi",
-                source_language=TeachingTextLanguage.FI,
-                target_language=TeachingTextLanguage.EN,
+                source_language="fi",
+                target_language="en",
             )
         write_output(directory, [entry(text)])
         on_checkpoint(1)

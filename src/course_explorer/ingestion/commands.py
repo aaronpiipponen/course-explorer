@@ -10,13 +10,12 @@ from course_explorer.config import (
     NormalizationSettings,
     load_capture_settings,
     load_database_settings,
-    load_kori_settings,
     load_normalization_settings,
 )
 from course_explorer.db.session import database_context as _database_context
 from course_explorer.ingestion.capture import CaptureBoundary
+from course_explorer.ingestion.family import load_curriculum_parser, open_curriculum_source
 from course_explorer.ingestion.importing import CurriculumImportReport, import_curriculum
-from course_explorer.ingestion.kori import TuniKoriSource
 from course_explorer.ingestion.manifest import RawCaptureStore
 from course_explorer.ingestion.normalization_repository import NormalizationRepository
 from course_explorer.ingestion.repository import CaptureRepository
@@ -42,7 +41,6 @@ def _import_report(
         checkpoint_response_count=capture_settings.capture_checkpoint_response_count,
         current_academic_year_start=normalization_settings.current_academic_year_start,
         activity_window_years=normalization_settings.active_academic_year_window,
-        course_guide_base_url=normalization_settings.course_guide_base_url,
         verification_start_index=verification_start_index,
         on_boundary=on_boundary,
     )
@@ -62,27 +60,31 @@ def run_capture_command(
     capture, so a detached worker can bind durable state to the authoritative manifest identity.
     ``on_boundary`` forwards the cooperative lifecycle gate. A controlled ``None`` means the
     caller paused or stopped at a durable boundary. ``before_request`` is the pure live-control
-    admission callback forwarded to the Kori client: an already-admitted initial source pull is
+    admission callback forwarded to the source transport: an already-admitted initial source pull is
     untouched, while a requested pause or stop refuses any further transport retry.
     """
     if verification_start_index < 0:
         raise ValueError("verification start index must not be negative")
 
     capture_settings = load_capture_settings()
+    parser = load_curriculum_parser()
 
     resume_store = None
     if resume_manifest is not None:
-        resume_store = RawCaptureStore.open(capture_settings.raw_data_root, resume_manifest)
+        resume_store = RawCaptureStore.open(
+            capture_settings.raw_data_root, resume_manifest, parser=parser
+        )
     normalization_settings = load_normalization_settings()
-    kori_settings = load_kori_settings()
     database_settings = load_database_settings(role="working")
-    source_context = TuniKoriSource(kori_settings, before_request=before_request)
-    with source_context as source, _database_context(database_settings) as factory:
+    with (
+        open_curriculum_source(before_request=before_request, parser=parser) as source,
+        _database_context(database_settings) as factory,
+    ):
         capture_repository = CaptureRepository(factory)
         store = (
             resume_store
             if resume_store is not None
-            else RawCaptureStore.create(capture_settings.raw_data_root)
+            else RawCaptureStore.create(capture_settings.raw_data_root, parser=parser)
         )
         if on_store_selected is not None:
             on_store_selected(store)
@@ -90,7 +92,9 @@ def run_capture_command(
             source=source,
             store=store,
             capture_repository=capture_repository,
-            normalization_repository=NormalizationRepository(factory),
+            normalization_repository=NormalizationRepository(
+                factory, university=normalization_settings.university
+            ),
             capture_settings=capture_settings,
             normalization_settings=normalization_settings,
             verification_start_index=verification_start_index,

@@ -8,8 +8,8 @@ This glossary defines the terms the documentation uses, in tables grouped by sub
 |---|---|
 | Course | One course as the app shows it, shared by all of its official versions. Each course has one canonical identity. |
 | Course version | One exact official version of a course, as published for one curriculum period. |
-| Representative version | The one course version chosen to stand for a course. The selection prefers the configured academic year, then a version inside the activity window. |
-| Curriculum period | One official academic period with a starting academic year. A course version and a module version each carry zero or more curriculum periods, and a version without a membership is selected by its validity bounds alone. |
+| Representative version | The one course version chosen to stand for a course. The selection prefers the configured academic year, then the greatest year inside the activity window, then the greatest earlier year. It falls back to membership-free versions ordered by source modification ordinal and source version identity only when no version carries an eligible dated membership. Versions whose memberships are all future years are ineligible. |
+| Curriculum period | One official academic period with a starting academic year. A course version and a module version each carry zero or more curriculum periods. A module version without a membership is selected by its validity bounds alone. |
 | Activity window | The number of academic years, set by `ACTIVE_ACADEMIC_YEAR_WINDOW`, inside which a listed version makes a course active. |
 | Active course | A course with a version listed inside the activity window. The app labels it **active**. |
 | Inactive course | A course with no version listed inside the activity window. The app labels it **inactive**. |
@@ -18,15 +18,20 @@ This glossary defines the terms the documentation uses, in tables grouped by sub
 | Minimal official catalogue | The list of courses, with their canonical identities, codes, names, credits and activity flags, and modules with their eligible versions, that the browser caches by serving dataset identity and filters locally. |
 | Narrowing | The browser's local filtering of the minimal official catalogue by name or code as text is typed into a course or module box. |
 | Projected read | A database read that selects only the columns its caller consumes rather than loading whole rows. For those columns it returns the same value as the full read. |
-| Credits | The credit range of a course version, or the target credits of a module version. The app abbreviates credits as **cr**. |
+| Credits | The credit range of a course version, or the target credits of a module version. A course version may publish no minimum credit, which the app shows as **Credits unknown**. The app abbreviates credits as **cr**. |
+| Assumed course credits | The configured credit value, `ASSUMED_COURSE_CREDITS` in `config/search.toml`, that a course with no official minimum counts as in route cost, graph satisfaction, next-course coverage and credit totals. |
 | Official data | Data as the university publishes it in the public curriculum source. |
 | Teaching text | The name, content, and learning outcomes text of a course version. |
-| Official text | Teaching text as the university publishes it. Official text always takes precedence over a translation. |
-| Translation | A translated teaching text field, stored apart from official text with the source text it was made from. |
-| Stale translation | A translation whose recorded source text differs from the official text. A stale translation is reported and never used. |
-| Effective text | The teaching text used for one field and language: the official text when it exists, otherwise a translation that is not stale. |
-| Name-only course | A course whose representative version has an effective name but no effective content or learning outcomes in either language. |
-| Unembeddable course | A course whose representative version has no effective name, content, or learning outcomes in either language. |
+| Official text | The university-published name, content, learning outcomes, prerequisite text and additional information of a course version, and the published names of a module version. It is stored per version, field and official language, and it always takes precedence over a translation. |
+| Cell | One text field of one course or module version in one language, such as the Finnish content of a course version. Official text, translations and effective text are each resolved per cell. |
+| Display fallback | The ordered official languages one interface language tries, in turn, when it selects a displayed summary name. The university map holds one sequence for Finnish and one for English. |
+| Displayed summary name | The first nonblank exact official name value in an interface language's display fallback order. It is a projection for display and is not an official cell of that interface language. |
+| Translation | A translated teaching text field, stored apart from official text with its source language and the hash of the source text it was made from. |
+| Accepted translation | A translation whose target and source language pair the translation priority map lists. |
+| Stale translation | An accepted translation whose recorded source text hash differs from the hash of the current official source text. A stale translation is reported and never used. |
+| Effective text | The teaching text used for one field and language: the official text when it exists, otherwise an accepted translation that is not stale. |
+| Name-only course | A course whose representative version has an effective name but no effective content or learning outcomes in any configured official language. |
+| Unembeddable course | A course whose representative version has no effective name, content, or learning outcomes in any configured official language. |
 
 ## Configuration
 
@@ -36,11 +41,16 @@ This glossary defines the terms the documentation uses, in tables grouped by sub
 | Environment file | The `.env` file at the repository root, ignored by Git, that holds the credentials that must change per machine. |
 | Settings family | The group of settings that one settings class loads and validates. |
 | Settings owner | The configuration module that reads the subsystem files and the environment file for every settings family. |
+| University table | `universities.toml` at the repository root, the one tracked file that holds every per-university value, with one entry per university key. |
+| University map | The validated mapping of university keys to entries that the settings load from the university table once per process. |
+| Instance key | The one configured university an instance presents, `INSTANCE_KEY` in `config/web.toml`. It selects an entry of the finite university map, which holds the university's English and Finnish display names, its display label, its source block, its language policy: the ordered official languages, the translation priority map that accepts translation target and source pairs, the inference language and origin list, and one display fallback sequence for Finnish and one for English, its optional inference target and pool field overrides, and its study-plan import script and format list. Each entry carries exactly one source block, which is the Sisu, Peppi legacy, Peppi PSG or guide facts, and its source family decides which block it is. It supplies the curriculum source the instance reads and the names the key selects: the Compose project, checkout and unit names. It is distinct from the serving dataset identity. |
+| Source family | The implemented curriculum source family one university map entry names. `sisu` reads the Sisu Kori API, `peppi_legacy` reads the Peppi legacy public JSON API, `peppi_psg` reads the Peppi Solenovo PSG public JSON API, and `guide` reads the server-rendered Peppi guide pages over plain HTTP or a headless browser. The family supplies discovery and fetching into the shared capture checkpoints and a parser into the neutral record, and the entry's source block carries its public source facts. |
+| Display label | The lowercase brand label both apps render as `course-explorer/<display label>`. One label serves the Finnish and the English interface. The configured university's map entry supplies the default, and `INSTANCE_DISPLAY_LABEL` in `config/web.toml` overrides it. |
 | Compose environment file | The temporary environment file that the administration command generates for each Docker Compose run and deletes afterwards. |
-| Feature read | The one `POST /api/features` read the browser app makes before its shell mounts. It reports the two feature switches and the serving dataset identity, and runs no command. |
+| Feature read | The one `POST /api/features` read the browser app makes before its shell mounts. It reports the three feature switches, the serving dataset identity, the display label, the university names, the source attribution, the assumed course credits and the configured study-plan import script and formats, and runs no command. |
 | Serving dataset identity | The opaque digest of the serving generation and the Selected dataset id, or of the serving generation and a null selection when the site has no Selected pointer and reads its configured database. Every cached web response reports it, and the browser's memory cache, discovery cache and derived structure store are scoped to it. |
 | Serving generation | The random value that the web server's supervisor creates once at startup and that every front router and worker process it starts inherits. A restart of the web server creates a new one. |
-| Feature switch | One of the two settings in `config/web.toml` that decide which features a site serves: `WEB_EMBEDDINGS_ENABLED` for comparison, recommendations and semantic search, and `WEB_INFERENCE_ENABLED` for inferred prerequisites. The embedding switch also decides whether the serving artifact build writes the embedding artifacts and whether the supervisor opens them. |
+| Feature switch | One of the three settings in `config/web.toml` that decide which features a site serves: `WEB_EMBEDDINGS_ENABLED` for comparison, recommendations and semantic search, `WEB_INFERENCE_ENABLED` for inferred prerequisites, and `WEB_PREREQUISITES_ENABLED` for the prerequisite graph and Next courses. The embedding switch also decides whether the serving artifact build writes the embedding artifacts and whether the supervisor opens them. The prerequisite graph and Next courses are refused while the prerequisites switch is off, and Discover is absent when the embedding and prerequisites switches are both off. |
 
 ## Capture and data preparation
 
@@ -123,7 +133,7 @@ This glossary defines the terms the documentation uses, in tables grouped by sub
 | Node mark | A profile setting that completes or excludes one drawn module or numeric requirement node in the prerequisite graph without changing the selected or completed course sets. A shared drawn node covers every source requirement it represents, and the mark applies to every calculation piece that node stands for. |
 | Active only | The setting that leaves inactive courses out of search results, the prerequisite graph and route, and the Discover lists. |
 | Minimum route | The set of courses that meets a course's prerequisites with the fewest new credits. The app finds it with **Find minimum route**. |
-| New credits | The credits of every course in a route that is not in the basis, each course counted once. |
+| New credits | The credits of every course in a route that is not in the basis, each course counted once. A course with no official minimum counts at the configured assumed value and the result shows one **Assumed credits used** caption. |
 | Route outcome | The result of a minimum route calculation: Exact minimum route, Approximate route, No route found, Route unresolved, No route exists, or Shortfall. The route panel tags them **exact**, **approximate**, **timeout**, **unresolved**, **no solution** and **shortfall**. |
 | Shortfall | The route outcome in which a module rule is below its bound because only active courses are allowed. |
 | Substitution | A set of courses that the university accepts in place of one course. A substitution applies in one direction only. |
@@ -153,12 +163,17 @@ This glossary defines the terms the documentation uses, in tables grouped by sub
 
 | Term | Meaning |
 |---|---|
-| Tab | One of the five views of the app: **Search**, **Compare**, **Prerequisites**, **Discover**, and **Structure of studies**. **Compare** appears only on a site that serves the embedding features. **Feedback** opens its own page and is not a tab. |
+| Tab | One of the five views of the app: **Search**, **Compare**, **Prerequisites**, **Discover**, and **Structure of studies**. **Compare** appears only on a site that serves the embedding features, **Prerequisites** only while the prerequisites switch is on, and **Discover** while either of those switches is on. **Feedback** opens its own page and is not a tab. |
 | Selected course | A course added to the current profile's selection. |
 | Completed course | A course marked with **Mark completed**. A completed course is always selected. |
 | Shared selection | The selected and completed course identities that every tab reads and that a structure action updates in one place. |
-| Course menu | The menu of actions on a course: **Add to comparison** on a site that serves the embedding features, **Open prerequisite graph**, the Unplaced studies action the course's own state allows, **Mark completed** or **Remove completion**, and **Open in Sisu**. |
-| Sisu capture | The file the Sisu import script downloads from a plan in Sisu's structure of studies view, which the app imports as one profile. It is separate from a capture of the curriculum source. |
+| Course menu | The menu of actions on a course: **Add to comparison** on a site that serves the embedding features, **Open prerequisite graph** on a site that serves the prerequisite graph, the Unplaced studies action the course's own state allows, **Mark completed** or **Remove completion**, and **Open in study guide**. |
+| Sisu capture | The file the Sisu import script downloads from a plan in Sisu's structure of studies view, which the app imports as one profile. It carries the plan page markup and no lookup map, and it is separate from a capture of the curriculum source. |
+| Peppi capture | The file the Peppi import script downloads from a HOPS page in Peppi's Tarkastelu view, which the app imports as one profile. It carries the programme heading and the plan structure markup. |
+| Waiting module | A module in an imported plan whose parent scope needs a version choice before placement can match it. After the choice, placement matches it by its exact official code and then by its exact Finnish or English official name, and a module with no unique match is named as left out. |
+| Version choice | The selection of one exact module version from the versions a module group offers, through the **Choose module version** dialog or the version list above the structure. |
+| Study-plan format | One file type a university entry lists for study-plan import: a saved plan page, a plan PDF or a script capture. The app offers only the formats the configured university lists, in the registry order. |
+| Study-plan import script | One complete console script the app copies for a platform's plan page. It reads the open page and downloads one capture file without a network request, and a university lists at most one script. |
 | Profile | A named set of the app's state in the browser: language, selected and completed courses, and the state of each tab. |
 | Open tab | The tab a browser tab shows. It belongs to that browser tab's session storage rather than to a profile. |
 | App language | The language of the app's interface and course names in a profile, either Finnish or English. |
@@ -177,7 +192,8 @@ This glossary defines the terms the documentation uses, in tables grouped by sub
 | Inference | The stage that reads teaching text with a language model and proposes inferred prerequisites and equivalence groups. |
 | Target course | The course whose prerequisites one inference run proposes. |
 | Finding | One proposed required option, recommended option or equivalence group, with all of its member courses considered together. |
-| Packet | The target course and its ordered candidate courses, with their identities and effective teaching text, assembled as the input to one inference request. |
+| Packet | The target course and its ordered candidate courses, with their identities, effective teaching text and selected prompt cells, which are effective teaching cells that may be derived, plus selected official non-teaching cells, assembled as the input to one inference request. |
+| Prompt fields | The official text fields one inference prompt carries, selected separately for the target course and the candidate pool from name, content, outcomes, prerequisite text and additional information. The university map supplies each instance's defaults, and `INFERENCE_TARGET_FIELDS` and `INFERENCE_POOL_FIELDS` in `config/inference.toml` override them. |
 | Local key | One configured local model runtime variant, with its context size, measured context ceiling, KV cache, batch settings and speculation settings. The fit rule tests these keys in configuration order. |
 | Label safety | The rule that keeps official prerequisite structure out of candidate selection and model inputs. |
 | Rerank | The step that scores a pool of candidate courses against the target course and keeps the strongest candidates for the language model. |

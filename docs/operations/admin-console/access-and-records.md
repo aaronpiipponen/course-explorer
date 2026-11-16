@@ -67,7 +67,7 @@ The authentication routes and the request-validation failure carry `Cache-Contro
 
 ## Sessions
 
-An administration session is one signed-in grant held in the backend process's memory. A signed-in session opens the console's tabs. The session token is never written to a file or returned in a response. The session report returns the authentication state, the CSRF token, the account name and the presentation settings `poll_seconds`, `app_url` and `repository_url`.
+An administration session is one signed-in grant held in the backend process's memory. A signed-in session opens the console's tabs. The session token is never written to a file or returned in a response. The session report returns the authentication state, the CSRF token, the account name and the presentation settings `poll_seconds`, `app_url`, `repository_url` and `display_label`.
 
 The cookie is `__Host-course-explorer-admin` with `Secure`, `HttpOnly`, `SameSite=Strict` and `Path=/`. It carries no `Domain` attribute and no persistent `Max-Age` or `Expires` value, because the server owns the lifetime. A successful sign-in turns the anonymous session into a signed-in session, rotates the cookie to a fresh server-side token and issues a fresh CSRF token.
 
@@ -161,14 +161,14 @@ The [Usage panel](/docs/operations/admin-console/logs.md#usage) reads the report
 | `ADMIN_WEB_ANONYMOUS_SESSION_WINDOW_SECONDS` | The length of the sliding window | Seconds | `60` |
 | `ADMIN_WEB_COMMAND_LOG_LIMIT` | The entries the command log retains | Entries | `200` |
 | `ADMIN_WEB_POLL_SECONDS` | The seconds between completed automatic reads of one enabled panel | Seconds | `60` |
-| `ADMIN_WEB_REPOSITORY_URL` | The HTTPS GitHub owner and repository address of the console's GitHub link | URL | `https://github.com/aaronpiipponen/tuni-course-explorer` |
+| `ADMIN_WEB_REPOSITORY_URL` | The HTTPS GitHub owner and repository address of the console's GitHub link | URL | `https://github.com/aaronpiipponen/course-explorer` |
 | `ADMIN_SITE_WEB_SERVICE_UNIT` | The systemd unit that runs this checkout's web process | Unit | `replace-with-web.service` |
 | `ADMIN_SITE_ADMIN_SERVICE_UNIT` | The systemd unit that runs this checkout's administration process | Unit | `replace-with-admin.service` |
 | `ADMIN_SITE_WEB_SERVICE_SCOPE` | The manager that owns the web unit | `user` or `system` | `user` |
 
 The host must be `127.0.0.1`, and the port must be a valid TCP port. The origin must be one exact HTTPS origin without credentials, a path, a query or a fragment. The repository address must name one owner and one repository on `github.com` over HTTPS. The two session lifetimes, the creation limit, its window, the command-log limit and the poll interval are positive integers. Each site unit value is one plain service basename, and the scope is `user` or `system`.
 
-The console's App link reads the inherited `WEB_APP_URL` from `config/web.toml`, which is one root HTTP or HTTPS address. The session report returns the values of `ADMIN_WEB_POLL_SECONDS`, `WEB_APP_URL` and `ADMIN_WEB_REPOSITORY_URL` as the console's presentation metadata. The administration origin stays independent in `config/admin_web.toml`. The lock path and the failed-attempt limit are fixed in code. [Configuration](/docs/backend/configuration.md) states how the settings owner reads and validates the file.
+The console's App link reads the inherited `WEB_APP_URL` from `config/web.toml`, which is one root HTTP or HTTPS address. The session report returns the values of `ADMIN_WEB_POLL_SECONDS`, `WEB_APP_URL`, `ADMIN_WEB_REPOSITORY_URL` and the site's display label as the console's presentation metadata. The administration origin is independent in `config/admin_web.toml`. The lock path and the failed-attempt limit are fixed in code. [Configuration](/docs/backend/configuration.md) states how the settings owner reads and validates the file.
 
 ## Related pages
 

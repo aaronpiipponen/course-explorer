@@ -2,6 +2,10 @@
 
 The example dataset is invented, and the loader imports it into the configured database and writes its bundled vectors and serving artifacts in separate actions.
 
+A bootstrap example site serves the fictional attribution line **Fictional example data.**, and a site with a Selected dataset serves the configured university attribution.
+
+The bundled vectors cover Finnish and English only, so a site whose official languages include another language needs its own embedding stage before the embedding features are enabled. The fixture holds common-model course and module records. Every course and module name carries Finnish, English and Swedish text, and the five active courses also carry Swedish content and outcomes. The configured university's official-language list decides which of those cells its database stores. One course has no credit value and one has no document state. Every course-page address uses `https://example.invalid/`. A credit total or an evaluated credit bound that counts a course with no credit value counts it at the assumed value of `ASSUMED_COURSE_CREDITS`, and the result shows one **Assumed credits used** caption.
+
 ## What the loader needs
 
 - A copy set up by the [Installation](/docs/getting-started/installation.md) steps, with the Python dependencies installed and the configuration and environment files in place.
@@ -10,13 +14,13 @@ The example dataset is invented, and the loader imports it into the configured d
 
 ## Leaving example mode
 
-The example path serves the configured database while the state root stays bootstrap. A deployment starts with the example dataset when `POSTGRES_DB` equals `EXAMPLE_POSTGRES_DB`.
+The example path serves the configured database while the state root is bootstrap. A deployment starts with the example dataset when `POSTGRES_DB` equals `EXAMPLE_POSTGRES_DB`.
 
 To prepare a real dataset, give the configured database a different name in `config/database.toml`, create that database with `createdb` or start from a cleared disposable volume, and run `setup datasets`. A name other than the configured example name makes deploy enrollment and the explicit setup enroll the database as Selected. Clearing a volume also clears `ADMIN_STATE_ROOT` when that root lives on the same volume, so the state root becomes bootstrap and must be enrolled again.
 
 ## The loader actions
 
-The loader imports the fixture through the same capture and normalization path a real capture uses. `scripts/mock_data.py` parses one action with its options and delegates once to `course_explorer.mock_data.run_mock_data_command`. [The example data loader](/docs/backend/interfaces/administration-commands.md#the-example-data-loader) describes where the action sits beside the administration commands, and [command adapters](/docs/backend/interfaces/command-adapters.md) lists the return type of each action.
+The loader registers the authored neutral records as one completed capture and imports them through the shared normalization writer. `scripts/mock_data.py` parses one action with its options and delegates once to `course_explorer.mock_data.run_mock_data_command`. [The example data loader](/docs/backend/interfaces/administration-commands.md#the-example-data-loader) describes where the action sits beside the administration commands, and [command adapters](/docs/backend/interfaces/command-adapters.md) lists the return type of each action.
 
 | Action | What it does | What it prints |
 |---|---|---|
@@ -29,7 +33,7 @@ The two options:
 
 | Option | Default | Holds |
 |---|---|---|
-| `--fixture-dir` | `data/mock` | The directory that holds the authored curriculum documents and the bundled vector file. |
+| `--fixture-dir` | `data/mock` | The directory that holds the authored neutral curriculum records and the bundled vector file. |
 | `--raw-root` | `data/mock-import` | The repository-relative root that holds the capture the loader registers or reuses. |
 
 Each action reads the fixture and sends no request to the curriculum source and none to the embedding service.
@@ -69,6 +73,8 @@ It prints the normalization report, which counts the periods, canonical courses,
 
 A second `load` on an already-loaded database completes and prints the same coverage. The loader reuses the sole retained capture under `--raw-root` when its stored responses match the fixture, requires the stored curriculum to be exactly the fixture's, and completes nothing that is already stored.
 
+Every action compares a completed retained capture's response bytes with the fixture before it parses the retained records. A capture from a different fixture shape or with edited bodies refuses with `retained mock import manifest does not match the current fixture`. Remove the retained capture directory and run the action again.
+
 The reuse is conditional, and the failure messages name the condition:
 
 | Situation | What the loader does |
@@ -76,7 +82,7 @@ The reuse is conditional, and the failure messages name the condition:
 | The database holds no course, module, or source snapshot | The import proceeds. |
 | The database holds exactly the fixture's canonical groups and source rows | The import proceeds and reuses the retained capture. |
 | The database holds any other curriculum | It refuses with `database already holds curriculum outside the fictional mock fixture`. |
-| The retained capture holds different response bytes than the fixture | It refuses with `retained mock import manifest does not match the current fixture`. |
+| A retained capture holds different response bytes than the fixture | It refuses with `retained mock import manifest does not match the current fixture`. |
 | More than one capture is retained under `--raw-root` | It refuses with `multiple mock import manifests are ambiguous`. |
 
 ## Writing the serving artifacts and the bundled vectors

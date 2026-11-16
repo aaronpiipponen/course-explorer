@@ -23,7 +23,7 @@ describe("route contracts", () => {
   it("minimum path preserves coverage and deterministic ties", () => {
     const prefix = "minimum_path_preserves_coverage_and_deterministic_ties";
     const inferred = loadStructure(fixtures, `${prefix}.inferred_compilation`);
-    const inferredResult = calculateMinimumNewCredits(inferred, []);
+    const inferredResult = calculateMinimumNewCredits(inferred, [], "5");
     expect(inferredResult.state).toBe("exact");
     expect(inferredResult.inferred_coverage).toEqual(
       inferred.inferred_coverage,
@@ -32,19 +32,21 @@ describe("route contracts", () => {
     expect(inferredResult.satisfaction.include_inferred).toBe(true);
 
     const tie = loadStructure(fixtures, `${prefix}.tie`);
-    const tieResult = calculateMinimumNewCredits(tie, []);
+    const tieResult = calculateMinimumNewCredits(tie, [], "5");
     expect(selectedGroupIds(tieResult)).toEqual(["b"]);
-    expect(calculateMinimumNewCredits(tie, [])).toEqual(tieResult);
+    expect(calculateMinimumNewCredits(tie, [], "5")).toEqual(tieResult);
 
     const stableResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.stable`),
       [],
+      "5",
     );
     expect(selectedGroupIds(stableResult)).toEqual(["a"]);
 
     const mixedResult = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.mixed`),
       [],
+      "5",
     );
     expect(selectedGroupIds(mixedResult)).toEqual(["a"]);
     expect(mixedResult.new_opaque_work).toEqual([]);
@@ -57,7 +59,7 @@ describe("route contracts", () => {
     if (moduleBox === undefined) {
       throw new Error("the witness tie fixture has no manual module box");
     }
-    const witnessTieResult = calculateMinimumNewCredits(witnessTie, []);
+    const witnessTieResult = calculateMinimumNewCredits(witnessTie, [], "5");
     expect(witnessTieResult.state).toBe("exact");
     expect(creditsOf(witnessTieResult.total_new_credits)).toBe(500);
     expect(
@@ -71,7 +73,7 @@ describe("route contracts", () => {
       "basis_head_satisfies_its_expanded_prerequisites_at_zero_cost";
     const plain = loadStructure(fixtures, `${prefix}.plain`);
 
-    const empty = calculateMinimumNewCredits(plain, []);
+    const empty = calculateMinimumNewCredits(plain, [], "5");
     expect(empty.state).toBe("exact");
     expect(selectedGroupIds(empty)).toEqual(["a", "e"]);
     expect(creditsOf(empty.total_new_credits)).toBe(500);
@@ -81,23 +83,27 @@ describe("route contracts", () => {
       "course:root",
     ]);
 
-    const covered = calculateMinimumNewCredits(plain, ["a"]);
+    const covered = calculateMinimumNewCredits(plain, ["a"], "5");
     expect(covered.state).toBe("exact");
     expect(covered.satisfaction.requirements_state).toBe("satisfied");
     expect(selectedGroupIds(covered)).toEqual([]);
     expect(creditsOf(covered.total_new_credits)).toBe(0);
     expect(
-      creditsOf(calculateMinimumNewCredits(plain, ["root"]).total_new_credits),
+      creditsOf(
+        calculateMinimumNewCredits(plain, ["root"], "5").total_new_credits,
+      ),
     ).toBe(0);
     const excluded = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.excluded`),
       ["root"],
+      "5",
     );
     expect(excluded.state).toBe("no_solution");
 
     const mixed = calculateMinimumNewCredits(
       loadStructure(fixtures, `${prefix}.shared_tree`),
       ["a"],
+      "5",
     );
     expect(mixed.state).toBe("exact");
     expect(mixed.satisfaction.requirements_state).toBe("unsatisfied");
@@ -129,6 +135,7 @@ describe("route contracts", () => {
       const result = calculateMinimumNewCredits(
         loadStructure(fixtures, `${prefix}.compilation[${suffix}]`),
         [],
+        "5",
       );
       expect(result.state).toBe("exact");
       expect(creditsOf(result.total_new_credits)).toBe(300);
@@ -152,6 +159,7 @@ describe("route contracts", () => {
       const reversedResult = calculateMinimumNewCredits(
         loadStructure(fixtures, `${prefix}.reversed_source[${suffix}]`),
         [],
+        "5",
       );
       expect(selectedGroupIds(reversedResult)).toEqual(expected);
     },
@@ -169,6 +177,7 @@ describe("route contracts", () => {
       const cheap = calculateMinimumNewCredits(
         loadStructure(fixtures, `${prefix}.compilation[${suffix}]`),
         [],
+        "5",
         maxCompactNodes,
       );
       expect(cheap.state).toBe(expectedState);
@@ -178,6 +187,7 @@ describe("route contracts", () => {
       const activityTie = calculateMinimumNewCredits(
         loadStructure(fixtures, `${prefix}.compilation[${suffix}]#2`),
         [],
+        "5",
         maxCompactNodes,
       );
       expect(activityTie.state).toBe(expectedState);
@@ -190,6 +200,7 @@ describe("route contracts", () => {
       const basisCovered = calculateMinimumNewCredits(
         loadStructure(fixtures, `${prefix}.basis_compilation[${suffix}]`),
         ["inactive-covered"],
+        "5",
         maxCompactNodes,
       );
       expect(basisCovered.state).toBe("exact");
@@ -206,6 +217,7 @@ describe("route contracts", () => {
         "minimum_path_reconstructs_only_feasible_projected_evidence.compilation",
       ),
       [],
+      "5",
     );
     expect(result.state).toBe("exact");
     expect(selectedGroupIds(result)).toEqual(["head", "shared"]);
@@ -231,7 +243,7 @@ describe("route contracts", () => {
     const label = "coherent_route_occurrences.equal";
     const structure = loadStructure(fixtures, label);
     const display = loadDisplay(fixtures, label);
-    const result = calculateMinimumNewCredits(structure, []);
+    const result = calculateMinimumNewCredits(structure, [], "5");
     expect(result.state).toBe("exact");
     expect(selectedGroupIds(result)).toEqual(["P", "Q"]);
     expect(creditsOf(result.total_new_credits)).toBe(1000);
@@ -293,6 +305,7 @@ describe("route contracts", () => {
         element_count: display.nodes.length + display.edges.length,
       },
       dataset_identity: "synthetic-dataset",
+      assumed_course_credits: "5",
       max_compact_nodes: 10000,
       solver: structure,
       display,
@@ -317,7 +330,7 @@ describe("route contracts", () => {
     const label = "coherent_route_occurrences.local";
     const structure = loadStructure(fixtures, label);
     const display = loadDisplay(fixtures, label);
-    const result = calculateMinimumNewCredits(structure, []);
+    const result = calculateMinimumNewCredits(structure, [], "5");
     expect(result.state).toBe("exact");
     expect(selectedGroupIds(result)).toEqual(["P", "Q", "X", "Y"]);
     expect(creditsOf(result.total_new_credits)).toBe(1800);
@@ -422,7 +435,7 @@ describe("route contracts", () => {
     const label = "route_nodes_follow_selected_members.compilation";
     const structure = loadStructure(fixtures, label);
     const display = loadDisplay(fixtures, label);
-    const result = calculateMinimumNewCredits(structure, []);
+    const result = calculateMinimumNewCredits(structure, [], "5");
     expect(result.state).toBe("exact");
     expect(selectedGroupIds(result)).toEqual(["P", "Q"]);
     expect(creditsOf(result.total_new_credits)).toBe(1000);
@@ -465,6 +478,7 @@ describe("route contracts", () => {
         element_count: display.nodes.length + display.edges.length,
       },
       dataset_identity: "synthetic-dataset",
+      assumed_course_credits: "5",
       max_compact_nodes: 10000,
       solver: structure,
       display,

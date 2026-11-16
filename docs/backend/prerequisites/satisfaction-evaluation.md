@@ -4,7 +4,7 @@ The native evaluator folds one solver structure into a satisfaction family and a
 
 ## The fold inputs
 
-`native/evaluator.cpp` owns the fixed-basis fold. It receives the compiled structures of one request bundle, the chosen basis of canonical course identities, and the two activity and category flags the compiler recorded, and it returns one outcome per structure.
+`native/evaluator.cpp` owns the fixed-basis fold. It receives the compiled structures of one request bundle, the chosen basis of canonical course identities, the two activity and category flags the compiler recorded, and the configured assumed course credits in hundredths of a credit, and it returns one outcome per structure. An assumed value that is not positive is refused.
 
 The fold reads the calculation pieces alone. Each piece carries its kind-specific values, its ordered child slots and its evaluation flags, and an identical piece is stored once, so an equal requirement reached through two paths folds once and shares one answer. [Prerequisite compiler](/docs/backend/prerequisites/prerequisite-compiler.md#source-vocabulary-and-solver-structure) states the piece payload and its digest.
 
@@ -18,7 +18,7 @@ Each piece folds to a family of the basis courses that satisfy it, or reports th
 - A module block folds transparently over its one child. An expanded course joins its head with the descendant that the head stands for: a satisfiable descendant contributes the neutral family, and a head outside the basis must be satisfied together with it. A head in the basis returns its own family alone.
 - An opaque credit piece with a zero source minimum is satisfied by the neutral family, and a positive source minimum is unsatisfied, because the fold selects no course for it.
 - An unresolved piece is the zero family and marks the result unresolved.
-- A credit piece filters its child family by the piece's credit bounds, and a course-count piece filters by the piece's count bounds. An absent lower bound is zero, and an absent upper bound leaves the family unbounded.
+- A credit piece filters its child family by the piece's credit bounds, and a course-count piece filters by the piece's count bounds. An absent lower bound is zero, and an absent upper bound leaves the family unbounded. A course with no official minimum credit contributes `ASSUMED_COURSE_CREDITS` as its weight. The evaluation reports `uses_assumed_credits` when a credit-bound piece's retained witness family includes a course with no official minimum credit. A course-count bound and an unbounded credit piece do not report it.
 - An AND piece joins its children, an OR piece and a course-alternatives piece union them and OR their unresolved flags, and a cardinality piece unions the selections that hold between its lower and upper count.
 
 The evaluator memoizes each piece within one compilation. The filters apply the bounds exactly without enumerating selections, so a requirement over a large choice rule folds in one family.
@@ -45,11 +45,11 @@ A structure produces no outcome when its root is in the basis, when it is inacti
 
 The eligibility rule of a mode reads those outcomes. Under **All**, every category the course carries must be satisfied. Under **Partially covered**, at least one slot of the required or recommended category must be covered, and a category the course does not carry is neutral.
 
-`NativeBundle.evaluate(basis, *, mode)` in `src/course_explorer/prerequisite/native_compiler.py` calls the native evaluator for every compiled structure in one call. `evaluate_next_course_outcomes` in `src/course_explorer/next_courses/service.py` keys the returned outcomes by root group identity, and the materializer pairs an outcome with its structure by position. [Next-course coverage](/docs/backend/search-and-discovery/next-course-coverage.md) describes the discovery path that reads them.
+`NativeBundle.evaluate(basis, *, mode, assumed_course_credits)` in `src/course_explorer/prerequisite/native_compiler.py` calls the native evaluator for every compiled structure in one call and passes the assumed course credits in hundredths of a credit, and a value that is not positive raises `ValueError`. `evaluate_next_course_outcomes` in `src/course_explorer/next_courses/service.py` keys the returned outcomes by root group identity, and the materializer pairs an outcome with its structure by position. [Next-course coverage](/docs/backend/search-and-discovery/next-course-coverage.md) describes the discovery path that reads them.
 
 ## The browser's box states
 
-The graph's box states are computed in the browser by `evaluateNodeStates` in `web/src/solver/satisfaction.ts`, which ports the same tri-state fold beside the route solver. That evaluator reads the cached solver structure and the live excluded courses, graph marks and chosen basis, and writes no state into the report. A saved node mark registers its calculation support as an attested witness at no new cost, and an excluded node mark denies that support, so a box state follows from the structure the browser already holds.
+The graph's box states are computed in the browser by `evaluateNodeStates` in `web/src/solver/satisfaction.ts`, which ports the same tri-state fold beside the route solver. That evaluator reads the cached solver structure, the live excluded courses, graph marks, the chosen basis and the configured assumed course credits, and writes no state into the report. A saved node mark registers its calculation support as an attested witness at no new cost, and an excluded node mark denies that support, so a box state follows from the structure the browser already holds.
 
 The server returns no computed box state, so a mark, an exclusion or a basis change re-evaluates the drawing without a request. [Prerequisite graph](/docs/backend/prerequisites/prerequisite-graph.md#box-states-and-the-drawing-inputs) describes the states the app shows.
 
@@ -58,5 +58,5 @@ The server returns no computed box state, so a mark, an exclusion or a basis cha
 | File | Covers |
 |---|---|
 | `tests/next_courses/test_next_courses.py` | The native evaluator through the real direct compiler: both modes and their orders, required and recommended coverage with an absent category reported as `None`, the activity scope, and the retained inactive basis. |
-| `web/src/solver/satisfaction.test.ts` | The browser fold over structures the server wrote: canonical completion identity, the AND, OR, cardinality, credit and count bounds, an expanded course that stops at a basis head, excluded courses, and the box states the browser derives without changing the held report. |
+| `web/src/solver/satisfaction.test.ts` | The browser fold over structures the server wrote: canonical completion identity, the AND, OR, cardinality, credit and count bounds including a null source minimum at the configured assumption, an expanded course that stops at a basis head, excluded courses, and the box states the browser derives without changing the held report. |
 | `tests/native/test_native_library.py` | The missing or mismatched native prerequisite library that fails the compile call before any read. The evaluator loads the same library. |

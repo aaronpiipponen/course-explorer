@@ -1,8 +1,8 @@
 /** Shared browser session, app seed and touch gesture helpers for the real-browser journeys. */
 import { launchBrowser } from "./browser.mjs";
 
-const STORAGE_KEY = "tuni-course-explorer";
-const ACTIVE_TAB_KEY = "tuni-course-explorer-active-tab";
+const STORAGE_KEY = "course-explorer";
+const ACTIVE_TAB_KEY = "course-explorer-active-tab";
 const LOOPBACK_HOST = "127.0.0.1";
 
 /**

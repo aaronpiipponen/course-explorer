@@ -54,7 +54,7 @@ The structure edits hold the profile's placement records, move a relocated scope
 4. The selection that is left keeps its order, and every identity of `next.placedCourseIds` that is absent is appended.
 5. The structure slice is written as the next programme list, the exact version selections, the choices, the course placements, the module placements, the placed identities, the course holders and the card order.
 6. The card order keeps only identities that the migrated selection holds, so a course that leaves every set leaves the order in the same write.
-7. `pendingSisuImport` is written from the change when the change supplies it and kept as it is when the change omits the field, so one write places a pending capture and clears it together.
+7. `pendingPlanImport` is written from the change when the change supplies it and kept as it is when the change omits the field, so one write places a pending plan and clears it together.
 
 A completed course is never dropped by steps 1 and 2, which is what keeps a completion across a programme replacement, a reset, and a module deselection. An explicit removal is the operation that drops it.
 

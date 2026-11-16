@@ -29,7 +29,7 @@ type Candidate = Omit<CatalogueModule, "group_id">;
 
 function candidate(id: string, code: string, name: string): Candidate {
   return {
-    sisu_module_id: id,
+    source_version_id: id,
     module_type: "Module",
     code,
     name_fi: null,
@@ -185,7 +185,20 @@ describe("module version hand-off", () => {
                 value: {
                   embeddings_enabled: true,
                   inference_enabled: true,
+                  prerequisites_enabled: true,
                   dataset_identity: identity,
+                  display_label: "example-uni",
+                  university_names: {
+                    en: "Example University",
+                    fi: "Esimerkkiyliopisto",
+                  },
+                  source_attribution: {
+                    en: "Source attribution",
+                    fi: "Lähdemerkintä",
+                  },
+                  assumed_course_credits: "5",
+                  study_plan_script: null,
+                  study_plan_formats: [],
                 },
               },
               createElement(ModuleLookupBox, {

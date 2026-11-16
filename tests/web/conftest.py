@@ -115,7 +115,7 @@ def _serving_artifact_set(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Se
         centroids=(
             CourseCentroid(
                 group_id="test-course",
-                sisu_course_unit_id="test-version",
+                source_version_id="test-version",
                 representative_source_hash="b" * 64,
                 chunk_count=0,
                 centroid=(0.0,) * COURSE_EMBEDDING_DIMENSION,

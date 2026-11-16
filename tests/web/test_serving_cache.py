@@ -19,7 +19,7 @@ def test_serving_caches_are_reused_for_the_supervisor_identity() -> None:
     catalogue body.
     """
     database_settings = settings_factory(DatabaseSettings)
-    serving = ServingDataset(settings=database_settings, identity="a" * 64)
+    serving = ServingDataset(settings=database_settings, identity="a" * 64, example=False)
 
     first = serving_caches(serving)
     second = serving_caches(serving)

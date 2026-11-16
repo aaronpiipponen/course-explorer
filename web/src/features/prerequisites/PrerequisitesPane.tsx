@@ -113,7 +113,7 @@ export function PrerequisitesPane() {
     () =>
       report && inputs.request
         ? evaluateGraphNodeStates(report, inputs.request)
-        : [],
+        : { states: [], uses_assumed_credits: false },
     [report, inputs.key],
   );
   const summary = useMemo(
@@ -366,7 +366,7 @@ export function PrerequisitesPane() {
           report.drawing.allowed ? (
             <PrerequisiteGraph
               report={report}
-              nodeStates={nodeStates}
+              nodeStates={nodeStates.states}
               recenterRef={recenter}
               route={route}
               summary={summary}
@@ -381,6 +381,11 @@ export function PrerequisitesPane() {
             />
           )
         ) : null}
+        {report && summary === null && nodeStates.uses_assumed_credits && (
+          <p className="assumed-note pane-assumed-note">
+            {t("Assumed credits used")}
+          </p>
+        )}
         <RootBox open={rootOpen} onClose={closeRoot} />
       </div>
     </main>

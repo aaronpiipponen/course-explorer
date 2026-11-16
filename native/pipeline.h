@@ -32,8 +32,10 @@ void append_canonical_bound(std::string &out, int32_t value);
 /* Return key ``index`` of a packed blob, which spans offsets[index] to offsets[index + 1]. */
 std::string_view decode_key(const char *blob, const int64_t *offsets, int index);
 
-/* Open one libpq connection and return its nonzero handle, or -1 with the error text set. */
-int open_database_handle(const std::string &conninfo);
+/* Open one libpq connection and return its nonzero handle, or -1 with the error text set. The two
+ * display strings are PostgreSQL text-array literals consumed only by the scoped name reads. */
+int open_database_handle(const std::string &conninfo, const std::string &display_fi,
+                         const std::string &display_en);
 
 /* Close one open handle and release its connection. An unknown handle is ignored. */
 void close_database_handle(int handle);
@@ -61,9 +63,12 @@ bool project_compilation(Compilation &compilation);
 void *write_structure_bundle(std::unique_ptr<Compiled> compiled);
 
 /* Write one outcome per compiled structure and return the count. ``mode`` 0 keeps a structure whose
- * requirements are all covered and 1 keeps one with any requirement covered. Returns -1 when the
- * outcome buffer is too small or a course summary is absent. */
+ * requirements are all covered and 1 keeps one with any requirement covered.
+ * ``assumed_course_credits`` is a positive cost in hundredths of a credit substituted for a missing
+ * source-course minimum. Returns -1 when the outcome buffer is too small, a course summary is absent
+ * or the assumed cost is nonpositive. */
 int evaluate_bundle(const StructureBundle &holder, const std::unordered_set<std::string> &basis,
-                    int mode, NativeOutcome *outcomes, int capacity);
+                    int mode, int64_t assumed_course_credits, NativeOutcome *outcomes,
+                    int capacity);
 
 }  // namespace tce

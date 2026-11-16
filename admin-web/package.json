@@ -1,5 +1,5 @@
 {
-  "name": "tuni-course-explorer-admin-web",
+  "name": "course-explorer-admin-web",
   "private": true,
   "type": "module",
   "engines": {

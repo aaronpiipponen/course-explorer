@@ -10,9 +10,10 @@ the caller-selected `display_language`.
 The same normalization, official-name resolution and ordering also drive any caller that narrows
 official courses or modules over a supplied projection.
 
-`DisplayLanguage` is caller-owned because the shared summary retains both official localized
-names. A requested official name is used first and the other official name is only a fallback. A
-hidden second localized name is never matched when a requested name exists. The fuzzy cutoff,
+`DisplayLanguage` is caller-owned because the shared summary retains both display names. A requested
+display name is used first and the other display name is only a fallback. A hidden second display
+name is never matched when a requested name exists. The summary names are projections of the
+university map's official display fallback, not exact official language cells. The fuzzy cutoff,
 token weight and score tie-break weight are config-owned. Whole-name Jaro-Winkler similarity and
 query-token coverage use a 0-100 scale, which must not be blended with the semantic search score
 scale.
@@ -31,7 +32,6 @@ from rapidfuzz.distance import JaroWinkler
 
 from course_explorer.config import SearchSettings
 from course_explorer.curriculum import (
-    CatalogueModuleVersionIdentity,
     CourseSummary,
     ModuleSummary,
     RepresentedCourseSummary,
@@ -58,10 +58,10 @@ class FuzzyCourseResult(BaseModel):
 
 
 def official_display_name(
-    summary: CourseSummary | ModuleSummary | CatalogueModuleVersionIdentity,
+    summary: CourseSummary | ModuleSummary,
     display_language: DisplayLanguage,
 ) -> str | None:
-    """Resolve one displayed official name with an explicit other-language fallback."""
+    """Resolve one displayed summary name with the other display name as its own fallback."""
     return official_name(summary.name_fi, summary.name_en, display_language)
 
 

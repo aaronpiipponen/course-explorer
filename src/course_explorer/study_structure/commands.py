@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from course_explorer.config import (
     DatabaseSettings,
     load_database_settings,
+    load_instance_settings,
     load_normalization_settings,
 )
 from course_explorer.curriculum_repository import CurriculumRepository
@@ -82,7 +83,8 @@ def run_study_structures_command(
     )
     with _database_context(resolved_settings, factory=session_factory) as factory:
         service = StudyStructureService(
-            CurriculumRepository(factory), academic_year_start=academic_year_start
+            CurriculumRepository(factory, university=load_instance_settings().university),
+            academic_year_start=academic_year_start,
         )
         batch = service.read_many(
             materialized,

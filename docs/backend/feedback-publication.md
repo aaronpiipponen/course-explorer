@@ -6,7 +6,7 @@ The sender makes one feedback publication attempt per activation and records the
 
 `FeedbackService.publish_next` in `src/course_explorer/feedback/service.py` owns the feedback publication attempt. It selects only the oldest opted-in `pending` row, orders the candidates by `created_at` and `id`, locks one row with `FOR UPDATE SKIP LOCKED`, and limits the selection to one record.
 
-`src/course_explorer/feedback/sender.py` composes the sender settings and the feedback application store, then calls `publish_next` once with a publisher bound to the configured destination. `scripts/run_feedback_sender.sh` runs the module, and `examples/deploy/systemd/tuni-course-explorer-feedback-sender.service.in` with its timer schedules one activation after boot and after each completed activation. The timer starts the paired service, and only the timer is enabled.
+`src/course_explorer/feedback/sender.py` composes the sender settings and the feedback application store, then calls `publish_next` once with a publisher bound to the configured destination. `scripts/run_feedback_sender.sh` runs the module, and `examples/deploy/systemd/course-explorer-feedback-sender.service.in` with its timer schedules one activation after boot and after each completed activation. The timer starts the paired service, and only the timer is enabled.
 
 ## The claim and the single attempt
 

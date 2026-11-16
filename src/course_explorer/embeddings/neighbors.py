@@ -18,7 +18,6 @@ from course_explorer.db.models import CourseEmbeddingChunk, CourseEmbeddingNeigh
 from course_explorer.enums import (
     DESCRIPTIVE_TEACHING_TEXT_FIELDS,
     CourseEmbeddingStatus,
-    TeachingTextLanguage,
 )
 
 # The number of query chunks one batch reads before it runs their nearest queries.
@@ -92,7 +91,7 @@ def _insert_nearest(
     session: Session,
     *,
     query_chunk_id: uuid.UUID,
-    language: TeachingTextLanguage,
+    language: str,
     embedding: Sequence[float],
     embedding_configuration_hash: str,
     rows_per_chunk: int,

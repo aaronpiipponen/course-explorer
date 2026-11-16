@@ -1,11 +1,11 @@
 # Schedule one feedback publication attempt after boot and after each completed attempt.
 [Unit]
-Description=TUNI Course Explorer feedback publication timer
+Description=course-explorer feedback publication timer
 
 [Timer]
 OnBootSec=60
 OnUnitInactiveSec=60
-Unit=tuni-course-explorer-feedback-sender.service
+Unit=@FEEDBACK_SERVICE@
 
 [Install]
 WantedBy=timers.target

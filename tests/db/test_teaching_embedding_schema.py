@@ -16,7 +16,6 @@ from course_explorer.db.session import session_scope
 from course_explorer.enums import (
     CourseEmbeddingStatus,
     TeachingTextField,
-    TeachingTextLanguage,
 )
 from tests.db._schema_support import (
     constraint_name,
@@ -42,8 +41,8 @@ def test_derived_course_text_constraints_and_cascade(
             session.add(
                 derived_text_row(
                     version_ids[0],
-                    language=TeachingTextLanguage.FI,
-                    source_language=TeachingTextLanguage.FI,
+                    language="fi",
+                    source_language="fi",
                 )
             )
     assert constraint_name(same_language.value) == (
@@ -55,15 +54,15 @@ def test_derived_course_text_constraints_and_cascade(
             derived_text_row(
                 version_ids[0],
                 field=TeachingTextField.CONTENT,
-                language=TeachingTextLanguage.EN,
+                language="en",
             )
         )
         session.add(
             derived_text_row(
                 version_ids[1],
                 field=TeachingTextField.NAME,
-                language=TeachingTextLanguage.FI,
-                source_language=TeachingTextLanguage.EN,
+                language="fi",
+                source_language="en",
                 text="Johdanto",
             )
         )
@@ -113,7 +112,7 @@ def test_course_embedding_constraints_vector_dimension_and_cascade(
             embedding_chunk_row(
                 version_ids[1],
                 field=TeachingTextField.NAME,
-                language=TeachingTextLanguage.FI,
+                language="fi",
             )
         )
 

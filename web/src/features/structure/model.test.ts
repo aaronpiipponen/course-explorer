@@ -52,7 +52,7 @@ const rule = (
 });
 const moduleSummary = {
   group_id: "root",
-  sisu_module_id: "root",
+  source_version_id: "root",
   module_type: "DegreeProgramme",
   code: "ROOT",
   name_fi: "Root",
@@ -512,7 +512,7 @@ describe("structure projection", () => {
     const wrapper = {
       ...moduleSummary,
       group_id: "wrapper",
-      sisu_module_id: "wrapper-v1",
+      source_version_id: "wrapper-v1",
       module_type: "StudyModule",
       code: "WRAPPER",
     };

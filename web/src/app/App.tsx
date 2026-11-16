@@ -38,15 +38,17 @@ export function App() {
     <NoticeProvider key={currentProfileId}>
       <div key={entranceKey} className="app-shell">
         <TopBar
+          repositoryUrl={DOCS_REPOSITORY_URL}
           openDocs={() => navigate("docs")}
           openFeedback={() => navigate("feedback")}
         />
         <TabCarousel key={currentProfileId} />
         <PhoneTabBar
+          repositoryUrl={DOCS_REPOSITORY_URL}
           openDocs={() => navigate("docs")}
           openFeedback={() => navigate("feedback")}
         />
-        <AppFooter repositoryUrl={DOCS_REPOSITORY_URL} />
+        <AppFooter />
       </div>
     </NoticeProvider>
   );

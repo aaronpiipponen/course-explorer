@@ -175,10 +175,11 @@ std::unique_ptr<Compiled> read_records(const char *data, size_t size)
             summary.code = reader.text();
             summary.official_url = reader.text();
             summary.credits_min_text = reader.text();
-            summary.credits_min = -1;
+            summary.credits_min = parse_credit_cents(summary.credits_min_text);
             summary.has_credits_max = reader.u8() != 0;
             summary.credits_max_text = reader.text();
-            summary.credits_max = -1;
+            summary.credits_max =
+                summary.has_credits_max ? parse_credit_cents(summary.credits_max_text) : -1;
             summary.active = reader.u8() != 0;
             compilation.summaries[summary.group] = std::move(summary);
         }
@@ -186,7 +187,7 @@ std::unique_ptr<Compiled> read_records(const char *data, size_t size)
         for (uint32_t index = 0; index < module_count; ++index) {
             ModuleSummaryRec summary;
             summary.group = reader.text();
-            summary.sisu = reader.text();
+            summary.source_version_id = reader.text();
             summary.module_type = reader.text();
             summary.has_code = reader.u8() != 0;
             summary.code = reader.text();

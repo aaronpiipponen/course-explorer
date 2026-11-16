@@ -15,7 +15,6 @@ from pathlib import Path
 from course_explorer.config import TranslationSettings
 from course_explorer.enums import (
     TeachingTextField,
-    TeachingTextLanguage,
     TranslationMethod,
 )
 from course_explorer.teaching_text.service import (
@@ -75,22 +74,23 @@ row = partial(
 )
 
 
-def select(courses, rows=(), *, course_limit=None):
+def select(courses, rows=(), *, course_limit=None, university=None):
     return select_translation_work(
-        FakeCurriculum(courses), FakeTranslations(rows), settings(), course_limit=course_limit
+        FakeCurriculum(courses),
+        FakeTranslations(rows),
+        settings(),
+        course_limit=course_limit,
+        university=university,
     )
 
 
 def keys(selection) -> list[tuple[str, str, str]]:
-    return [
-        (item.sisu_course_unit_id, item.field.value, item.language.value)
-        for item in selection.items
-    ]
+    return [(item.source_version_id, item.field.value, item.language) for item in selection.items]
 
 
 def counts_by_cell(
     selection,
-) -> dict[tuple[TeachingTextField, TeachingTextLanguage], tuple[int, int, int, int]]:
+) -> dict[tuple[TeachingTextField, str], tuple[int, int, int, int]]:
     return {
         (count.field, count.language): (
             count.official_target_count,
@@ -106,7 +106,7 @@ class RecordingProvider:
     """Provider stub returning scripted outcomes and recording every call."""
 
     def __init__(self, outcomes) -> None:
-        self.calls: list[tuple[str, TeachingTextLanguage, TeachingTextLanguage]] = []
+        self.calls: list[tuple[str, str, str]] = []
         self._outcomes = list(outcomes)
 
     def translate(self, text, *, source_language, target_language) -> str:
@@ -140,16 +140,16 @@ def write_output(path: Path, entries: list[DerivedTranslationInput]) -> None:
 def retained_entry(
     source_id: str = "course-a-v1",
     field: TeachingTextField = TeachingTextField.NAME,
-    language: TeachingTextLanguage = TeachingTextLanguage.EN,
+    language: str = "en",
     *,
-    source_language: TeachingTextLanguage = TeachingTextLanguage.FI,
+    source_language: str = "fi",
     source_text: str = "Nimi",
     text: str = "Name",
     method: TranslationMethod = TranslationMethod.MODEL,
     translation_model: str | None = PROVENANCE,
 ) -> DerivedTranslationInput:
     return DerivedTranslationInput(
-        sisu_course_unit_id=source_id,
+        source_version_id=source_id,
         field=field,
         language=language,
         source_language=source_language,

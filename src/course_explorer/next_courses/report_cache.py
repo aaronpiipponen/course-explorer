@@ -34,6 +34,7 @@ class NextCourseReportKey:
     display_language: DisplayLanguage
     include_inferred: bool
     active_only: bool
+    assumed_course_credits: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +48,7 @@ class NextCourseRawKey:
     display_language: DisplayLanguage
     include_inferred: bool
     active_only: bool
+    assumed_course_credits: str
 
 
 class NextCourseReportCache:
@@ -109,6 +111,7 @@ def _canonical_bytes(key: NextCourseReportKey) -> bytes:
                 key.display_language,
                 key.include_inferred,
                 key.active_only,
+                key.assumed_course_credits,
             ],
             separators=(",", ":"),
             ensure_ascii=False,
@@ -128,6 +131,7 @@ def _raw_bytes(key: NextCourseRawKey) -> bytes:
                 key.display_language,
                 key.include_inferred,
                 key.active_only,
+                key.assumed_course_credits,
             ],
             separators=(",", ":"),
             ensure_ascii=False,

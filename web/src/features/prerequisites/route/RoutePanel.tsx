@@ -167,6 +167,13 @@ export function RoutePanel({
             {!route.calculating && shownView !== null && (
               <RouteTag state={shownView.state} />
             )}
+            {!route.calculating &&
+              shownView !== null &&
+              shownView.usesAssumedCredits && (
+                <span className="assumed-note">
+                  {t("Assumed credits used")}
+                </span>
+              )}
             {!route.calculating && canExpand && (
               <button
                 className="pill-btn route-expand"

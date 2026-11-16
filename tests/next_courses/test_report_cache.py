@@ -25,6 +25,7 @@ def _report(key: NextCourseReportKey) -> NextCoursesReport:
         include_inferred=key.include_inferred,
         active_only=key.active_only,
         results=(),
+        uses_assumed_credits=False,
     )
 
 
@@ -33,6 +34,7 @@ def _key(
     mode: NextCourseMode = NextCourseMode.ALL,
     language: DisplayLanguage = "en",
     selected: tuple[str, ...] = ("a", "b"),
+    assumed: str = "5",
 ) -> NextCourseReportKey:
     return NextCourseReportKey(
         selected_group_ids=selected,
@@ -42,6 +44,7 @@ def _key(
         display_language=language,
         include_inferred=False,
         active_only=True,
+        assumed_course_credits=assumed,
     )
 
 
@@ -50,6 +53,7 @@ def _raw(
     mode: NextCourseMode = NextCourseMode.ALL,
     language: DisplayLanguage = "en",
     selected: tuple[str, ...] = ("A.1", "B.1"),
+    assumed: str = "5",
 ) -> NextCourseRawKey:
     return NextCourseRawKey(
         selected_inputs=selected,
@@ -59,6 +63,7 @@ def _raw(
         display_language=language,
         include_inferred=False,
         active_only=True,
+        assumed_course_credits=assumed,
     )
 
 
@@ -84,6 +89,7 @@ def test_report_cache_separates_key_inputs_and_is_shared_across_forked_processes
         assert cache.get_raw(_raw(mode=NextCourseMode.AT_LEAST_ONE)) is not None
         assert cache.get_raw(_raw(language="fi")) is None
         assert cache.get_raw(_raw(selected=("A.1", "B.1", "C.1"))) is None
+        assert cache.get_raw(_raw(assumed="6")) is None
         assert cache.get(_key()) is not None
         assert cache.get(_key(mode=NextCourseMode.AT_LEAST_ONE)) is not None
 

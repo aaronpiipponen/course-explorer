@@ -6,24 +6,22 @@ import os
 import pytest
 
 from course_explorer.config import KoriSettings
-from course_explorer.ingestion.kori import TuniKoriSource
+from course_explorer.ingestion.kori import KoriSource
 
 pytestmark = pytest.mark.live
 
 
-def test_public_kori_one_period_contract() -> None:
+def test_public_kori_enumerates_one_period_with_exact_batches_and_group_versions() -> None:
     """Exercise complete one-period enumeration, exact batches, and group discovery."""
     if os.environ.get("COURSE_EXPLORER_RUN_LIVE_KORI_TESTS") != "1":
         pytest.skip("set COURSE_EXPLORER_RUN_LIVE_KORI_TESTS=1 to enable public Kori test")
     settings = KoriSettings()
-    assert settings.first_academic_year_start == settings.current_academic_year_start, (
-        "bound live contract test by setting both academic years equal"
-    )
 
-    with TuniKoriSource(settings) as source:
+    with KoriSource(settings) as source:
+        # The test bounds itself to the highest year of the mapped academic-year interval.
         periods = source.get_curriculum_periods().value
-        assert len(periods) == 1
-        period_id = periods[0].id
+        assert periods
+        period_id = periods[-1].id
 
         course_responses = tuple(source.iter_course_version_refs([period_id]))
         degree_responses = tuple(source.iter_module_version_refs([period_id], "DegreeProgramme"))

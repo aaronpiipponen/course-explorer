@@ -2,7 +2,7 @@
 
 The Inference tab holds the inference run, its publication reports over the resolved dataset, and the target decisions.
 
-![The Inference tab with the inference run, its publication and coverage reports, the generation identities, and the target decisions and failures panels](/docs/screenshots/admin-console-inference.png)
+![The Inference tab with the No Working dataset notice above the idle inference run, the publication diagnostics, coverage, generation identities and failures panels each reporting that no dataset is selected on this site, and the empty target decisions panel](/docs/screenshots/admin-console-inference.png)
 
 ## The inference run
 

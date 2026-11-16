@@ -21,6 +21,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -36,10 +37,13 @@ from course_explorer.administration import (
 )
 from course_explorer.config import (
     AdministrativeDatasetSettings,
+    ConfiguredSettings,
     DatabaseSettings,
     embedding_configuration_for_site,
     load_administrative_dataset_settings,
+    load_instance_settings,
     load_local_lifecycle_settings,
+    load_normalization_settings,
     load_raw_database_settings,
     load_web_settings,
 )
@@ -63,7 +67,8 @@ from course_explorer.datasets import (
     require_selected_dataset_root,
     resolve_dataset_role,
 )
-from course_explorer.db.session import create_database_engine
+from course_explorer.db.session import create_database_engine, database_context
+from course_explorer.ingestion.normalization_repository import NormalizationRepository
 from course_explorer.serving_artifacts import (
     CATALOGUE_FILE,
     catalogue_body,
@@ -77,7 +82,8 @@ from course_explorer.serving_build import (
     remove_serving_database_artifacts,
     require_removable_serving_database_artifacts,
 )
-from course_explorer_admin import mechanics
+from course_explorer_admin import machine_locks, mechanics
+from course_explorer_admin.configuration import ConfigurationWriteReport
 from course_explorer_admin.snapshots import (
     database_exists,
     dump_database,
@@ -364,16 +370,22 @@ def migrate_dataset(role: DatasetRole, *, runner: mechanics.ProcessRunner) -> Da
     """Apply the Alembic head to one role's dataset as explicit maintenance.
 
     It resolves the named role under the action lock. A Working migration requires every stage
-    idle before it can apply, and a Selected migration does not. Neither rewrites a receipt or
-    changes a pointer.
+    idle and takes the checkout reservation before it can apply, and a Selected migration does
+    neither. Neither rewrites a receipt or changes a pointer.
     """
     settings = load_administrative_dataset_settings()
     root = admin_state_root(settings)
     with mechanics.exclusive_action_lock(root, controller_name="datasets"):
         receipt = resolve_dataset_role(root, role)
-        if role == "working":
-            require_stages_idle()
-        return _migrate_database(settings, receipt.database_name, runner=runner)
+        checkout = (
+            machine_locks.checkout_reservation("migrate_working")
+            if role == "working"
+            else nullcontext()
+        )
+        with checkout:
+            if role == "working":
+                require_stages_idle()
+            return _migrate_database(settings, receipt.database_name, runner=runner)
 
 
 def migrate_configured_database(*, runner: mechanics.ProcessRunner) -> DatasetVerification:
@@ -388,6 +400,52 @@ def migrate_configured_database(*, runner: mechanics.ProcessRunner) -> DatasetVe
         if read_dataset_role(root, "selected") is not None:
             raise ValueError("configured database migration refuses an enrolled deployment")
         return _migrate_database(settings, load_raw_database_settings().postgres_db, runner=runner)
+
+
+def save_activity_configuration(
+    file: str,
+    key: str,
+    value: str,
+    *,
+    settings_families: tuple[type[ConfiguredSettings], ...] = (),
+) -> ConfigurationWriteReport:
+    """Save one activity policy key and refresh every present dataset role's stored activity.
+
+    The datasets action lock and the shared idle guard admit the save before any file write.
+    Selected and Working databases refresh through the one normalization activity owner; a
+    deployment without Selected refreshes the configured bootstrap database. A refused save writes
+    no database. A database failure propagates after the key is saved, and repeating the save
+    reapplies the idempotent refresh. Pointers, receipts and stage services are not touched.
+    """
+    from course_explorer_admin import configuration
+
+    settings = load_administrative_dataset_settings()
+    root = admin_state_root(settings)
+    raw = load_raw_database_settings()
+    with mechanics.exclusive_action_lock(root, controller_name="datasets"):
+        require_stages_idle()
+        selected = read_dataset_role(root, "selected")
+        working = read_dataset_role(root, "working")
+        target_names: list[str] = []
+        if selected is not None:
+            target_names.append(selected.database_name)
+        if working is not None:
+            target_names.append(working.database_name)
+        if selected is None:
+            target_names.append(raw.postgres_db)
+        resolved_targets = tuple(dict.fromkeys(target_names))
+        report = configuration.set_configuration_value(
+            file, key, value, settings_families=settings_families
+        )
+        normalization = load_normalization_settings()
+        university = load_instance_settings().university
+        for database_name in resolved_targets:
+            with database_context(raw.model_copy(update={"postgres_db": database_name})) as factory:
+                NormalizationRepository(factory, university=university).refresh_course_activity(
+                    current_academic_year_start=normalization.current_academic_year_start,
+                    activity_window_years=normalization.active_academic_year_window,
+                )
+    return report
 
 
 def _matching_initial_repair(root: Path, database_name: str) -> DatasetReceipt:
@@ -725,17 +783,20 @@ def _copy_dataset_locked(
 def copy_to_working(source_dataset_id: str, *, runner: mechanics.ProcessRunner) -> DatasetReceipt:
     """Copy one enrolled source dataset and publish the unassigned copy as Working.
 
-    Every stage must be idle before any copy mutation. The source may be Selected, Working or any
-    retained dataset whose database is present. The verified copy receives its own identity and
-    database, no artifact bytes are read or written, and Working is published last.
+    The checkout reservation is held before the dataset action lock, so a preparation stage or
+    another Working operation refuses before any copy work. Every stage must be idle before any
+    copy mutation. The source may be Selected, Working or any retained dataset whose database is
+    present. The verified copy receives its own identity and database, no artifact bytes are read
+    or written, and Working is published last.
     """
     settings = load_administrative_dataset_settings()
     root = admin_state_root(settings)
-    with mechanics.exclusive_action_lock(root, controller_name="datasets"):
-        require_stages_idle()
-        receipt = _copy_dataset_locked(settings, root, source_dataset_id, runner)
-        _write_pointer(root, "working", receipt.dataset_id)
-        return receipt
+    with machine_locks.checkout_reservation("copy_to_working"):
+        with mechanics.exclusive_action_lock(root, controller_name="datasets"):
+            require_stages_idle()
+            receipt = _copy_dataset_locked(settings, root, source_dataset_id, runner)
+            _write_pointer(root, "working", receipt.dataset_id)
+            return receipt
 
 
 def read_serving_identity(client: httpx.Client, port: int) -> str:
@@ -824,8 +885,10 @@ def copy_to_selected(
 
     The confirmation is required before any copy. Under the datasets action lock the previous
     Selected dataset, its served identity and the checkout's own web unit are read before the
-    copy is made. The copy is built and verified before the Selected pointer names it, and the site
-    is then restarted and proved to serve the copy's artifact and a changed identity.
+    copy is made. A stopped web unit answers no feature report, so the promotion records no
+    previous identity and proceeds. The copy is built and verified before the Selected pointer
+    names it, and the site is then restarted and proved to serve the copy's artifact and, when a
+    previous identity was recorded, a changed identity.
 
     ``on_progress`` receives each coarse step immediately before that step's mutation, and
     ``rollback`` once before the previous pointer is restored. A caller that omits it gets the one
@@ -853,7 +916,10 @@ def copy_to_selected(
             timeout=load_local_lifecycle_settings().stop_timeout_seconds,
             follow_redirects=False,
         ) as client:
-            previous_identity = read_serving_identity(client, website.port)
+            try:
+                previous_identity = read_serving_identity(client, website.port)
+            except httpx.ConnectError:
+                previous_identity = None
         _report(on_progress, "copy")
         copy = _copy_dataset_locked(settings, root, source_dataset_id, runner)
         _report(on_progress, "build")
@@ -1120,12 +1186,13 @@ def delete_retained_dataset(
 
     The input identity is validated before settings or file work. The owner resolves both roles and
     finds the target receipt again under the action lock. Selected is never deletable by id or
-    database name. Working additionally requires the explicit ``confirm_working`` choice and all
-    stages idle, and a successful Working deletion clears only the Working pointer. Any
-    receipt-bearing branch is a target, including an older manual copy. The owner drops the exact
-    database, removes its confined dump and its derived artifact namespace, leaving the receipt,
-    every pointer except the cleared Working pointer, the dataset directory and the external backups
-    in place. A repeated deletion of absent resources completes with the same report.
+    database name. Working additionally requires the explicit ``confirm_working`` choice, the
+    checkout reservation and all stages idle, and a successful Working deletion clears only the
+    Working pointer. Any receipt-bearing branch is a target, including an older manual copy. The
+    owner drops the exact database, removes its confined dump and its derived artifact namespace,
+    leaving the receipt, every pointer except the cleared Working pointer, the dataset directory and
+    the external backups in place. A repeated deletion of absent resources completes with the same
+    report.
     """
     identity = _require_dataset_id(dataset_id)
     settings = load_administrative_dataset_settings()
@@ -1144,12 +1211,16 @@ def delete_retained_dataset(
         if target.database_name == selected.database_name:
             raise ValueError("refuse to delete the Selected database")
         is_working = working is not None and target.dataset_id == working.dataset_id
-        if is_working:
-            if not confirm_working:
-                raise ValueError("refuse to delete the Working dataset without confirmation")
-            require_stages_idle()
+        if is_working and not confirm_working:
+            raise ValueError("refuse to delete the Working dataset without confirmation")
         _require_dataset_database_name(settings, target)
-        _drop_dataset_resources_locked(settings, root, target, runner)
+        checkout = (
+            machine_locks.checkout_reservation("delete_working") if is_working else nullcontext()
+        )
+        with checkout:
+            if is_working:
+                require_stages_idle()
+            _drop_dataset_resources_locked(settings, root, target, runner)
         if is_working:
             _clear_working_pointer(root)
         return DatasetDeletionReport(

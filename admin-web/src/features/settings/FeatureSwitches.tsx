@@ -1,5 +1,5 @@
 /**
- * The Feature switches panel: the two serving switches of this site's web file.
+ * The Feature switches panel: the three serving switches of this site's web file.
  *
  * Each switch writes its own key of `config/web.toml` through the same configuration client the
  * editor uses, and it shows the written position only after the command acknowledged it. A refused
@@ -21,7 +21,7 @@ import { Switch } from "../../shared/Switch";
 import { usePanelRead } from "../../shared/usePanelRead";
 import { wording } from "../../shared/wording";
 
-/** The two feature switches of the site, in the order the web file lists them. */
+/** The three feature switches of the site. */
 const SWITCHES = [
   {
     key: "WEB_INFERENCE_ENABLED",
@@ -32,6 +32,11 @@ const SWITCHES = [
     key: "WEB_EMBEDDINGS_ENABLED",
     label: wording.settings.embeddingFeatures,
     detail: wording.settings.embeddingDetail,
+  },
+  {
+    key: "WEB_PREREQUISITES_ENABLED",
+    label: wording.settings.prerequisitesFeatures,
+    detail: wording.settings.prerequisitesDetail,
   },
 ];
 

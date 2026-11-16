@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import httpx
@@ -17,17 +18,29 @@ import pytest
 from pydantic import SecretStr
 
 from course_explorer import administration, configuration
-from course_explorer.config import SETTINGS_SOURCE_MARKER, load_raw_database_settings
-from course_explorer.datasets import read_dataset_role, resolve_dataset_role
+from course_explorer.config import (
+    SETTINGS_SOURCE_MARKER,
+    load_admin_web_settings,
+    load_instance_settings,
+    load_raw_database_settings,
+    load_shared_storage_settings,
+    load_web_settings,
+)
+from course_explorer.datasets import (
+    DatasetVerification,
+    read_dataset_role,
+    resolve_dataset_role,
+)
+from course_explorer.instance import UNIVERSITIES
 from course_explorer.serving_artifacts import (
     CATALOGUE_FILE,
     catalogue_body,
     serving_artifact_root,
     serving_key,
 )
+from course_explorer_admin import compose, self_host
 from course_explorer_admin import configuration as editor
 from course_explorer_admin import datasets as dataset_owner
-from course_explorer_admin import self_host
 from course_explorer_admin.self_host import (
     ExampleSetupInput,
     RealDatabaseSetupInput,
@@ -36,16 +49,32 @@ from course_explorer_admin.self_host import (
 )
 from tests.config._support import set_administrative_controller_environment
 from tests.datasets._support import sample_verification
-from tests.support import REPO_ROOT
+from tests.support import REPO_ROOT, write_example_config_tree
 
 _ADMIN_PORT = 18039
 _WEB_PORT = 18037
+_REAL_HTTP_CLIENT = httpx.Client
+
+
+def _clear_written_port_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear the fixture port overrides so the workflow's own file writes supply the values."""
+    for key in (
+        "WEB_PORT",
+        "ADMIN_WEB_PORT",
+        "POSTGRES_PORT",
+        "FEEDBACK_POSTGRES_PORT",
+        "EMBEDDING_PORT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    configuration.clear_configuration_caches()
 
 
 def _checkout(tmp_path: Path, name: str = "checkout") -> Path:
-    """Materialize one temporary checkout with the tracked example assets alone."""
+    """Materialize one temporary checkout with the tracked example assets and the fictional
+    fixture tree."""
     root = tmp_path / name
     shutil.copytree(REPO_ROOT / "examples", root / "examples")
+    shutil.copytree(REPO_ROOT / "data" / "mock", root / "data" / "mock")
     return root
 
 
@@ -120,6 +149,7 @@ class _Runner:
 
     def __init__(self, *, services: tuple[str, ...] = ("db", "embedding")) -> None:
         self.calls: list[tuple[str, ...]] = []
+        self.runs: list[tuple[tuple[str, ...], Path | None, dict[str, str] | None]] = []
         self.interactive_calls: list[tuple[str, ...]] = []
         self.services = set(services)
         self.created: set[str] = set()
@@ -129,6 +159,7 @@ class _Runner:
     def run(self, argv, *, cwd=None, env=None, stdin_path=None, stdout_path=None, timeout=None):
         command = tuple(argv)
         self.calls.append(command)
+        self.runs.append((command, cwd, env))
         output = b""
         if "ps" in command and "--services" in command and "--status" in command:
             output = "".join(f"{service}\n" for service in sorted(self.services)).encode()
@@ -207,14 +238,16 @@ def _bind_http(
     artifact: list[bytes],
     identities: list[str],
     events: list[str],
+    web_port: int = _WEB_PORT,
+    admin_port: int = _ADMIN_PORT,
 ) -> None:
     """Route both workflow proofs through one fixed HTTP boundary and record each read."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         events.append("http")
-        if request.url.path == "/" and request.url.port == _WEB_PORT:
+        if request.url.path == "/" and request.url.port == web_port:
             return httpx.Response(200, content=web_shell)
-        if request.url.path == "/" and request.url.port == _ADMIN_PORT:
+        if request.url.path == "/" and request.url.port == admin_port:
             return httpx.Response(200, content=admin_shell)
         if request.url.path == "/api/features":
             identity = identities[0]
@@ -233,13 +266,103 @@ def _bind_http(
             )
         raise AssertionError(f"unexpected serving read: {request.url}")
 
-    real_client = httpx.Client
-
     def factory(*args, **kwargs):
         kwargs["transport"] = httpx.MockTransport(handler)
-        return real_client(*args, **kwargs)
+        return _REAL_HTTP_CLIENT(*args, **kwargs)
 
     monkeypatch.setattr(httpx, "Client", factory)
+
+
+def test_example_setup_renames_a_clean_checkout(tmp_path: Path) -> None:
+    """A clean checkout takes its instance folder name and rebuilds its environment."""
+    root = _checkout(tmp_path, "clean")
+    (root / ".venv" / "bin").mkdir(parents=True)
+    (root / ".venv" / "bin" / "python").write_text("stale\n", encoding="utf-8")
+    target = tmp_path / "course-explorer-example-proof"
+    runner = _Runner()
+    writes: list[str] = []
+
+    # The tracked fictional fixture tree is part of the clone and holds no runtime state.
+    assert (root / "data" / "mock" / "courses.json").is_file()
+    with pytest.raises(self_host.CheckoutRenamed) as renamed:
+        self_host.prepare_checkout_path(
+            root, "example", "-proof", runner=runner, write=writes.append
+        )
+
+    assert renamed.value.target == target
+    assert str(target) in str(renamed.value)
+    assert not root.exists()
+    assert (target / "data" / "mock" / "courses.json").is_file()
+    assert not (target / ".venv").exists()
+    assert writes == [
+        "rename the checkout to course-explorer-example-proof",
+        "remove the stale Python environment",
+        "rebuild the Python environment",
+    ]
+    command, cwd, env = runner.runs[-1]
+    assert command == (
+        "uv",
+        "sync",
+        "--locked",
+        "--no-managed-python",
+        "--python",
+        sys._base_executable,
+    )
+    assert cwd == target
+    assert env is not None and "VIRTUAL_ENV" not in env
+
+
+def test_example_setup_refuses_to_rename_a_configured_checkout(tmp_path: Path) -> None:
+    """A configured checkout keeps its folder and prints the exact rename instead."""
+    root = _checkout(tmp_path, "configured")
+    (root / ".env").write_text("synthetic\n", encoding="utf-8")
+    target = tmp_path / "course-explorer-example-proof"
+    runner = _Runner()
+    writes: list[str] = []
+
+    assert (
+        self_host.prepare_checkout_path(
+            root, "example", "-proof", runner=runner, write=writes.append
+        )
+        is None
+    )
+
+    assert root.is_dir()
+    assert not target.exists()
+    assert writes == [f"mv {root} {target}"]
+    assert runner.runs == []
+
+    # The runtime state directory below data/ is a marker. The tracked fixture tree is not.
+    state = _checkout(tmp_path, "runtime-state")
+    (state / "data" / "admin").mkdir(parents=True)
+    state_target = tmp_path / "course-explorer-example-state"
+    state_writes: list[str] = []
+    assert (
+        self_host.prepare_checkout_path(
+            state, "example", "-state", runner=_Runner(), write=state_writes.append
+        )
+        is None
+    )
+    assert state.is_dir()
+    assert not state_target.exists()
+    assert state_writes == [f"mv {state} {state_target}"]
+
+    # A linked worktree keeps its checkout path and prints the Git move command instead.
+    worktree = _checkout(tmp_path, "linked")
+    (worktree / ".git").write_text("gitdir: /elsewhere/.git/worktrees/linked\n", encoding="utf-8")
+    linked_target = tmp_path / "course-explorer-example-linked"
+    linked_runner = _Runner()
+    linked_writes: list[str] = []
+    assert (
+        self_host.prepare_checkout_path(
+            worktree, "example", "-linked", runner=linked_runner, write=linked_writes.append
+        )
+        is None
+    )
+    assert worktree.is_dir()
+    assert not linked_target.exists()
+    assert linked_writes == [f"git worktree move {worktree} {linked_target}"]
+    assert linked_runner.runs == []
 
 
 def test_example_files_are_copied_only_when_absent(tmp_path: Path) -> None:
@@ -298,6 +421,12 @@ def test_example_workflow_refuses_an_incapable_interpreter_before_any_download(
     with pytest.raises(ValueError, match="os.memfd_create"):
         setup_example(
             ExampleSetupInput(
+                instance_key="example",
+                web_port=_WEB_PORT,
+                admin_web_port=_ADMIN_PORT,
+                postgres_port=15433,
+                embedding_port=18081,
+                shared_root=tmp_path / "shared-incapable",
                 username="synthetic-operator",
                 password=SecretStr("synthetic-password"),
                 mode="foreground",
@@ -319,6 +448,7 @@ def test_example_workflow_reaches_bootstrap_serving(
     """The same example workflow reaches both shells and bootstrap serving in either mode."""
     root = _checkout(tmp_path, f"checkout-{mode}")
     _prepare_environment(monkeypatch, root)
+    _clear_written_port_overrides(monkeypatch)
     _prepare_host_files(root)
     web_shell, admin_shell = _write_shells(root)
     runner = _Runner()
@@ -332,9 +462,17 @@ def test_example_workflow_reaches_bootstrap_serving(
         artifact=artifact,
         identities=identities,
         events=events,
+        web_port=_WEB_PORT,
+        admin_port=_ADMIN_PORT,
     )
 
-    monkeypatch.setattr(self_host.artifacts, "artifact_present", lambda path, digest: True)
+    artifact_paths: list[Path] = []
+
+    def artifact_present(path: Path, digest: str) -> bool:
+        artifact_paths.append(Path(path))
+        return True
+
+    monkeypatch.setattr(self_host.artifacts, "artifact_present", artifact_present)
     monkeypatch.setattr(self_host, "_require_native_libraries", lambda: None)
     monkeypatch.setattr(self_host, "_existing_table_names", lambda settings: ())
     unit_directory = tmp_path / "user-units"
@@ -373,6 +511,12 @@ def test_example_workflow_reaches_bootstrap_serving(
     report = setup_example(
         ExampleSetupInput(
             app_url=f"http://localhost:{_WEB_PORT}/",
+            instance_key="example",
+            web_port=_WEB_PORT,
+            admin_web_port=_ADMIN_PORT,
+            postgres_port=15433,
+            embedding_port=18081,
+            shared_root=tmp_path / "shared-bootstrap",
             username="synthetic-operator",
             password=SecretStr("synthetic-password"),
             mode=mode,
@@ -386,6 +530,22 @@ def test_example_workflow_reaches_bootstrap_serving(
     assert report.dataset_id is None
     assert read_dataset_role(root / "data" / "admin", "selected") is None
     assert "identity:bootstrap" in events
+    assert editor.read_configuration_file("config/web.toml").values["INSTANCE_KEY"] == "example"
+    assert editor.read_configuration_file("config/web.toml").values["WEB_PORT"] == _WEB_PORT
+    assert editor.read_configuration_file("config/admin_web.toml").values["ADMIN_WEB_PORT"] == (
+        _ADMIN_PORT
+    )
+    assert editor.read_configuration_file("config/database.toml").values["POSTGRES_PORT"] == 15433
+    assert (
+        editor.read_configuration_file("config/feedback.toml").values["FEEDBACK_POSTGRES_PORT"]
+        == 15433
+    )
+    assert editor.read_configuration_file("config/search.toml").values["EMBEDDING_PORT"] == 18081
+    assert sorted(path.name for path in (tmp_path / "shared-bootstrap").iterdir()) == [
+        "locks",
+        "models",
+    ]
+    assert artifact_paths == [tmp_path / "shared-bootstrap" / "models" / "bge-m3-q8_0.gguf"]
 
     commands = runner.calls
     interpreter = str(root / ".venv" / "bin" / "python")
@@ -420,28 +580,208 @@ def test_example_workflow_reaches_bootstrap_serving(
     if mode == "user":
         assert sorted(path.name for path in unit_directory.iterdir()) == sorted(
             (
-                "course-explorer-checkout-user-web.service",
-                "course-explorer-checkout-user-admin-web.service",
-                "course-explorer-checkout-user-feedback-sender.service",
-                "course-explorer-checkout-user-feedback-sender.timer",
+                "course-explorer-example-web.service",
+                "course-explorer-example-admin-web.service",
+                "course-explorer-example-feedback-sender.service",
+                "course-explorer-example-feedback-sender.timer",
             )
         )
+        timer = (unit_directory / "course-explorer-example-feedback-sender.timer").read_text(
+            encoding="utf-8"
+        )
+        assert "Unit=course-explorer-example-feedback-sender.service" in timer
+        assert "@FEEDBACK_SERVICE@" not in timer
         enabled = [
             command for command in commands if command[:3] == ("systemctl", "--user", "enable")
         ]
         site = editor.read_configuration_file("config/admin_web.toml").values
-        assert site["ADMIN_SITE_WEB_SERVICE_UNIT"] == ("course-explorer-checkout-user-web.service")
+        assert site["ADMIN_SITE_WEB_SERVICE_UNIT"] == ("course-explorer-example-web.service")
         assert site["ADMIN_SITE_ADMIN_SERVICE_UNIT"] == (
-            "course-explorer-checkout-user-admin-web.service"
+            "course-explorer-example-admin-web.service"
         )
         assert site["ADMIN_SITE_WEB_SERVICE_SCOPE"] == "user"
         assert [command[-1] for command in enabled] == [
-            "course-explorer-checkout-user-web.service",
-            "course-explorer-checkout-user-admin-web.service",
+            "course-explorer-example-web.service",
+            "course-explorer-example-admin-web.service",
         ]
     else:
         assert len(runner.children) == 2
         assert all(child.terminated and child.waited for child in runner.children)
+
+
+def _stub_example_host(
+    monkeypatch: pytest.MonkeyPatch,
+    root: Path,
+    *,
+    web_port: int = _WEB_PORT,
+    admin_port: int = _ADMIN_PORT,
+    unit_directory: Path,
+) -> tuple[_Runner, list[str]]:
+    """Bind one example workflow's external boundaries to a temporary checkout."""
+    _prepare_host_files(root)
+    web_shell, admin_shell = _write_shells(root)
+    runner = _Runner()
+    events: list[str] = []
+    artifact = [b'{"courses":[]}']
+    identities = ["bootstrap"]
+    _bind_http(
+        monkeypatch,
+        web_shell=web_shell,
+        admin_shell=admin_shell,
+        artifact=artifact,
+        identities=identities,
+        events=events,
+        web_port=web_port,
+        admin_port=admin_port,
+    )
+    monkeypatch.setattr(self_host.artifacts, "artifact_present", lambda path, digest: True)
+    monkeypatch.setattr(self_host, "_require_native_libraries", lambda: None)
+    monkeypatch.setattr(self_host, "_existing_table_names", lambda settings: ())
+    monkeypatch.setattr(self_host, "_port_is_free", lambda host, port: True)
+    monkeypatch.setattr(self_host, "_user_unit_directory", lambda: unit_directory)
+    monkeypatch.setattr(self_host, "_prepare_feedback_store", lambda *, runner: None)
+    monkeypatch.setattr(
+        dataset_owner,
+        "migrate_configured_database",
+        lambda *, runner: sample_verification(),
+    )
+
+    original_run = runner.run
+
+    def run(argv, **kwargs):
+        if tuple(argv)[-2:] == ("scripts/mock_data.py", "write-artifacts"):
+            _write_catalogue(root, load_raw_database_settings(), artifact[0])
+        return original_run(argv, **kwargs)
+
+    runner.run = run
+    return runner, events
+
+
+def test_setup_instances_use_independent_resources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Two setups prepare their own settings, unit namespaces and Compose project names."""
+    instances = (
+        ("example", _WEB_PORT, _ADMIN_PORT, 15433, 18081, ""),
+        ("diak", 18077, 18079, 15473, 18121, "-guide"),
+    )
+    projections: dict[str, dict[str, str]] = {}
+    for key, web_port, admin_port, postgres_port, embedding_port, suffix in instances:
+        root = _checkout(tmp_path, f"instance-{key}")
+        _prepare_environment(monkeypatch, root)
+        _clear_written_port_overrides(monkeypatch)
+        # A Peppi PSG entry maps the periods its source lists, so its checkout carries the last
+        # listed year in CURRENT_ACADEMIC_YEAR before the setup writes the instance key.
+        psg_block = UNIVERSITIES[key].peppi_psg
+        if psg_block is not None:
+            write_example_config_tree(root)
+            curriculum = root / "config" / "curriculum.toml"
+            curriculum.write_text(
+                curriculum.read_text(encoding="utf-8").replace(
+                    'CURRENT_ACADEMIC_YEAR = "2026-2027"',
+                    f'CURRENT_ACADEMIC_YEAR = "{psg_block.periods[-1].id}"',
+                ),
+                encoding="utf-8",
+            )
+        unit_directory = tmp_path / f"units-{key}"
+        runner, events = _stub_example_host(
+            monkeypatch,
+            root,
+            web_port=web_port,
+            admin_port=admin_port,
+            unit_directory=unit_directory,
+        )
+        report = setup_example(
+            ExampleSetupInput(
+                instance_key=key,
+                web_port=web_port,
+                admin_web_port=admin_port,
+                postgres_port=postgres_port,
+                embedding_port=embedding_port,
+                shared_root=tmp_path / f"shared-{key}",
+                username="synthetic-operator",
+                password=SecretStr("synthetic-password"),
+                mode="user",
+            ),
+            runner=runner,
+            write=events.append,
+            checkout_suffix=suffix,
+        )
+
+        assert report.app_url == f"http://localhost:{web_port}/"
+        web_service = f"course-explorer-{key}{suffix}-web.service"
+        admin_service = f"course-explorer-{key}{suffix}-admin-web.service"
+        feedback_service = f"course-explorer-{key}{suffix}-feedback-sender.service"
+        assert sorted(path.name for path in unit_directory.iterdir()) == sorted(
+            (
+                web_service,
+                admin_service,
+                feedback_service,
+                f"{feedback_service.removesuffix('.service')}.timer",
+            )
+        )
+        assert load_instance_settings().instance_key == key
+        assert load_web_settings().web_port == web_port
+        assert load_admin_web_settings().admin_web_port == admin_port
+        assert load_admin_web_settings().admin_web_origin == f"https://localhost:{admin_port}"
+        assert load_raw_database_settings().postgres_port == postgres_port
+        site = editor.read_configuration_file("config/admin_web.toml").values
+        assert site["ADMIN_SITE_WEB_SERVICE_UNIT"] == web_service
+        assert site["ADMIN_SITE_ADMIN_SERVICE_UNIT"] == admin_service
+        web_values = editor.read_configuration_file("config/web.toml").values
+        assert web_values["WEB_PREREQUISITES_ENABLED"] is (
+            UNIVERSITIES[key].source_family == "sisu"
+        )
+        if key in {"diak", "metropolia"}:
+            assert UNIVERSITIES[key].source_family == "guide"
+            assert web_values["WEB_PREREQUISITES_ENABLED"] is False
+        projections[key] = compose.compose_environment()
+
+    assert projections["example"]["COURSE_EXPLORER_PROJECT_NAME"] == "course-explorer-example"
+    assert projections["diak"]["COURSE_EXPLORER_PROJECT_NAME"] == "course-explorer-diak"
+    assert projections["example"]["POSTGRES_PORT"] == "15433"
+    assert projections["diak"]["POSTGRES_PORT"] == "15473"
+    assert projections["example"]["EMBEDDING_PORT"] == "18081"
+    assert projections["diak"]["EMBEDDING_PORT"] == "18121"
+
+
+def test_setup_adopts_the_configured_shared_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A supplied existing shared directory keeps its file and gains the two layout directories."""
+    root = _checkout(tmp_path, "adopt")
+    _prepare_environment(monkeypatch, root)
+    _clear_written_port_overrides(monkeypatch)
+    shared = tmp_path / "existing-shared"
+    shared.mkdir()
+    sentinel = shared / "model.gguf"
+    sentinel.write_bytes(b"synthetic model bytes")
+    runner, events = _stub_example_host(monkeypatch, root, unit_directory=tmp_path / "adopt-units")
+
+    setup_example(
+        ExampleSetupInput(
+            instance_key="example",
+            web_port=_WEB_PORT,
+            admin_web_port=_ADMIN_PORT,
+            postgres_port=15433,
+            embedding_port=18081,
+            shared_root=shared,
+            username="synthetic-operator",
+            password=SecretStr("synthetic-password"),
+            mode="user",
+        ),
+        runner=runner,
+        write=events.append,
+    )
+
+    assert sentinel.read_bytes() == b"synthetic model bytes"
+    assert sorted(path.name for path in shared.iterdir()) == ["locks", "model.gguf", "models"]
+    assert oct((shared / "models").stat().st_mode & 0o777) == "0o700"
+    assert oct((shared / "locks").stat().st_mode & 0o777) == "0o700"
+    assert load_shared_storage_settings().shared_root == shared
+    assert editor.read_configuration_file("config/database.toml").values[
+        "ADMIN_SHARED_ROOT"
+    ] == str(shared)
 
 
 def test_real_database_workflow_serves_an_empty_initial_selection(
@@ -497,6 +837,8 @@ def test_real_database_workflow_serves_an_empty_initial_selection(
         runner=runner,
         write=events.append,
     )
+    verification = dataset_owner.migrate_dataset("selected", runner=runner)
+    assert isinstance(verification, DatasetVerification)
 
     assert report.dataset_id == "0" * 32
     assert load_raw_database_settings().postgres_db == "course_explorer"

@@ -53,6 +53,7 @@ const report = {
     element_count: 3,
   },
   dataset_identity: "synthetic-dataset",
+  assumed_course_credits: "5",
   max_compact_nodes: 10000,
   solver: {
     root_group_id: "root",

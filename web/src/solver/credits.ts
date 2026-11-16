@@ -1,4 +1,33 @@
-/** Parse decimal credit values into exact hundredths. */
+/**
+ * Convert credit values between decimal credit text and exact hundredths, and substitute the
+ * configured assumed value for a course with no official minimum.
+ */
+import type { CourseSummary } from "../api/types";
+
+/**
+ * Return one course's effective minimum credits in hundredths.
+ *
+ * The official minimum is used when present. A course with no official minimum uses the site's
+ * configured assumed credit value.
+ */
+export function effectiveCourseCredits(
+  course: Pick<CourseSummary, "credits_min">,
+  assumedCourseCredits: string,
+): number {
+  return parseCredits(course.credits_min ?? assumedCourseCredits);
+}
+
+/**
+ * Return whether any supplied course carries no official minimum credit.
+ *
+ * Every supplied course contributes its effective credits to one displayed total, so a null
+ * minimum makes that total count the configured assumed value.
+ */
+export function coursesUseAssumedCredits(
+  courses: readonly Pick<CourseSummary, "credits_min">[],
+): boolean {
+  return courses.some((course) => course.credits_min === null);
+}
 
 /**
  * Return one decimal credit string as hundredths.

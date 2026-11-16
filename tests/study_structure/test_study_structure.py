@@ -228,7 +228,7 @@ def _assert_full_structure(selection: str) -> None:
     assert _read_one(service, "module-group-study") == study_root
 
     assert root.module.group_id == "module-group-degree"
-    assert root.module.sisu_module_id == "module-group-degree-v1"
+    assert root.module.source_version_id == "module-group-degree-v1"
     assert root.module.module_type is ModuleType.DEGREE_PROGRAMME
     assert root.module.code is None
     assert root.module.name_en == "Module module-group-degree-v1"
@@ -577,10 +577,10 @@ def test_explicit_versions_resolve_root_and_nested_structure(tmp_path: Path) -> 
         module_versions={"module-group-root": "root-v2", "module-group-nested": "nested-v2"},
     )
 
-    assert root.module.sisu_module_id == "root-v2"
+    assert root.module.source_version_id == "root-v2"
     nested = root.rule.children[1].module
     assert nested is not None
-    assert nested.module.sisu_module_id == "nested-v2"
+    assert nested.module.source_version_id == "nested-v2"
     assert nested.rule.course is not None
     assert nested.rule.course.group_id == "course-group-nested-v2"
 

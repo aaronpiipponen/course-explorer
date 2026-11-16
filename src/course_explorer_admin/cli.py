@@ -63,6 +63,7 @@ from course_explorer_admin.commands import (
     worker_origin_notice,
 )
 from course_explorer_admin.logs import LOG_SOURCES
+from course_explorer_admin.self_host import CheckoutRenamed
 
 _STAGES = ("ingestion", "translation", "embedding", "inference")
 _ACTIONS = ("start", "pause", "resume", "status", "stop")
@@ -267,6 +268,7 @@ def main(
     run_command: StageCommand | None = None,
     run_summary: SummaryCommand | None = None,
     configuration_families: tuple[type[ConfiguredSettings], ...] = (),
+    checkout_suffix: str = "",
 ) -> int:
     """Parse one command and delegate once. Return 0 on success, 1 on failure, 130 on interrupt.
 
@@ -274,7 +276,8 @@ def main(
     replaces that one call only, so a wrapper can inject an extra route without owning dispatch.
     ``configuration_families`` reach the configuration save and the menu's configuration entry
     alone, so a wrapper can add the validation families of a package the base product does not
-    import.
+    import. ``checkout_suffix`` reaches the menu and the example setup alone, so a wrapper can
+    append its own segment to the example checkout and user-unit names.
     """
     args = _parser().parse_args(argv)
     if args.command is None or args.command == "menu":
@@ -282,6 +285,7 @@ def main(
             run_command=run_command,
             run_summary=run_summary,
             configuration_families=configuration_families,
+            checkout_suffix=checkout_suffix,
         )
     stage_command = run_command or run_administrative_command
     summary_command = run_summary or run_administrative_summary
@@ -295,7 +299,9 @@ def main(
             payload = sys.stdin.read()
             if args.verb == "example":
                 example = ExampleSetupInput.model_validate_json(payload)
-                report = run_administrative_example_setup(example, write=_progress)
+                report = run_administrative_example_setup(
+                    example, write=_progress, checkout_suffix=checkout_suffix
+                )
             else:
                 real = RealDatabaseSetupInput.model_validate_json(payload)
                 report = run_administrative_real_database_setup(real, write=_progress)
@@ -431,6 +437,9 @@ def main(
         return 0
     except KeyboardInterrupt:
         return 130
+    except CheckoutRenamed as renamed:
+        print(str(renamed), file=sys.stderr)
+        return 0
     except Exception as exc:
         operation = (
             "setup"

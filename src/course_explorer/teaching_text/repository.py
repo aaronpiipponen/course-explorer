@@ -1,9 +1,10 @@
 """Persistence seam for provenance-aware derived teaching-text translations.
 
 This is the sole writer and reader for `derived_course_texts`. It validates every input against
-the selected representative's current official same-field source text before any database write,
-computes the persisted source hash itself, and reconciles rows transactionally. It never
-touches official `course_versions` names or `course_texts`.
+the configured university's accepted translation pairs and the selected representative's current
+official same-field source text before any database write, computes the persisted source hash
+itself, and reconciles rows transactionally. It never touches the official text cells or module
+name cells.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from course_explorer.config import load_instance_settings
 from course_explorer.curriculum import CatalogueRepresentativeTeachingText
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.db.models import (
@@ -21,6 +23,7 @@ from course_explorer.db.models import (
     DerivedCourseText,
 )
 from course_explorer.db.session import session_scope
+from course_explorer.instance import UniversityMetadata
 from course_explorer.teaching_text.service import (
     DerivedTranslation,
     DerivedTranslationInput,
@@ -36,39 +39,49 @@ from course_explorer.teaching_text.service import (
 def _prepare_inputs(
     inputs: tuple[DerivedTranslationInput, ...],
     representatives: dict[str, CatalogueRepresentativeTeachingText],
+    university: UniversityMetadata,
 ) -> tuple[tuple[DerivedTranslationInput, str], ...]:
-    """Validate every input against official text and return it with its source hash.
+    """Validate every input against the configured policy and official text.
 
     The whole batch is prepared before any database write, so one invalid entry leaves no rows.
+    An accepted manual import may use any source listed for its mapped target.
     """
     prepared: list[tuple[DerivedTranslationInput, str]] = []
     seen: set[TranslationKey] = set()
+    official_languages = set(university.official_languages)
     for item in inputs:
-        key = translation_key(item.sisu_course_unit_id, item.field, item.language)
+        key = translation_key(item.source_version_id, item.field, item.language)
         if key in seen:
             raise ValueError(
                 "duplicate translation input for "
-                f"{item.sisu_course_unit_id}/{item.field}/{item.language}"
+                f"{item.source_version_id}/{item.field}/{item.language}"
             )
         seen.add(key)
-        representative = representatives.get(item.sisu_course_unit_id)
+        if item.language not in official_languages:
+            raise ValueError(f"{item.source_version_id}/{item.field} uses an unconfigured language")
+        listed_sources = university.translation_priority.get(item.language)
+        if listed_sources is None or item.source_language not in listed_sources:
+            raise ValueError(
+                f"{item.source_version_id}/{item.field} is not an accepted translation pair"
+            )
+        representative = representatives.get(item.source_version_id)
         if representative is None:
             raise ValueError(
-                f"{item.sisu_course_unit_id} is not a selected representative course version"
+                f"{item.source_version_id} is not a selected representative course version"
             )
         if official_teaching_text(representative, item.field, item.language) is not None:
             raise ValueError(
-                f"{item.sisu_course_unit_id}/{item.field}/{item.language} already has official text"
+                f"{item.source_version_id}/{item.field}/{item.language} already has official text"
             )
         source = official_teaching_text(representative, item.field, item.source_language)
         if source is None:
             raise ValueError(
-                f"{item.sisu_course_unit_id}/{item.field}/{item.source_language} "
+                f"{item.source_version_id}/{item.field}/{item.source_language} "
                 "has no official source text"
             )
         if source != item.source_text:
             raise ValueError(
-                f"{item.sisu_course_unit_id}/{item.field} source text does not match official text"
+                f"{item.source_version_id}/{item.field} source text does not match official text"
             )
         prepared.append((item, teaching_text_sha256(item.source_text)))
     return tuple(prepared)
@@ -89,30 +102,36 @@ def _translation_values(item: DerivedTranslationInput, source_hash: str) -> dict
 class DerivedTranslationRepository(DerivedTranslationRead):
     """Validate, upsert, and read derived translations through one transaction seam."""
 
-    def __init__(self, factory: sessionmaker[Session]) -> None:
+    def __init__(
+        self,
+        factory: sessionmaker[Session],
+        *,
+        university: UniversityMetadata | None = None,
+    ) -> None:
         self._factory = factory
+        self._university = load_instance_settings().university if university is None else university
 
     def list_for_course_versions(
-        self, sisu_course_unit_ids: Collection[str]
+        self, source_version_ids: Collection[str]
     ) -> tuple[DerivedTranslation, ...]:
         """Return detached derived rows for the requested source IDs in stable order."""
-        source_ids = tuple(sisu_course_unit_ids)
+        source_ids = tuple(source_version_ids)
         if not source_ids:
             return ()
         with self._factory() as session:
             rows = session.execute(
-                select(DerivedCourseText, CourseVersion.sisu_course_unit_id)
+                select(DerivedCourseText, CourseVersion.source_version_id)
                 .join(CourseVersion, CourseVersion.id == DerivedCourseText.course_version_id)
-                .where(CourseVersion.sisu_course_unit_id.in_(source_ids))
+                .where(CourseVersion.source_version_id.in_(source_ids))
                 .order_by(
-                    CourseVersion.sisu_course_unit_id,
+                    CourseVersion.source_version_id,
                     DerivedCourseText.field,
                     DerivedCourseText.language,
                 )
             )
             return tuple(
                 DerivedTranslation(
-                    sisu_course_unit_id=sisu_course_unit_id,
+                    source_version_id=source_version_id,
                     field=row.field,
                     language=row.language,
                     source_language=row.source_language,
@@ -122,7 +141,7 @@ class DerivedTranslationRepository(DerivedTranslationRead):
                     generated_at=row.generated_at,
                     translation_model=row.translation_model,
                 )
-                for row, sisu_course_unit_id in rows
+                for row, source_version_id in rows
             )
 
     def upsert(self, translations: Sequence[DerivedTranslationInput]) -> TranslationImportReport:
@@ -136,31 +155,31 @@ class DerivedTranslationRepository(DerivedTranslationRead):
                 unchanged_count=0,
             )
         representatives: dict[str, CatalogueRepresentativeTeachingText] = {
-            representative.sisu_course_unit_id: representative
+            representative.source_version_id: representative
             for representative in CurriculumRepository(
-                self._factory
-            ).get_representative_teaching_texts(tuple(item.sisu_course_unit_id for item in inputs))
+                self._factory, university=self._university
+            ).get_representative_teaching_texts(tuple(item.source_version_id for item in inputs))
         }
-        prepared = _prepare_inputs(inputs, representatives)
+        prepared = _prepare_inputs(inputs, representatives, self._university)
 
         inserted = 0
         updated = 0
         unchanged = 0
         with session_scope(self._factory) as session:
             versions = {
-                sisu_course_unit_id: version_id
-                for sisu_course_unit_id, version_id in session.execute(
-                    select(CourseVersion.sisu_course_unit_id, CourseVersion.id).where(
-                        CourseVersion.sisu_course_unit_id.in_(
-                            tuple(item.sisu_course_unit_id for item, _ in prepared)
+                source_version_id: version_id
+                for source_version_id, version_id in session.execute(
+                    select(CourseVersion.source_version_id, CourseVersion.id).where(
+                        CourseVersion.source_version_id.in_(
+                            tuple(item.source_version_id for item, _ in prepared)
                         )
                     )
                 )
             }
             for item, _ in prepared:
-                if item.sisu_course_unit_id not in versions:
+                if item.source_version_id not in versions:
                     raise ValueError(
-                        f"selected representative course version {item.sisu_course_unit_id} is missing"
+                        f"selected representative course version {item.source_version_id} is missing"
                     )
             version_ids = tuple(versions.values())
             existing = {
@@ -172,7 +191,7 @@ class DerivedTranslationRepository(DerivedTranslationRead):
                 )
             }
             for item, source_hash in prepared:
-                version_id = versions[item.sisu_course_unit_id]
+                version_id = versions[item.source_version_id]
                 row = existing.get((version_id, item.field, item.language))
                 values = _translation_values(item, source_hash)
                 if row is None:

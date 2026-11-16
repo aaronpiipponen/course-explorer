@@ -143,6 +143,7 @@ describe("satisfaction", () => {
     const evaluation = evaluateSatisfaction(
       structure("canonical.compilation"),
       ["b", "zzz-unrelated", "a", "a"],
+      "5",
     );
     expect(evaluation.basis_group_ids).toEqual(["a", "b", "zzz-unrelated"]);
     expect(evaluation.requirements_state).toBe("satisfied");
@@ -151,6 +152,7 @@ describe("satisfaction", () => {
     const reversedInput = evaluateSatisfaction(
       structure("canonical.compilation"),
       ["a", "b", "zzz-unrelated"],
+      "5",
     );
     expect(reversedInput).toEqual(evaluation);
 
@@ -180,7 +182,7 @@ describe("satisfaction", () => {
     );
 
     const basis = ["a", "b"];
-    const session = new SatisfactionSession(wrappers, basis);
+    const session = new SatisfactionSession(wrappers, basis, "5");
     expect(session.evaluate(requirementsPieceId)).toBe("satisfied");
     for (const childUse of childUses(wrappers, requirementsUseId)) {
       expect(session.evaluate(pieceOfUse(wrappers, childUse))).toBe(
@@ -211,7 +213,11 @@ describe("satisfaction", () => {
       { count_min: 2, count_max: 2 },
     );
 
-    const positionsSession = new SatisfactionSession(positionsStructure, ["a"]);
+    const positionsSession = new SatisfactionSession(
+      positionsStructure,
+      ["a"],
+      "5",
+    );
     expect(positionsSession.evaluate(oneCoursePiece)).toBe("satisfied");
     expect(positionsSession.evaluate(twoCoursesPiece)).toBe("unsatisfied");
   });
@@ -220,22 +226,29 @@ describe("satisfaction", () => {
     const rootlessEvaluation = evaluateSatisfaction(
       structure("logical.rootless"),
       [],
+      "5",
     );
     expect(rootlessEvaluation.requirements_state).toBe("satisfied");
 
-    const andEvaluation = evaluateSatisfaction(structure("logical.and"), ["a"]);
+    const andEvaluation = evaluateSatisfaction(
+      structure("logical.and"),
+      ["a"],
+      "5",
+    );
     expect(andEvaluation.requirements_state).toBe("unsatisfied");
 
     expect(
-      evaluateSatisfaction(structure("logical.or"), ["a"]).requirements_state,
+      evaluateSatisfaction(structure("logical.or"), ["a"], "5")
+        .requirements_state,
     ).toBe("satisfied");
     expect(
-      evaluateSatisfaction(structure("logical.or"), []).requirements_state,
+      evaluateSatisfaction(structure("logical.or"), [], "5").requirements_state,
     ).toBe("unsatisfied");
 
     const recommendedEvaluation = evaluateSatisfaction(
       structure("logical.recommended"),
       ["recommended"],
+      "5",
     );
     expect(recommendedEvaluation.include_recommended).toBe(true);
     expect(recommendedEvaluation.include_inferred).toBe(false);
@@ -244,6 +257,7 @@ describe("satisfaction", () => {
     const inferredEvaluation = evaluateSatisfaction(
       structure("logical.inferred"),
       [],
+      "5",
     );
     expect(inferredEvaluation.include_inferred).toBe(true);
     expect(inferredEvaluation.include_recommended).toBe(false);
@@ -256,11 +270,15 @@ describe("satisfaction", () => {
       "missing_course",
     );
 
-    const subtreeSession = new SatisfactionSession(subtreeStructure, ["a"]);
+    const subtreeSession = new SatisfactionSession(
+      subtreeStructure,
+      ["a"],
+      "5",
+    );
     expect(subtreeSession.evaluate(courseAPiece)).toBe("satisfied");
     expect(subtreeSession.evaluate(null)).toBe("satisfied");
     expect(subtreeSession.evaluate(unresolvedPieceId)).toBe("unresolved");
-    const emptySession = new SatisfactionSession(subtreeStructure, []);
+    const emptySession = new SatisfactionSession(subtreeStructure, [], "5");
     expect(emptySession.evaluate(courseAPiece)).toBe("unsatisfied");
 
     const leaves = Array.from(
@@ -268,8 +286,14 @@ describe("satisfaction", () => {
       (_, index) => `leaf-${String(index).padStart(2, "0")}`,
     );
     const cardinalityStructure = structure("logical.cardinality");
+    const assumedLeaf = cardinalityStructure.courses.find(
+      (course) => course.group_id === leaves[0],
+    );
+    expect(assumedLeaf).toBeDefined();
+    if (assumedLeaf !== undefined) assumedLeaf.credits_min = null;
     expect(
-      evaluateSatisfaction(cardinalityStructure, leaves).requirements_state,
+      evaluateSatisfaction(cardinalityStructure, leaves, "5")
+        .requirements_state,
     ).toBe("satisfied");
     if (cardinalityStructure.root_use_id === null) {
       throw new Error("logical.cardinality has no root use");
@@ -296,33 +320,55 @@ describe("satisfaction", () => {
     const cardinalitySession = new SatisfactionSession(
       cardinalityStructure,
       leaves,
+      "5",
     );
     expect(cardinalitySession.evaluate(tenCreditsPiece)).toBe("satisfied");
     expect(cardinalitySession.evaluate(twelveCreditsPiece)).toBe("unsatisfied");
+    expect(cardinalitySession.usesAssumedCredits).toBe(true);
+
+    const emptyCardinalitySession = new SatisfactionSession(
+      cardinalityStructure,
+      [],
+      "5",
+    );
+    expect(emptyCardinalitySession.evaluate(tenCreditsPiece)).toBe(
+      "unsatisfied",
+    );
+    expect(emptyCardinalitySession.usesAssumedCredits).toBe(false);
+    expect(
+      evaluateSatisfaction(cardinalityStructure, leaves, "5")
+        .uses_assumed_credits,
+    ).toBe(false);
   });
 
   it("logical composed and requires every child", () => {
-    const evaluation = evaluateSatisfaction(structure("composed.logical_and"), [
-      "a",
-    ]);
+    const evaluation = evaluateSatisfaction(
+      structure("composed.logical_and"),
+      ["a"],
+      "5",
+    );
     expect(evaluation.requirements_state).toBe("unsatisfied");
 
-    const both = evaluateSatisfaction(structure("composed.logical_and"), [
-      "a",
-      "b",
-    ]);
+    const both = evaluateSatisfaction(
+      structure("composed.logical_and"),
+      ["a", "b"],
+      "5",
+    );
     expect(both.requirements_state).toBe("satisfied");
   });
 
   it("expanded course satisfaction stops at a basis head", () => {
-    const covered = evaluateSatisfaction(structure("expanded.compilation"), [
-      "a",
-    ]);
+    const covered = evaluateSatisfaction(
+      structure("expanded.compilation"),
+      ["a"],
+      "5",
+    );
     expect(covered.requirements_state).toBe("satisfied");
 
     const withDescendant = evaluateSatisfaction(
       structure("expanded.compilation"),
       ["a", "e"],
+      "5",
     );
     expect(withDescendant.requirements_state).toBe("satisfied");
     expect(withDescendant.basis_group_ids).toEqual(["a", "e"]);
@@ -345,26 +391,28 @@ describe("satisfaction", () => {
       { count_min: 2, count_max: 2 },
     );
 
-    const expandedSession = new SatisfactionSession(expandedStructure, [
-      "a",
-      "e",
-    ]);
+    const expandedSession = new SatisfactionSession(
+      expandedStructure,
+      ["a", "e"],
+      "5",
+    );
     expect(expandedSession.evaluate(exactOnePiece)).toBe("satisfied");
     expect(expandedSession.evaluate(exactTwoPiece)).toBe("unsatisfied");
   });
 
   it("excluded completed and selected basis cannot satisfy", () => {
-    const evaluation = evaluateSatisfaction(structure("excluded.compilation"), [
-      "leaf",
-      "head",
-    ]);
+    const evaluation = evaluateSatisfaction(
+      structure("excluded.compilation"),
+      ["leaf", "head"],
+      "5",
+    );
     expect(evaluation.requirements_state).toBe("unsatisfied");
 
-    const withKeep = evaluateSatisfaction(structure("excluded.compilation"), [
-      "leaf",
-      "head",
-      "keep",
-    ]);
+    const withKeep = evaluateSatisfaction(
+      structure("excluded.compilation"),
+      ["leaf", "head", "keep"],
+      "5",
+    );
     expect(withKeep.requirements_state).toBe("satisfied");
   });
 
@@ -402,7 +450,9 @@ describe("satisfaction", () => {
     // The cached report carries the server's structural inputs only. The live profile marks and
     // exclusions reach the local evaluator without touching it.
     const cached = JSON.stringify(report.solver);
-    const states = evaluateGraphNodeStates(report, input());
+    const evaluation = evaluateGraphNodeStates(report, input());
+    const states = evaluation.states;
+    expect(evaluation.uses_assumed_credits).toBe(false);
     expect(JSON.stringify(report.solver)).toBe(cached);
     expect(stateOf(states, courseA.node_id)).toEqual({
       node_id: courseA.node_id,
@@ -440,14 +490,14 @@ describe("satisfaction", () => {
     const completed = evaluateGraphNodeStates(
       report,
       input({ completed_node_keys: [andNode.node_id] }),
-    );
+    ).states;
     expect(stateOf(completed, andNode.node_id).manually_completed).toBe(true);
     expect(JSON.stringify(report.solver)).toBe(cached);
 
     const excluded = evaluateGraphNodeStates(
       report,
       input({ excluded_node_keys: [andNode.node_id] }),
-    );
+    ).states;
     expect(stateOf(excluded, andNode.node_id).is_excluded).toBe(true);
     expect(JSON.stringify(report.solver)).toBe(cached);
 
@@ -464,7 +514,7 @@ describe("satisfaction", () => {
         completed_codes: ["a"],
         excluded_codes: [],
       }),
-    );
+    ).states;
     expect(stateOf(completedBasis, courseA.node_id).completed_by_courses).toBe(
       true,
     );

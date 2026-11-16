@@ -7,10 +7,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
+from course_explorer_admin import machine_locks
 from course_explorer_admin.mechanics import (
     SubprocessRunner,
     exclusive_action_lock,
@@ -62,6 +64,93 @@ def test_exclusive_action_lock_rejects_concurrent_action(tmp_path: Path) -> None
         after.st_size,
         oct(before.st_mode & 0o777),
     )
+
+
+def test_machine_reservations_are_persistent_and_owner_guarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One file per reservation names its owner, refuses another owner and persists across calls."""
+    shared = tmp_path / "shared"
+    owner = machine_locks.Reservation(
+        instance_key="hanken", operation="ingestion", session_id="a" * 32
+    )
+    other = machine_locks.Reservation(
+        instance_key="humak", operation="embedding", session_id="b" * 32
+    )
+    checkout = shared / "locks" / "checkout-hanken.lock"
+
+    assert machine_locks.reservation_path(shared, "checkout", instance_key="hanken") == checkout
+    assert machine_locks.reservation_path(shared, "server", instance_key="hanken") == (
+        shared / "locks" / "server.lock"
+    )
+    assert machine_locks.reservation_path(shared, "worker", instance_key="hanken") == (
+        shared / "locks" / "worker.lock"
+    )
+    assert machine_locks.read(shared, "checkout", instance_key="hanken") is None
+    assert not (shared / "locks").exists()
+
+    assert machine_locks.acquire(shared, "checkout", instance_key="hanken", owner=owner) is True
+    assert checkout.is_file()
+    assert oct((shared / "locks").stat().st_mode & 0o777) == "0o700"
+    assert oct(checkout.stat().st_mode & 0o777) == "0o600"
+    assert machine_locks.read(shared, "checkout", instance_key="hanken") == owner
+
+    # A same-session re-reserve keeps the file. A one-shot acquire never treats it as free.
+    assert (
+        machine_locks.acquire(
+            shared, "checkout", instance_key="hanken", owner=owner, allow_existing=True
+        )
+        is False
+    )
+    assert machine_locks.read(shared, "checkout", instance_key="hanken") == owner
+    with pytest.raises(RuntimeError, match="already held by ingestion in hanken"):
+        machine_locks.acquire(shared, "checkout", instance_key="hanken", owner=owner)
+    with pytest.raises(RuntimeError, match="held by ingestion in hanken"):
+        machine_locks.acquire(shared, "checkout", instance_key="hanken", owner=other)
+
+    # A one-shot reservation refuses a pre-existing file even for the same owner.
+    with pytest.raises(RuntimeError, match="already held by ingestion in hanken"):
+        with machine_locks.reservation(shared, "checkout", instance_key="hanken", owner=owner):
+            pytest.fail("a pre-existing reservation must not be adopted")
+    assert machine_locks.read(shared, "checkout", instance_key="hanken") == owner
+
+    # A non-owner release refuses and leaves the file. The owner release removes it.
+    with pytest.raises(RuntimeError, match="held by ingestion in hanken"):
+        machine_locks.release(shared, "checkout", instance_key="hanken", owner=other)
+    assert checkout.is_file()
+    machine_locks.release(shared, "checkout", instance_key="hanken", owner=owner)
+    assert not checkout.exists()
+    machine_locks.release(shared, "checkout", instance_key="hanken", owner=owner)
+
+    # The one-shot context manager releases only the file it created.
+    with machine_locks.reservation(shared, "server", instance_key="hanken", owner=owner):
+        assert machine_locks.read(shared, "server", instance_key="hanken") == owner
+    assert machine_locks.read(shared, "server", instance_key="hanken") is None
+
+    # A file left empty by a crash refuses clearly and is removed only by the operator.
+    worker_lock = shared / "locks" / "worker.lock"
+    worker_lock.write_text("", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="incomplete or unreadable"):
+        machine_locks.read(shared, "worker", instance_key="hanken")
+    with pytest.raises(RuntimeError, match="incomplete or unreadable"):
+        machine_locks.acquire(shared, "worker", instance_key="hanken", owner=owner)
+    with pytest.raises(RuntimeError, match="incomplete or unreadable"):
+        machine_locks.release(shared, "worker", instance_key="hanken", owner=owner)
+    assert worker_lock.is_file()
+
+    # The worker adapter refuses an argument that is not a configured university key and writes
+    # nothing outside the locks directory.
+    monkeypatch.setattr(
+        machine_locks,
+        "load_shared_storage_settings",
+        lambda: SimpleNamespace(shared_root=shared),
+    )
+    before = sorted(path for path in tmp_path.rglob("*") if path.is_file())
+    with pytest.raises(
+        ValueError, match="reservation instance key must be a configured university key"
+    ):
+        machine_locks.main(["read", "worker", "../escape", "translation"])
+    assert sorted(path for path in tmp_path.rglob("*") if path.is_file()) == before
 
 
 def test_subprocess_runner_popen_uses_devnull_mode_0600_logs_and_its_own_session(

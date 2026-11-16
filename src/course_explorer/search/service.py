@@ -29,7 +29,7 @@ class SemanticCourseScore(_SearchModel):
     """One exact-version best-chunk cosine score read from durable compatible vectors."""
 
     group_id: str
-    sisu_course_unit_id: str
+    source_version_id: str
     representative_source_hash: str
     score: float
 
@@ -97,7 +97,7 @@ class CourseSearchService:
             if record is None:
                 continue
             if (
-                record.sisu_course_unit_id != score.sisu_course_unit_id
+                record.source_version_id != score.source_version_id
                 or record.source_hash != score.representative_source_hash
             ):
                 continue

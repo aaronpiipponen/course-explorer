@@ -46,11 +46,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--active-only", action="store_true")
     args = parser.parse_args(argv)
     settings = load_database_settings()
-    embedding = embedding_configuration_for_site(load_web_settings())
+    web = load_web_settings()
+    embedding = embedding_configuration_for_site(web)
     artifacts = ServingArtifacts.open(settings, embedding=embedding)
     embeddings = artifacts.embeddings
     with database_context(settings) as factory:
-        projection = build_lookup_projection(CurriculumRepository(factory))
+        projection = build_lookup_projection(
+            CurriculumRepository(factory, university=web.university)
+        )
         report = run_search_command(
             args.query,
             display_language=args.display_language,

@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.orm import Session, sessionmaker
 
 from course_explorer.config import InferenceSelectionSettings, InferenceSettings
@@ -49,6 +49,7 @@ from course_explorer.inference.proposals import (
     TargetProposal,
     aggregate_equivalence_candidates,
 )
+from course_explorer.instance import UniversityMetadata
 from course_explorer.prerequisite.domain import (
     CurrentEquivalenceGroup,
     EquivalenceGroupMember,
@@ -80,18 +81,23 @@ class CurrentInferenceCohort(_PublicationModel):
     ``eligible_target_group_ids`` is the sorted unique set of active canonical targets the cohort
     covers. ``accepted_proposal_ids`` names, for the targets the caller has selected, the exact
     retained proposal that is their current accepted whole-target result. A target absent from that
-    mapping is uncovered, never a complete empty result. ``completed_without_output_target_group_ids``
-    names the active targets whose explicit operator DONE decision completes them with no inferred
-    output. They are transient cohort identities, disjoint from the accepted pointers, and never carry
-    a proposal, generation identity or equivalence supporter. The cohort is partial rather than a full catalogue. A retained pointer names its own target through the accepted-proposal
-    row's foreign-key ownership rather than through any generator, prompt, or
-    official-snapshot equality, so retained output carries across a generation or calendar
-    change and is overwritten only by an accepted target result.
+    mapping is uncovered, never a complete empty result.
+    ``completed_without_output_target_group_ids`` names the active targets whose explicit operator
+    DONE decision completes them with no inferred output. They are transient cohort identities,
+    disjoint from the accepted pointers, and never carry a proposal, generation identity or
+    equivalence supporter. ``retained_inactive_proposal_ids`` names inactive canonical targets whose
+    accepted pointers stay published. They are disjoint from eligible and accepted active targets,
+    carry no generation eligibility, and keep their retained whole-target result. The cohort is
+    partial rather than a full catalogue. A retained pointer names its own target through the
+    accepted-proposal row's foreign-key ownership rather than through any generator, prompt, or
+    official-snapshot equality, so retained output carries across a generation or calendar change
+    and is overwritten only by an accepted target result.
     """
 
     eligible_target_group_ids: tuple[str, ...]
     accepted_proposal_ids: dict[str, UUID]
     completed_without_output_target_group_ids: tuple[str, ...] = ()
+    retained_inactive_proposal_ids: dict[str, UUID] = Field(default_factory=dict)
 
     @field_validator("eligible_target_group_ids")
     @classmethod
@@ -136,9 +142,25 @@ class CurrentInferenceCohort(_PublicationModel):
             raise ValueError("complete-without-output target group IDs must be sorted")
         return value
 
+    @field_validator("retained_inactive_proposal_ids")
+    @classmethod
+    def validate_retained_inactive_ids(cls, value: dict[str, UUID]) -> dict[str, UUID]:
+        """Require each retained inactive pointer to map a nonblank target to a proposal UUID."""
+        for target_group_id, proposal_id in value.items():
+            if not isinstance(target_group_id, str) or not target_group_id.strip():
+                raise ValueError("retained inactive ids require nonblank target group IDs")
+            if not isinstance(proposal_id, UUID):
+                raise ValueError("retained inactive ids must be UUID identities")
+        return value
+
     @model_validator(mode="after")
     def validate_ids_within_scope(self) -> CurrentInferenceCohort:
-        """Require every supplied identity to be an eligible target in this cohort."""
+        """Require accepted and complete-without-output ids to be eligible targets.
+
+        Retained inactive ids must not be eligible or accepted pointer targets. The caller owns
+        their inactivity. An accepted pointer target and a complete-without-output target are
+        disjoint.
+        """
         ineligible = sorted(set(self.accepted_proposal_ids) - set(self.eligible_target_group_ids))
         if ineligible:
             raise ValueError(
@@ -159,6 +181,15 @@ class CurrentInferenceCohort(_PublicationModel):
             raise ValueError(
                 "complete-without-output ids must not also be accepted pointer targets: "
                 + ", ".join(overlapping)
+            )
+        active_retained = sorted(
+            set(self.retained_inactive_proposal_ids)
+            & (set(self.eligible_target_group_ids) | set(self.accepted_proposal_ids))
+        )
+        if active_retained:
+            raise ValueError(
+                "retained inactive ids must not also be active targets: "
+                + ", ".join(active_retained)
             )
         return self
 
@@ -183,11 +214,13 @@ class _PublicationOwners:
     equivalence: InferredEquivalenceRepository
 
 
-def _open_publication_owners(factory: sessionmaker[Session]) -> _PublicationOwners:
+def _open_publication_owners(
+    factory: sessionmaker[Session], university: UniversityMetadata
+) -> _PublicationOwners:
     """Construct the repository owners over one shared session factory."""
     return _PublicationOwners(
         proposals=InferenceProposalRepository(factory),
-        curriculum=CurriculumRepository(factory),
+        curriculum=CurriculumRepository(factory, university=university),
         inferred_sets=InferredPrerequisiteRepository(factory),
         equivalence=InferredEquivalenceRepository(factory),
     )
@@ -277,12 +310,11 @@ def _build_group_publications(
 ) -> tuple[EquivalenceGroupPublication, ...]:
     """Build the exact global group publications for the cohort's current accepted proposals.
 
-    Each exact original member tuple retains its own stable group UUID even when activity trims its
-    membership. Overlapping originals are distinct. A group with fewer than two active
-    members is not published, and the caller's withdrawal pass removes any stored materialization.
-    The producer version is the joined actual distinct supporter proposal versions and the
-    generation time is the maximum supporter attempt finish, so retained historical support keeps
-    its real provenance instead of being relabeled with current configuration.
+    Each exact original member tuple retains its own stable group UUID. Overlapping originals are
+    distinct. Every canonical member is published with its stored activity context, including a
+    member that is inactive. The producer version is the joined actual distinct supporter proposal
+    versions and the generation time is the maximum supporter attempt finish, so retained support
+    keeps the provenance recorded with it.
     """
     groups = aggregate_equivalence_candidates(proposals)
     identity_by_proposal_id = {
@@ -318,16 +350,14 @@ def _build_group_publications(
             sorted({version_by_proposal_id[proposal_id] for proposal_id, _ in supporters})
         )
         generated_at = max(finished_at_by_proposal_id[proposal_id] for proposal_id, _ in supporters)
-        live_members: list[EquivalenceGroupMember] = []
+        members: list[EquivalenceGroupMember] = []
         for member_group_id in members:
             activity = activities.get(member_group_id)
             if activity is None:
                 raise ValueError(
                     f"equivalence group member {member_group_id} is not a canonical course"
                 )
-            if not activity.is_active:
-                continue
-            live_members.append(
+            members.append(
                 EquivalenceGroupMember(
                     course_group_id=member_group_id,
                     activity_as_of_academic_year_start=(
@@ -336,12 +366,10 @@ def _build_group_publications(
                     activity_window_years=activity.activity_window_years,
                 )
             )
-        if len(live_members) < 2:
-            continue
         publications.append(
             EquivalenceGroupPublication(
                 group_id=_group_id_for_members(members),
-                members=tuple(sorted(live_members, key=lambda member: member.course_group_id)),
+                members=tuple(sorted(members, key=lambda member: member.course_group_id)),
                 producer_kind=InferredProducerKind.INFERENCE,
                 producer_name=_PRODUCER_NAME,
                 producer_version=producer_version,
@@ -362,12 +390,17 @@ def prepare_current_publication(
     cohort: CurrentInferenceCohort,
     settings: InferenceSettings,
     selection: InferenceSelectionSettings,
+    *,
+    university: UniversityMetadata,
 ) -> CurrentPublicationPlan:
     """Read and validate the whole cohort before any write and build its exact publications.
 
     For every supplied accepted pointer this reads the exact retained proposal with its
     foreign-key-owned work, completion and shared execution run, then validates that ownership, the
-    recorded execution route, and the retained proposal's own identity. Uncovered eligible targets
+    recorded execution route, and the retained proposal's own identity. Active eligible targets must
+    still be active canonical courses. Retained inactive pointers must name inactive canonical courses
+    whose proposal and work target match, and they contribute target publications and equivalence
+    support without entering active diagnostics. Uncovered eligible targets
     contribute diagnostics and never a final publication. A selected pointer with a missing
     or mismatched retained proposal/work/completion raises before any mutation rather than silently
     disappearing or falling back to another proposal. Retained historical output is accepted on that
@@ -378,7 +411,7 @@ def prepare_current_publication(
     complete-without-output diagnostic count: no proposal, completion, final row, model timestamp or
     equivalence supporter is created for them. It performs no final mutation.
     """
-    owners = _open_publication_owners(factory)
+    owners = _open_publication_owners(factory, university)
     proposals: list[TargetProposal] = []
     target_publications: list[InferredSetPublication] = []
     finished_at_by_proposal_id: dict[UUID, datetime] = {}
@@ -390,9 +423,11 @@ def prepare_current_publication(
     published = 0
     observed = 0
     historical = owners.proposals.count_for_targets(cohort.eligible_target_group_ids)
+    retained_inactive_ids = tuple(sorted(cohort.retained_inactive_proposal_ids))
+    activity_group_ids = tuple(sorted({*cohort.eligible_target_group_ids, *retained_inactive_ids}))
     activities = {
         activity.group_id: activity
-        for activity in owners.curriculum.get_course_activities(cohort.eligible_target_group_ids)
+        for activity in owners.curriculum.get_course_activities(activity_group_ids)
     }
     # Every eligible target must be a canonical active course before preparation can skip its absent
     # pointer as genuinely uncovered: an unknown or inactive eligible target is not valid coverage.
@@ -401,6 +436,16 @@ def prepare_current_publication(
         if activity is None:
             raise ValueError(f"current target {target_group_id} is not a canonical course")
         _validate_current_target(activity, target_group_id)
+    # A retained inactive pointer must name an existing inactive canonical course, so retained output
+    # stays published without becoming generation coverage.
+    for target_group_id in retained_inactive_ids:
+        activity = activities.get(target_group_id)
+        if activity is None:
+            raise ValueError(
+                f"retained inactive target {target_group_id} is not a canonical course"
+            )
+        if activity.is_active:
+            raise ValueError(f"retained inactive target {target_group_id} is active")
     # The selected proposals and the stored sets of their targets are read in a fixed number of
     # queries before the per-target validation.
     selected_target_group_ids = tuple(
@@ -410,11 +455,19 @@ def prepare_current_publication(
     )
     completed = owners.proposals.read_completed_many(
         [
-            cohort.accepted_proposal_ids[target_group_id]
-            for target_group_id in selected_target_group_ids
+            *(
+                cohort.accepted_proposal_ids[target_group_id]
+                for target_group_id in selected_target_group_ids
+            ),
+            *(
+                cohort.retained_inactive_proposal_ids[target_group_id]
+                for target_group_id in retained_inactive_ids
+            ),
         ]
     )
-    stored_sets = owners.inferred_sets.read_many(selected_target_group_ids)
+    stored_sets = owners.inferred_sets.read_many(
+        (*selected_target_group_ids, *retained_inactive_ids)
+    )
     for target_group_id in selected_target_group_ids:
         selected += 1
         activity = activities[target_group_id]
@@ -445,6 +498,26 @@ def prepare_current_publication(
             published += 1
         else:
             target_publications.append(publication)
+    for target_group_id in retained_inactive_ids:
+        activity = activities[target_group_id]
+        proposal, work, attempt, _run = completed[
+            cohort.retained_inactive_proposal_ids[target_group_id]
+        ]
+        if proposal.target_group_id != target_group_id:
+            raise ValueError("the selected proposal does not belong to its cohort target")
+        if work.request.target_group_id != target_group_id:
+            raise ValueError("the retained work does not match its cohort target")
+        proposals.append(proposal)
+        finished_at_by_proposal_id[proposal.proposal_id] = attempt.finished_at
+        stored = stored_sets[target_group_id]
+        if not (
+            stored.state is InferredReadState.CURRENT
+            and stored.current_set is not None
+            and stored.current_set.input_hash == proposal.identity_sha256
+            and stored.current_set.producer_kind is InferredProducerKind.INFERENCE
+            and stored.current_set.coverage_state is InferredCoverageState.COMPLETE
+        ):
+            target_publications.append(_build_target_publication(proposal, attempt, activity))
     group_publications = _build_group_publications(
         tuple(proposals), owners.curriculum, finished_at_by_proposal_id
     )
@@ -479,13 +552,16 @@ def prepare_current_publication(
 def _current_input_hashes(
     cohort: CurrentInferenceCohort, plan: CurrentPublicationPlan
 ) -> dict[str, str | None]:
-    """Map every eligible target to its current accepted proposal identity or None."""
+    """Map every eligible and retained inactive target to its accepted identity or None."""
     accepted_by_target = {
         proposal.target_group_id: proposal.identity_sha256 for proposal in plan.proposals
     }
     return {
         target_group_id: accepted_by_target.get(target_group_id)
-        for target_group_id in cohort.eligible_target_group_ids
+        for target_group_id in (
+            *cohort.eligible_target_group_ids,
+            *sorted(cohort.retained_inactive_proposal_ids),
+        )
     }
 
 
@@ -539,6 +615,8 @@ def publish_current_cohort(
     cohort: CurrentInferenceCohort,
     settings: InferenceSettings,
     selection: InferenceSelectionSettings,
+    *,
+    university: UniversityMetadata,
 ) -> PublicationDiagnostics:
     """Materialize the prepared cohort through the repositories and return diagnostics.
 
@@ -550,8 +628,8 @@ def publish_current_cohort(
     and leaves immutable evidence and completed work intact for a deterministic retry. No
     cross-repository all-or-nothing atomicity is claimed.
     """
-    plan = prepare_current_publication(factory, cohort, settings, selection)
-    owners = _open_publication_owners(factory)
+    plan = prepare_current_publication(factory, cohort, settings, selection, university=university)
+    owners = _open_publication_owners(factory, university)
     _reject_incomplete_cohort(owners, cohort)
     owners.equivalence.reconcile_activity()
     for publication in plan.target_publications:
@@ -577,6 +655,10 @@ def read_inference_publication_diagnostics(
     cohort: CurrentInferenceCohort,
     settings: InferenceSettings,
     selection: InferenceSelectionSettings,
+    *,
+    university: UniversityMetadata,
 ) -> PublicationDiagnostics:
     """Read-only preparation of the cohort's diagnostics with no final mutation."""
-    return prepare_current_publication(factory, cohort, settings, selection).diagnostics
+    return prepare_current_publication(
+        factory, cohort, settings, selection, university=university
+    ).diagnostics

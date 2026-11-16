@@ -18,7 +18,7 @@ The diagram follows one request through the stages this page describes.
 
 ## Report reuse
 
-The serving supervisor creates one next-course report region before it forks the workers, and every worker reads and writes the same region. The region is bounded by `WEB_NEXT_COURSE_REPORT_CACHE_BYTES`, and clock eviction removes complete reports when a new report needs space. The key is the canonical selected set, the canonical completed set, the chosen basis, the mode, the display language, the inference flag and the activity flag. A second key holds the request's raw selected and completed inputs with the same policy fields, and it answers a repeated request before any input is resolved. An alias names the canonical report it resolves to, and it answers only while that report is retained. Both **All** and **Partially covered** use the region under separate keys, and a repeated canonical request returns the held report before candidate discovery or compilation runs.
+The serving supervisor creates one next-course report region before it forks the workers, and every worker reads and writes the same region. The region is bounded by `WEB_NEXT_COURSE_REPORT_CACHE_BYTES`, and clock eviction removes complete reports when a new report needs space. The key is the canonical selected set, the canonical completed set, the chosen basis, the mode, the display language, the inference flag, the activity flag and the assumed course-credit policy. A second key holds the request's raw selected and completed inputs with the same policy fields, and it answers a repeated request before any input is resolved. An alias names the canonical report it resolves to, and it answers only while that report is retained. Both **All** and **Partially covered** use the region under separate keys, and a repeated canonical request returns the held report before candidate discovery or compilation runs.
 
 The recommendation command reads the same region for the exclusion set. A report computed for the next-course list therefore answers the recommendation request with the same canonical inputs without another eligibility pass.
 
@@ -26,7 +26,7 @@ The region belongs to one serving supervisor. A restart replaces it, and an in-p
 
 ## Candidate discovery
 
-Candidate discovery is a bounded reverse read from the basis, and the compiler decides eligibility afterwards. The official read returns every canonical course whose stored official prerequisite option names a source course, either directly or through a module that can contain one, under the request's activity scope. With the inference toggle on, the read also returns every active course whose stored inferred prerequisites name a source course.
+Candidate discovery is a bounded reverse read from the basis, and the compiler decides eligibility afterwards. The official read returns every canonical course whose stored official prerequisite option names a source course, either directly or through a module that can contain one, under the request's activity scope. With the inference toggle on, the read also returns every canonical course whose stored inferred prerequisites name a source course, under the same activity scope.
 
 The read is a superset over the stored course versions, so it can name a course whose matching prerequisite option belongs to a version that is not the representative version. Such a candidate is dropped when the current representative version carries no matching option.
 
@@ -38,10 +38,10 @@ The source identities are the basis courses and, when the inference toggle is on
 
 | Mode | Lists a course when | Order of the list |
 |---|---|---|
-| **All** | Every enabled prerequisite category of the course is satisfied by the basis, and a category the course does not carry is neutral. | Displayed official name, then official code, then canonical identity. |
+| **All** | Every enabled prerequisite category of the course is satisfied by the basis, and a category the course does not carry is neutral. | Displayed summary name, then official code, then canonical identity. |
 | **Partially covered** | The basis covers at least one course slot of the course, in either the required or the recommended category. | Required coverage descending, then recommended coverage descending, then displayed name and code. |
 
-Both the required and the recommended prerequisite options of a candidate are enabled, so a recommended prerequisite takes part in eligibility exactly like a required one.
+Both the required and the recommended prerequisite options of a candidate are enabled, so a recommended prerequisite takes part in eligibility exactly like a required one. A basis course with no official minimum credit counts at `ASSUMED_COURSE_CREDITS` in an official credit bound. The report carries `uses_assumed_credits` when such a bound counted one, and an unknown-credit basis course that no retained bound counts leaves it false. Discover shows one **Assumed credits used** caption beside the result heading while the flag is true. The stored source credit is null and the course row shows **Credits unknown**.
 
 A candidate is never returned in these cases:
 
@@ -67,16 +67,18 @@ Under the all-courses scope every candidate takes part, and an inactive result i
 
 ## Ordering
 
-In **All** the list is ordered by the displayed official name for the requested display language, then by the official code, then by the canonical identity. A course with no name in the requested language takes the name of the other language.
+In **All** the list is ordered by the displayed summary name for the requested display language, then by the official code, then by the canonical identity. A course with no name in the requested language takes the name of the other language.
 
 In **Partially covered** the required coverage decides the order in descending value first, the recommended coverage decides it next, and the displayed name and code key settles a tie.
 
 ## The report
 
-The report carries the two canonical course sets, the chosen basis, the mode, the display language, the inference flag, the activity flag, and the ordered results. Each result carries the shared course summary, the two coverage values, and the inferred dependence mark. The list has no configured length limit, so every eligible candidate is returned.
+The report carries the two canonical course sets, the chosen basis, the mode, the display language, the inference flag, the activity flag, the ordered results and `uses_assumed_credits`. Each result carries the shared course summary, the two coverage values, and the inferred dependence mark. The list has no configured length limit, so every eligible candidate is returned.
 
 ## Availability on a site
 
-Next courses read official prerequisites and the prerequisite inference stores, so a site serves them under either switch. A site whose `WEB_INFERENCE_ENABLED` is false in `config/web.toml` never reads inferred prerequisites for the request, whatever the request asked for: the route forwards the inference toggle combined with the site switch, so the toggle is effectively off, no result carries the inferred dependence mark, and no equivalence group joins the source identities. The command, its inputs, its eligibility rules and the script adapter are the same on both kinds of site.
+Next courses are served while `WEB_PREREQUISITES_ENABLED` is true in `config/web.toml`, and the route refuses the read with status 403 and the detail `Feature disabled` while it is false.
+
+`WEB_INFERENCE_ENABLED` decides whether inferred prerequisites join the list. While it is false, the route forwards the inference toggle as off whatever the request asked for, so no result carries the inferred dependence mark and no equivalence group joins the source identities. The command takes the inference toggle from its caller, and the script adapter passes its own flag.
 
 The service, the candidate reads, the eligibility decision, the coverage fold, and the tests that cover them are described in [Next-course coverage](/docs/backend/search-and-discovery/next-course-coverage.md).

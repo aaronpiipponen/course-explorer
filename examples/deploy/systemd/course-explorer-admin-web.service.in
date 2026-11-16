@@ -1,6 +1,6 @@
 # Administration backend service on its loopback bind.
 [Unit]
-Description=TUNI Course Explorer administration
+Description=course-explorer administration
 
 [Service]
 Type=simple
