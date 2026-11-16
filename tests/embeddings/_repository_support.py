@@ -34,7 +34,7 @@ from course_explorer.enums import (
     TeachingTextField,
     TranslationMethod,
 )
-from course_explorer.instance import UniversityMetadata
+from course_explorer.instance import UNIVERSITIES, UniversityMetadata
 from course_explorer.teaching_text.repository import DerivedTranslationRepository
 from course_explorer.teaching_text.service import (
     DerivedTranslationInput,
@@ -63,7 +63,7 @@ class FakeProvider:
 def compose(
     database: tuple[Engine, object],
     *,
-    university: UniversityMetadata | None = None,
+    university: UniversityMetadata = UNIVERSITIES["example"],
 ) -> tuple[
     CourseEmbeddingService,
     CourseEmbeddingRepository,

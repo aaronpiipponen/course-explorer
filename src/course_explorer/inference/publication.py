@@ -350,14 +350,14 @@ def _build_group_publications(
             sorted({version_by_proposal_id[proposal_id] for proposal_id, _ in supporters})
         )
         generated_at = max(finished_at_by_proposal_id[proposal_id] for proposal_id, _ in supporters)
-        members: list[EquivalenceGroupMember] = []
+        published_members: list[EquivalenceGroupMember] = []
         for member_group_id in members:
             activity = activities.get(member_group_id)
             if activity is None:
                 raise ValueError(
                     f"equivalence group member {member_group_id} is not a canonical course"
                 )
-            members.append(
+            published_members.append(
                 EquivalenceGroupMember(
                     course_group_id=member_group_id,
                     activity_as_of_academic_year_start=(
@@ -369,7 +369,7 @@ def _build_group_publications(
         publications.append(
             EquivalenceGroupPublication(
                 group_id=_group_id_for_members(members),
-                members=tuple(sorted(members, key=lambda member: member.course_group_id)),
+                members=tuple(sorted(published_members, key=lambda member: member.course_group_id)),
                 producer_kind=InferredProducerKind.INFERENCE,
                 producer_name=_PRODUCER_NAME,
                 producer_version=producer_version,
