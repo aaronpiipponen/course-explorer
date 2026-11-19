@@ -57,8 +57,20 @@ def test_oversize_target_fails_without_generation_or_false_coverage(
     """A packet fitting neither base key fails while the fitting survivor publishes."""
     _, factory = database
     repository, runtime, boundary = prepare_job_case(factory, monkeypatch, ("job-t1", "job-t2"))
+    settings = job_module.load_inference_settings()
+    # Fit compares the prompt plus the output budget against each key's context and achieved
+    # maximum, so the oversized count is one more than the largest local key allows.
+    output_budget = settings.inference_max_tokens + settings.inference_fit_headroom_tokens
+    usable_contexts = [
+        min(variant.context_size, variant.achieved_max_context)
+        for variant in settings.inference_local_variants
+    ]
     # Only job-t1's rendered packet is oversized, and job-t2 fits the first ordered local key.
-    boundary.tokenize_tokens_for = lambda request: 200000 if b"job-t1" in request.content else 1000
+    oversized_tokens = max(usable_contexts) - output_budget + 1
+    fitting_tokens = min(1000, usable_contexts[0] - output_budget)
+    boundary.tokenize_tokens_for = lambda request: (
+        oversized_tokens if b"job-t1" in request.content else fitting_tokens
+    )
 
     with pytest.raises(InferenceTargetsFailed):
         run_job(factory, runtime, before_unit=lambda: True)
