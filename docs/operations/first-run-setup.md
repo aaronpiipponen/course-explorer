@@ -192,4 +192,3 @@ A domain-mode address is an HTTPS address outside loopback without an explicit p
 Open `http://127.0.0.1:8037`, the address from `WEB_HOST` and `WEB_PORT` in `config/web.toml`. The top bar shows the tabs the site serves, with **Docs** beside them. `WEB_EMBEDDINGS_ENABLED = false` in `config/web.toml` hides the **Compare** tab and the comparison controls. `WEB_INFERENCE_ENABLED = false` hides the **Inferred** controls and mark. `WEB_PREREQUISITES_ENABLED = false` hides the **Prerequisites** tab and Next courses, and it hides **Discover** when embeddings are also off. **Docs** opens the documentation wiki inside the app, and a page the configuration does not select opens on GitHub.
 
 The browser, console and Python checks are listed in [Local checks](/docs/testing/local-checks.md).
-
