@@ -7,6 +7,11 @@
 # authentication for the configured worker, and the directory never enters an image.
 name: ${COURSE_EXPLORER_PROJECT_NAME:?COURSE_EXPLORER_PROJECT_NAME is required}
 
+# The account the server images name: the host account's uid and gid, which the containers run as.
+x-server-build-args: &server-build-args
+  COURSE_EXPLORER_UID: ${COURSE_EXPLORER_UID:?COURSE_EXPLORER_UID is required}
+  COURSE_EXPLORER_GID: ${COURSE_EXPLORER_GID:?COURSE_EXPLORER_GID is required}
+
 services:
   db:
     build:
@@ -76,6 +81,7 @@ services:
       context: .
       dockerfile: docker/server/Dockerfile
       target: site
+      args: *server-build-args
     network_mode: host
     # The site process's 4 GiB memory and memory-plus-swap ceiling.
     mem_limit: 4294967296
@@ -129,6 +135,7 @@ services:
       context: .
       dockerfile: docker/server/Dockerfile
       target: admin
+      args: *server-build-args
     network_mode: host
     user: "${COURSE_EXPLORER_UID:?COURSE_EXPLORER_UID is required}:${COURSE_EXPLORER_GID:?COURSE_EXPLORER_GID is required}"
     group_add:
@@ -211,6 +218,7 @@ services:
       context: .
       dockerfile: docker/server/Dockerfile
       target: worker
+      args: *server-build-args
     profiles: ["worker"]
     network_mode: host
     user: "${COURSE_EXPLORER_UID:?COURSE_EXPLORER_UID is required}:${COURSE_EXPLORER_GID:?COURSE_EXPLORER_GID is required}"
@@ -285,6 +293,7 @@ services:
       context: .
       dockerfile: docker/server/Dockerfile
       target: admin
+      args: *server-build-args
     network_mode: host
     user: "${COURSE_EXPLORER_UID:?COURSE_EXPLORER_UID is required}:${COURSE_EXPLORER_GID:?COURSE_EXPLORER_GID is required}"
     volumes:

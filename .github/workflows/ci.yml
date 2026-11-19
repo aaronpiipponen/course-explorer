@@ -96,12 +96,14 @@ jobs:
           cp examples/docker-compose.yml docker-compose.yml
       - name: Build the server images
         # The site target must carry no administration package and no Docker, SSH, GitHub or Git
-        # client, so a stage or route that reaches them fails here before it merges.
+        # client, so a stage or route that reaches them fails here before it merges. The
+        # administration image names the account it runs as, which its SSH client requires.
         run: |
           docker build --target site -f docker/server/Dockerfile -t course-explorer-site:ci .
           docker build --target admin -f docker/server/Dockerfile -t course-explorer-admin:ci .
           docker build --target worker -f docker/server/Dockerfile -t course-explorer-worker:ci .
           docker run --rm --entrypoint python course-explorer-site:ci -c "import importlib.util, shutil, sys; sys.exit(0 if importlib.util.find_spec('course_explorer_admin') is None and not any(shutil.which(name) for name in ('docker', 'ssh', 'gh', 'git')) else 1)"
+          docker run --rm --user 1000:1000 --entrypoint getent course-explorer-admin:ci passwd 1000
           docker image rm course-explorer-site:ci course-explorer-admin:ci course-explorer-worker:ci
       - name: npm --prefix web run typecheck
         run: npm --prefix web run typecheck

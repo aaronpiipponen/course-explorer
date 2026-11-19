@@ -28,6 +28,16 @@ ENV PYTHONPATH=/app/src \
 # every uid may write it as `HOME` at run time.
 RUN mkdir -p /home/course && chmod 1777 /home/course
 
+# The containers run as the host account's uid and gid, and OpenSSH refuses a uid that the account
+# database does not name. The image names that account `course` with `/home/course` as its home,
+# where the administration container mounts the SSH directory. The Compose build passes the host
+# account's values, and 1000 is the value of a build without them.
+ARG COURSE_EXPLORER_UID=1000
+ARG COURSE_EXPLORER_GID=1000
+RUN groupadd --non-unique --gid "$COURSE_EXPLORER_GID" course \
+    && useradd --non-unique --uid "$COURSE_EXPLORER_UID" --gid "$COURSE_EXPLORER_GID" \
+        --home-dir /home/course --no-create-home --shell /usr/sbin/nologin course
+
 FROM python-runtime AS python-dependencies
 
 COPY pyproject.toml uv.lock README.md LICENSE ./

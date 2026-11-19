@@ -139,8 +139,11 @@ if [[ ! -d "$SSH_DIR" ]]; then
     mkdir -m 700 -- "$SSH_DIR" || refuse "the SSH directory $SSH_DIR could not be created"
 fi
 
+# The setup image names the account it runs as, as the stack's server images do.
 build_image() {
-    docker build --target admin -f "$CHECKOUT/docker/server/Dockerfile" -t "$IMAGE" "$CHECKOUT"
+    docker build --target admin \
+        --build-arg COURSE_EXPLORER_UID="$(id -u)" --build-arg COURSE_EXPLORER_GID="$(id -g)" \
+        -f "$CHECKOUT/docker/server/Dockerfile" -t "$IMAGE" "$CHECKOUT"
 }
 
 require_image() {

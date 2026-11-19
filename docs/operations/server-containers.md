@@ -19,7 +19,7 @@ they carry the same locked Python environment.
 
 | Stage | Base image | What it produces |
 |---|---|---|
-| `python-runtime` | `python:3.14-slim-trixie` | `libpq5`, `libstdc++6`, `ca-certificates`, the `uv` and `uvx` binaries, the interpreter capability check, `WORKDIR /app`, `PYTHONPATH=/app/src`, `UV_PROJECT_ENVIRONMENT=/app/.venv` and the writable image home directory |
+| `python-runtime` | `python:3.14-slim-trixie` | `libpq5`, `libstdc++6`, `ca-certificates`, the `uv` and `uvx` binaries, the interpreter capability check, `WORKDIR /app`, `PYTHONPATH=/app/src`, `UV_PROJECT_ENVIRONMENT=/app/.venv`, the writable image home directory and the `course` account |
 | `python-dependencies` | `python-runtime` | `/app/.venv` from `uv sync --locked --no-dev --no-install-project --no-managed-python --python /usr/local/bin/python3` |
 | `native-build` | `python-runtime` | The three serving libraries from `native/`, compiled with `g++`, `make` and `libpq-dev` |
 | `web-build` | `node:22.22.2-slim` | `web/dist`, built from `web/`, `docs/` and the checkout's `config/wiki.json` |
@@ -31,6 +31,14 @@ they carry the same locked Python environment.
 The interpreter check runs `os.memfd_create` with `MFD_CLOEXEC` in the runtime stage, because the
 shared caches map an anonymous memory file. A base image whose interpreter lacks that capability
 fails the build.
+
+The runtime stage also names the account the containers run as. The build arguments
+`COURSE_EXPLORER_UID` and `COURSE_EXPLORER_GID` set its uid and gid, 1000 when a build passes neither,
+and its home is the image home directory. The Compose file passes the values the bridge reads from the host
+account to the `web`, `admin`, `worker` and `sender` builds, and `scripts/self-host.sh` passes the
+same values to its setup image. The OpenSSH client in the administration image refuses a uid that the
+account database does not name, and it reads the SSH directory that the administration container
+mounts in that home.
 
 ### The database image
 
