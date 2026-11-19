@@ -199,17 +199,27 @@ def _server_origin_differs(
     revision: str,
     fetch: bool,
 ) -> bool:
-    """Report whether the local checkout HEAD differs from its stored origin tracking ref."""
+    """Report whether the local checkout HEAD differs from its origin branch.
+
+    With ``fetch`` the origin branch is read from the remote; otherwise from the stored tracking
+    ref. The remote read writes nothing, because the administration container mounts the
+    checkout read-only.
+    """
     if fetch:
-        runner.run(("git", "-c", _SSH_BATCH_COMMAND, "fetch", "origin"), cwd=root)
-    tracked = (
-        runner.run(
-            ("git", "for-each-ref", "--format=%(objectname)", f"refs/remotes/origin/{branch}"),
+        listed = runner.run(
+            ("git", "-c", _SSH_BATCH_COMMAND, "ls-remote", "origin", f"refs/heads/{branch}"),
             cwd=root,
+        ).stdout.decode()
+        tracked = listed.split("\t", 1)[0].strip()
+    else:
+        tracked = (
+            runner.run(
+                ("git", "for-each-ref", "--format=%(objectname)", f"refs/remotes/origin/{branch}"),
+                cwd=root,
+            )
+            .stdout.decode()
+            .strip()
         )
-        .stdout.decode()
-        .strip()
-    )
     return tracked != revision
 
 

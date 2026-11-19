@@ -722,9 +722,9 @@ def operator_guidance(
         )
     if operation == "setup":
         return (
-            "A same-machine operation runs inside the administration container. Check this "
-            "account's docker access and use the server deploy for a same-machine code update, "
-            "then check the checkout branch and the configured origin."
+            "Check the worker connection, then the checkout branch and the configured origin on "
+            "this checkout and on the worker. A same-machine worker updates with the server "
+            "deploy instead, run from the administration container with docker access."
         )
     if operation == "preflight":
         return (

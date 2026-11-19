@@ -44,7 +44,7 @@ whatever operation raised it.
 
 | Operation | Guidance |
 |---|---|
-| `setup` | `A same-machine operation runs inside the administration container. Check this account's docker access and use the server deploy for a same-machine code update, then check the checkout branch and the configured origin.` |
+| `setup` | `Check the worker connection, then the checkout branch and the configured origin on this checkout and on the worker. A same-machine worker updates with the server deploy instead, run from the administration container with docker access.` |
 | `preflight` | `Check the worker connection, start the same-machine worker container, check the checkout branch, the configured origin and the prepared worker resources, then run the worker install, the worker code update, or the server deploy on a same-machine host.` |
 | `stage` | `A same-machine stage runs inside the administration container. Copy a dataset to Working with datasets copy-to-working if none is copied, inspect this tool's status, then retry its start, ordinary stop or resume as appropriate.` |
 | `report` | `enroll a dataset or copy one to Working, ensure the server db is running at the current schema, then retry the report` |

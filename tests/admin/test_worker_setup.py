@@ -163,6 +163,9 @@ def test_code_update_is_ff_only_and_preserves_user_work(
     default = provisioning.update_worker_code(runner=mechanics.SubprocessRunner())
     assert default.branch == "main"
     assert default.server_origin_differs is False
+    # The administration container mounts the server checkout read-only, so the origin read
+    # writes nothing there.
+    assert not (server / ".git" / "FETCH_HEAD").exists()
     # A successful update syncs the locked environment exactly once, reinstalling the
     # repository's own editable project so the locked sync refreshes its install metadata.
     assert len(transport.syncs) == 1
