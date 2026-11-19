@@ -3,9 +3,11 @@
 The proof binds one temporary checkout whose configuration, environment file and migration tree
 are links to this checkout, plus a temporary selected-dataset receipt in a case that enrolls one
 and an embedding artifact directory with both hub files. One small process-boundary double answers
-the fixed systemd, git, Compose and directory-total reads, while the host facts are real and the
-database read runs against the disposable ``course_explorer_test`` database. Every parameter runs
-the single public report once and asserts only that invocation's outcome.
+the fixed git, Compose, container-inspect and directory-total reads, while the host facts are real
+and the database read runs against the disposable ``course_explorer_test`` database. Every
+parameter runs the one entry point and asserts only that invocation's outcome, and one added
+read proves the Docker command form the socket-access rule selects for an account that can write
+the socket.
 """
 
 from __future__ import annotations
@@ -33,8 +35,8 @@ from course_explorer.serving_artifacts import (
     serving_key,
 )
 from course_explorer.serving_build import write_hub_pair
+from course_explorer_admin import compose, mechanics, server
 from course_explorer_admin import datasets as datasets_admin
-from course_explorer_admin import mechanics, server
 from tests.datasets._support import INITIAL_ID, REVISION, sample_receipt
 from tests.support.repository import scratch_repository
 
@@ -43,22 +45,13 @@ pytestmark = [pytest.mark.integration]
 _DISPOSABLE_DATABASE = "course_explorer_test"
 _UNUSED_DATABASE = "course_explorer_status_unused"
 _STATE_ROOT = "data/admin-site-test"
-_UNIT = "synthetic-site-web.service"
 _WEB_HOST = "127.0.0.1"
 _WEB_PORT = 18026
 _WEB_WORKERS = 3
-_MAIN_PID = 4242
+_WEB_IMAGE = "course-explorer-site:local"
+_WEB_STARTED_AT = "2026-10-10T04:39:00.000000000Z"
 _SHARED_MEMORY_BYTES = 1073741824
 _DIRECTORY_TOTALS = {"data": 1024, "models": 2048}
-_SITE_PROPERTIES = (
-    "LoadState",
-    "ActiveState",
-    "SubState",
-    "MainPID",
-    "ActiveEnterTimestampMonotonic",
-    "WorkingDirectory",
-    "ExecStart",
-)
 
 
 def _bind_proof_root(
@@ -108,8 +101,6 @@ def _bind_proof_root(
         )
         return directory
 
-    monkeypatch.setenv("ADMIN_SITE_WEB_SERVICE_UNIT", _UNIT)
-    monkeypatch.setenv("ADMIN_SITE_ADMIN_SERVICE_UNIT", "synthetic-site-admin.service")
     monkeypatch.setenv("ADMIN_STATE_ROOT", _STATE_ROOT)
     monkeypatch.setenv("WEB_EMBEDDINGS_ENABLED", "1" if embeddings_enabled else "0")
     monkeypatch.setenv(
@@ -131,9 +122,8 @@ def _bind_proof_root(
 class _ServerProcessBoundary:
     """Answer the fixed server process reads without running any real command."""
 
-    def __init__(self, *, root: Path, unit: str, running: bool) -> None:
+    def __init__(self, *, root: Path, running: bool) -> None:
         self.root = root
-        self.unit = unit
         self.running = running
         self.calls: list[tuple[str, ...]] = []
         self.directory_paths: list[str] = []
@@ -151,41 +141,21 @@ class _ServerProcessBoundary:
         command = tuple(argv)
         self.calls.append(command)
         prefix = mechanics.compose_prefix(non_interactive=True, interpreter=True)
-        if command[0] == "systemctl":
-            output = self._unit_properties()
-        elif command[:2] == ("git", "branch"):
+        if command[:2] == ("git", "branch"):
             output = b"synthetic-branch\n"
         elif command[:2] == ("git", "rev-parse"):
             output = f"{REVISION}\n".encode()
         elif command[: len(prefix)] == prefix:
             output = self._container_listing()
-        elif command[0] == "sudo":
+        elif command[-4:-1] == ("inspect", "--format", "{{.State.StartedAt}}"):
+            output = f"{_WEB_STARTED_AT}\n".encode()
+        elif command[-4:-1] == ("inspect", "--format", "{{.HostConfig.ShmSize}}"):
             output = f"{_SHARED_MEMORY_BYTES}\n".encode()
         elif command[0] == "du":
             output = self._directory_total(command[-1])
         else:
             raise AssertionError(f"the report ran an unexpected process command: {command[0]}")
         return subprocess.CompletedProcess(list(command), 0, stdout=output, stderr=b"")
-
-    def _unit_properties(self) -> bytes:
-        return "".join(
-            f"{name}={value}\n"
-            for name, value in (
-                ("LoadState", "loaded"),
-                ("ActiveState", "active"),
-                ("SubState", "running"),
-                ("MainPID", str(_MAIN_PID)),
-                # One second of this host's monotonic clock, so the derived uptime is measurable.
-                ("ActiveEnterTimestampMonotonic", "1000000"),
-                ("WorkingDirectory", str(self.root)),
-                (
-                    "ExecStart",
-                    "{ path=/usr/bin/bash ; argv[]=/usr/bin/bash "
-                    f"{self.root / 'scripts' / 'run_web.sh'} ; ignore_errors=no ; "
-                    "start_time=[n/a] ; stop_time=[n/a] }",
-                ),
-            )
-        ).encode()
 
     def _container_listing(self) -> bytes:
         database = {
@@ -202,7 +172,17 @@ class _ServerProcessBoundary:
             "Health": "healthy",
             "Image": "synthetic-embedding-image",
         }
-        return ("\n".join(json.dumps(entry) for entry in (database, embedding)) + "\n").encode()
+        # The site serves in every case, while the database state follows the case.
+        site = {
+            "ID": "synthetic-web-container",
+            "Service": "web",
+            "State": "running",
+            "Health": "",
+            "Image": _WEB_IMAGE,
+        }
+        return (
+            "\n".join(json.dumps(entry) for entry in (database, embedding, site)) + "\n"
+        ).encode()
 
     def _directory_total(self, path: str) -> bytes:
         relative = Path(path).relative_to(self.root).as_posix()
@@ -263,9 +243,10 @@ def test_server_status_reports_server_owned_facts(
         outside_data = tmp_path / "outside-data"
         (root / "data").rename(outside_data)
         (root / "data").symlink_to(outside_data)
-    boundary = _ServerProcessBoundary(root=root, unit=_UNIT, running=running)
+    boundary = _ServerProcessBoundary(root=root, running=running)
     engines: list[str] = []
     real_engine_factory = server.create_database_engine
+    monkeypatch.setattr(compose, "docker_needs_sudo", lambda: True)
 
     def spy_engine_factory(settings):
         engines.append(settings.postgres_db)
@@ -294,19 +275,17 @@ def test_server_status_reports_server_owned_facts(
     assert _tree_state(root) == before
 
     website = report.website
-    assert website.unit == _UNIT
-    assert website.state == "active" and website.substate == "running"
-    assert website.main_pid == _MAIN_PID
+    assert website.container.state == "running"
+    assert website.container.image == _WEB_IMAGE
     assert (website.host, website.port, website.configured_workers) == (
         _WEB_HOST,
         _WEB_PORT,
         _WEB_WORKERS,
     )
-    assert website.entry_point == "scripts/run_web.sh"
     assert website.checkout_branch == "synthetic-branch"
     assert website.checkout_revision == REVISION
-    assert website.started_at is not None and website.uptime_seconds is not None
-    assert website.uptime_seconds > 0
+    assert website.started_at == datetime(2026, 10, 10, 4, 39, tzinfo=UTC)
+    assert website.uptime_seconds is not None and website.uptime_seconds > 0
     elapsed = (datetime.now(UTC) - website.started_at).total_seconds()
     assert abs(elapsed - website.uptime_seconds) < 5
 
@@ -345,6 +324,12 @@ def test_server_status_reports_server_owned_facts(
     assert report.database.expected_schema_revision == expected_head
     assert report.database.host == "127.0.0.1"
     assert report.database.shared_memory_bytes == _SHARED_MEMORY_BYTES
+    privileged = [
+        command
+        for command in boundary.calls
+        if command[-4:-1] == ("inspect", "--format", "{{.HostConfig.ShmSize}}")
+    ]
+    assert privileged and privileged[0][:3] == ("sudo", "-n", "docker")
 
     if not selection_enabled:
         assert report.serving == server.ServingStatus(
@@ -386,15 +371,24 @@ def test_server_status_reports_server_owned_facts(
             ).scalar_one()
         assert report.database.size_bytes == live_size
 
-    # The configured unit, one Compose listing, and no other read of the server.
-    systemctl = next(command for command in boundary.calls if command[0] == "systemctl")
-    requested = tuple(systemctl[index + 1] for index, part in enumerate(systemctl) if part == "-p")
-    assert requested == _SITE_PROPERTIES
-    assert systemctl[3] == _UNIT
-    compose = next(
+    # One Compose listing and the site container's own start read, and no other server read.
+    compose_listing = next(
         command
         for command in boundary.calls
         if command[: len(mechanics.compose_prefix(non_interactive=True, interpreter=True))]
         == mechanics.compose_prefix(non_interactive=True, interpreter=True)
     )
-    assert compose[-4:] == ("ps", "--all", "--format", "{{json .}}")
+    assert compose_listing[-4:] == ("ps", "--all", "--format", "{{json .}}")
+
+    # The same report read under an account that can write the Docker socket runs its one container
+    # inspect through the unprefixed command instead of ``sudo -n``.
+    monkeypatch.setattr(compose, "docker_needs_sudo", lambda: False)
+    unprivileged = server.read_server_status(runner=boundary)
+    assert unprivileged.database.shared_memory_bytes == _SHARED_MEMORY_BYTES
+    unprefixed = [
+        command
+        for command in boundary.calls
+        if command[:1] == ("docker",)
+        and command[-4:-1] == ("inspect", "--format", "{{.HostConfig.ShmSize}}")
+    ]
+    assert unprefixed and unprefixed[0][-1] == "synthetic-db-container"

@@ -1,12 +1,16 @@
-"""Sole explicit worker code-setup/update and checkout-identity owner.
+"""Sole explicit worker code-update and checkout-identity owner.
 
-This module owns the one explicit operation that brings the already-provisioned worker checkout
-onto a selected GitHub-origin branch with ``git pull --ff-only``, the worker-side package/dependency
-bootstrap and pointed resource preparation, and the read-only preflight that reads the checkout
-identity and the worker resources. The remote update is a fast-forward pull, and the bootstrap and
-pointed resource preparation run through the captured, completion-reported transport, so the
-provisioned worker's sudo must be passwordless. Code sync is separate from the recurring
-translation/inference lifecycle, which validates worker schema and actual resources before work.
+This module owns the one server-side operation that brings the worker checkout onto a selected
+GitHub-origin branch with ``git pull --ff-only`` and installs its locked project environment, and
+the read-only preflight that reads the checkout identity and the worker resources. The worker's
+packages, services, model files and runtimes are installed on the worker itself, so no server
+operation runs a system package command. The update runs through the captured,
+completion-reported transport, and the preflight never elevates. Code sync is separate from the
+recurring translation/inference lifecycle, which validates worker schema and actual resources
+before work. A same-machine worker's image is built from the server checkout, so its preflight
+reports the server checkout's identity and its update is the server deployment. A same-machine
+operation reads the worker container's paths as local paths, so it runs inside the administration
+container and refuses elsewhere with one clear error.
 """
 
 from __future__ import annotations
@@ -27,21 +31,20 @@ from course_explorer.config import (
     load_worker_setup_settings,
 )
 from course_explorer_admin import mechanics
-from course_explorer_admin.provisioning_worker import (
-    SYSTEM_PACKAGES,
-    WorkerResourcesReport,
+from course_explorer_admin.provisioning_worker import WorkerResourcesReport
+from course_explorer_admin.transport import (
+    WorkerTransport,
+    build_worker_transport,
 )
-from course_explorer_admin.transport import SshWslTransport
 
 _SSH_BATCH_COMMAND = "core.sshCommand=ssh -o BatchMode=yes"
-_UV_INSTALL_URL = "https://astral.sh/uv/install.sh"
 
 
 def _repository_project_name() -> str:
     """Read this repository's own distribution name from its tracked pyproject metadata.
 
-    The locked code-only sync reinstalls this editable project so a pyproject-only change refreshes
-    the installed distribution, which uv's editable-install freshness otherwise ignores.
+    The locked sync reinstalls this editable project so a pyproject-only change refreshes the
+    installed distribution, which uv's editable-install freshness otherwise ignores.
     """
     metadata = tomllib.loads(
         (administration.repository_root() / "pyproject.toml").read_text(encoding="utf-8")
@@ -76,20 +79,32 @@ def update_worker_code(
 ) -> WorkerCodeReport:
     """Fast-forward the worker checkout to one origin branch, then sync its locked environment.
 
-    The dependency sync installs only the locked project environment. The resource and preparation
-    actions own apt packages, artifacts, and runtimes. The remote update is the fast-forward pull
-    alone.
+    The dependency sync installs only the locked project environment. The remote update is the
+    fast-forward pull alone, and the worker's packages, model files and runtimes belong to the
+    install that runs on the worker. A same-machine worker's image is built from the server
+    checkout, so its code update is the server deployment.
     """
-    report = _update_worker_code(branch=branch, runner=runner)
     connection = load_worker_connection_settings()
+    require_code_update_supported(connection)
+    transport = build_worker_transport(runner, connection)
+    report = _update_worker_code(transport, connection, branch=branch, runner=runner)
     setup = load_worker_setup_settings()
-    transport = SshWslTransport(runner, connection)
     _sync_worker_dependencies(transport, connection, setup)
     return report
 
 
+def require_code_update_supported(settings: WorkerConnectionSettings) -> None:
+    """Refuse a code update of a same-machine worker, whose code is the server checkout."""
+    if settings.host_kind == "same-machine":
+        raise ValueError("a same-machine worker updates with the server deploy")
+
+
 def _update_worker_code(
-    *, branch: str = "main", runner: mechanics.ProcessRunner
+    transport: WorkerTransport,
+    connection: WorkerConnectionSettings,
+    *,
+    branch: str,
+    runner: mechanics.ProcessRunner,
 ) -> WorkerCodeReport:
     """Update the worker checkout body."""
     root = administration.repository_root()
@@ -102,8 +117,6 @@ def _update_worker_code(
     server_origin_differs = _server_origin_differs(
         runner, root, branch=server_branch, revision=server_revision, fetch=True
     )
-    connection = load_worker_connection_settings()
-    transport = SshWslTransport(runner, connection)
     worker_branch, revision = _update_worker_checkout(
         transport,
         connection,
@@ -118,8 +131,8 @@ def _update_worker_code(
 def preflight_worker(*, runner: mechanics.ProcessRunner) -> ProvisioningReport:
     """Read the checkout identity and the worker resources.
 
-    The checkout identity is the branch and HEAD, and the read installs, builds and downloads
-    nothing.
+    The checkout identity is the branch and HEAD. The read installs, builds, downloads and starts
+    nothing, and it never elevates.
     """
     root = administration.repository_root()
     setup = load_worker_setup_settings()
@@ -131,8 +144,13 @@ def preflight_worker(*, runner: mechanics.ProcessRunner) -> ProvisioningReport:
         runner, root, branch=branch, revision=revision, fetch=False
     )
     connection = load_worker_connection_settings()
-    transport = SshWslTransport(runner, connection)
-    worker_branch, worker_revision = _read_worker_checkout(transport, connection)
+    transport = build_worker_transport(runner, connection)
+    if connection.host_kind == "same-machine":
+        # The worker container is built from this checkout, so the server identity is the worker
+        # code identity and no checkout lives on another machine to read.
+        worker_branch, worker_revision = branch, revision
+    else:
+        worker_branch, worker_revision = _read_worker_checkout(transport, connection)
     code = WorkerCodeReport(
         branch=worker_branch, revision=worker_revision, server_origin_differs=server_origin_differs
     )
@@ -143,19 +161,8 @@ def preflight_worker(*, runner: mechanics.ProcessRunner) -> ProvisioningReport:
     return ProvisioningReport(code=code, resources=_read_worker_resources(transport, connection))
 
 
-def prepare_worker(*, branch: str = "main", runner: mechanics.ProcessRunner) -> ProvisioningReport:
-    """Update code, stream the worker bootstrap, prepare pointed resources, and report readiness."""
-    code = _update_worker_code(branch=branch, runner=runner)
-    connection = load_worker_connection_settings()
-    setup = load_worker_setup_settings()
-    transport = SshWslTransport(runner, connection)
-    _bootstrap_worker(transport, connection, setup)
-    _prepare_worker_resources(transport, connection, setup)
-    return ProvisioningReport(code=code, resources=_read_worker_resources(transport, connection))
-
-
 def _sync_worker_dependencies(
-    transport: SshWslTransport, connection: WorkerConnectionSettings, setup: WorkerSetupSettings
+    transport: WorkerTransport, connection: WorkerConnectionSettings, setup: WorkerSetupSettings
 ) -> None:
     """Install the locked project environment on the already-pulled worker checkout.
 
@@ -207,7 +214,7 @@ def _server_origin_differs(
 
 
 def _update_worker_checkout(
-    transport: SshWslTransport,
+    transport: WorkerTransport,
     connection: WorkerConnectionSettings,
     *,
     branch: str,
@@ -240,7 +247,7 @@ def _update_worker_checkout(
 
 
 def _read_worker_checkout(
-    transport: SshWslTransport, connection: WorkerConnectionSettings
+    transport: WorkerTransport, connection: WorkerConnectionSettings
 ) -> tuple[str, str]:
     worker_root = connection.worker_project_root
 
@@ -294,77 +301,36 @@ def _worker_update_script(
     )
 
 
-def _bootstrap_worker(
-    transport: SshWslTransport, connection: WorkerConnectionSettings, setup: WorkerSetupSettings
-) -> None:
-    worker_root = connection.worker_project_root
-    packages = " ".join(SYSTEM_PACKAGES)
-    script = (
-        "set -euo pipefail; "
-        f"cd {shlex.quote(str(worker_root))}; "
-        "test -f src/course_explorer_admin/provisioning_worker.py; "
-        "sudo apt-get update; "
-        f"sudo apt-get install -y --no-install-recommends {packages}; "
-        "if ! command -v uv >/dev/null 2>&1; then "
-        f"  curl --disable --fail --location --proto '=https' --tlsv1.2 {_UV_INSTALL_URL} "
-        "| UV_NO_MODIFY_PATH=1 sh; "
-        "fi; "
-        'export PATH="$HOME/.local/bin:$PATH"; '
-        "uv sync --locked"
-    )
-    transport.run(
-        ("bash", "-c", script),
-        cwd=PurePosixPath(str(worker_root)),
-        timeout=setup.worker_setup_timeout_seconds,
-    )
-
-
-def _prepare_worker_resources(
-    transport: SshWslTransport, connection: WorkerConnectionSettings, setup: WorkerSetupSettings
-) -> None:
-    transport.run(
-        (
-            "uv",
-            "run",
-            "--no-sync",
-            "--offline",
-            "--no-python-downloads",
-            "python",
-            "-m",
-            "course_explorer_admin.provisioning_worker",
-            "prepare",
-        ),
-        cwd=PurePosixPath(str(connection.worker_project_root)),
-        timeout=setup.worker_setup_timeout_seconds,
-    )
-
-
 def _read_worker_resources(
-    transport: SshWslTransport, connection: WorkerConnectionSettings
+    transport: WorkerTransport, connection: WorkerConnectionSettings
 ) -> WorkerResourcesReport:
+    argv = [
+        "uv",
+        "run",
+        "--no-sync",
+        "--offline",
+        "--no-python-downloads",
+        "python",
+        "-m",
+        "course_explorer_admin.provisioning_worker",
+        "check",
+    ]
+    if connection.host_kind == "same-machine":
+        # The worker container's image owns the host packages, so the read checks the mounted device.
+        argv.append("--in-container")
     payload = transport.run(
-        (
-            "uv",
-            "run",
-            "--no-sync",
-            "--offline",
-            "--no-python-downloads",
-            "python",
-            "-m",
-            "course_explorer_admin.provisioning_worker",
-            "check",
-        ),
+        tuple(argv),
         cwd=PurePosixPath(str(connection.worker_project_root)),
     )
     return WorkerResourcesReport.model_validate_json(payload.decode("utf-8"))
 
 
 def _worker_dependencies_ready(
-    transport: SshWslTransport, connection: WorkerConnectionSettings
+    transport: WorkerTransport, connection: WorkerConnectionSettings
 ) -> bool:
     try:
         transport.run(
-            ("uv", "sync", "--locked", "--check", "--offline", "--no-python-downloads"),
+            transport.dependency_check_arguments(),
             cwd=PurePosixPath(str(connection.worker_project_root)),
         )
     except subprocess.CalledProcessError:

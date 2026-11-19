@@ -37,15 +37,11 @@ from course_explorer.config import (
     WebSettings,
     WorkerConnectionSettings,
     WorkerGpuRebootSettings,
+    WorkerGpuSettings,
     WorkerRuntimeSettings,
     WorkerSetupSettings,
 )
-from tests.support import (
-    REPO_ROOT,
-    public_environment,
-)
-
-__all__ = ["REPO_ROOT"]
+from tests.support import public_environment
 
 LOCAL_TEMPLATE_KEYS = {
     "POSTGRES_PASSWORD",
@@ -95,6 +91,7 @@ WORKER_CONNECTION_KEYS = _keys(WorkerConnectionSettings)
 WORKER_SETUP_KEYS = _keys(WorkerSetupSettings)
 WORKER_RUNTIME_KEYS = _keys(WorkerRuntimeSettings)
 WORKER_GPU_REBOOT_KEYS = _keys(WorkerGpuRebootSettings)
+WORKER_GPU_KEYS = _keys(WorkerGpuSettings)
 WEB_KEYS = _keys(WebSettings)
 ADMISSION_KEYS = _keys(AdmissionSettings)
 ADMIN_WEB_KEYS = _keys(AdminWebSettings)
@@ -143,6 +140,7 @@ FIXTURE_VALUES: dict[str, str] = {
     **TRANSLATION_KEYS,
     **TRANSLATION_CONTROLLER_KEYS,
     **WORKER_SETUP_KEYS,
+    **WORKER_GPU_KEYS,
     **ADMIN_DATASET_KEYS,
     **INFERENCE_KEYS,
     **INFERENCE_CONTEXT_KEYS,

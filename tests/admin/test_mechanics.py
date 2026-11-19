@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ import pytest
 from course_explorer_admin import machine_locks
 from course_explorer_admin.mechanics import (
     SubprocessRunner,
+    active_seconds,
     exclusive_action_lock,
     model_request_scope,
 )
@@ -222,3 +224,12 @@ def test_subprocess_runner_run_captures_output_and_honors_files(tmp_path: Path) 
 
     with pytest.raises(subprocess.CalledProcessError):
         SubprocessRunner().run((sys.executable, "-c", "raise SystemExit(3)"))
+
+
+def test_active_session_time_holds_at_zero_across_a_backward_clock_step() -> None:
+    """A backward host clock step contributes no elapsed time, so the state stays publishable."""
+    running_since = datetime(2026, 11, 18, 2, 48, 18, tzinfo=UTC)
+    earlier = running_since - timedelta(seconds=5)
+    assert active_seconds(10.0, running_since, running=True, now=earlier) == 10.0
+    later = running_since + timedelta(seconds=2)
+    assert active_seconds(10.0, running_since, running=True, now=later) == 12.0

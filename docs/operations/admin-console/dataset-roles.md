@@ -41,9 +41,9 @@ A busy stage disables **Copy to Working**, the Working dataset's **Delete** and 
 
 ## Copy to Selected
 
-**Copy to Selected** asks for confirmation first, and the dialog names the source dataset, its database and that serving restarts and is briefly unavailable.
+**Copy to Selected** asks for confirmation first, and the dialog names the source dataset, its database and that the site container is re-created and is briefly unavailable.
 
-**Confirm** sends the confirmed promotion, and the panel lists its five steps in order: **Copy dataset**, **Build serving artifacts**, **Switch Selected**, **Restart serving** and **Prove serving**. Each reported step is marked as current with an indeterminate marker and every earlier step as done. When the restart or the proof fails, the list adds **Restore previous selection** as the current step. [Datasets](/docs/operations/datasets.md#promotion-to-selected) states the promotion, its rollback and the resources it retains.
+**Confirm** sends the confirmed promotion, and the panel lists its five steps in order: **Copy dataset**, **Build serving artifacts**, **Switch Selected**, **Re-create the site container** and **Check serving**. Each reported step is marked as current with an indeterminate marker and every earlier step as done. When the re-create or the check fails, the list adds **Restore previous selection** as the current step. [Datasets](/docs/operations/datasets.md#promotion-to-selected) states the promotion, its rollback and the resources it retains.
 
 A successful terminal result is the only completion. It clears the step list and reloads the inventory and the Dashboard read. A refused, failed or interrupted request shows its owning guidance line, reloads both reads to reveal the actual selection, and never sends the promotion again. The promotion continues on the server when the browser leaves.
 

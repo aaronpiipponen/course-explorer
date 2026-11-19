@@ -1,26 +1,28 @@
-# Worker transport and datasets
+# Worker transport
 
-This page maps the modules that carry one worker session over the transport boundary and own the dataset receipts, snapshots, and rotation.
+This page maps the modules that carry one worker session over the transport boundary and states the connection values, the worker requirements and the fixed log read.
 
 ## Module owners
 
 | Module | Owns |
 |---|---|
-| `src/course_explorer_admin/transport.py` | The one SSH/WSL command and file transport, its recovery budget, and the transport error classes |
+| `src/course_explorer_admin/transport.py` | The one worker command and file transport seam with its WSL, native Linux and same-machine kinds, its recovery budget, and the transport error classes |
 | `src/course_explorer_admin/logs.py` | The session listing, and the fixed bounded log reads the two worker sources reach through that transport |
 | `src/course_explorer_admin/remote.py` | The worker session, control, and status DTOs, the worker-side prepare/export/cleanup helpers, and the worker dataset CLI |
 | `src/course_explorer_admin/worker_session.py` | The shared worker-side lifecycle shell, its subcommands, and the identity, quiescence, and cleanup guards |
-| `src/course_explorer_admin/remote_stages.py` | The server-side translation and inference adapters over the lifecycle core |
+| `src/course_explorer_admin/remote_stages.py` | The server-side translation and inference adapters over the lifecycle core and the administration backend's startup resume |
 | `src/course_explorer_admin/machine_locks.py` | The machine-wide checkout, server and worker reservations and their files |
 | `src/course_explorer_admin/snapshots.py` | The dump and restore command mechanics and the embedding-data rule |
 | `src/course_explorer_admin/datasets.py` | Receipt and role-pointer writes, enrollment, role migration, copy, return retention, and rotation |
 | `src/course_explorer/datasets.py` | The dataset DTOs, pointer resolution, the schema-head check, and the verification read |
-| `src/course_explorer_admin/provisioning.py` | Explicit worker code update, preparation, and read-only preflight |
-| `src/course_explorer_admin/provisioning_worker.py` | Worker-side resource readiness and preparation, and the prepared-runtime check |
-| `src/course_explorer_admin/reboot.py` | The loaded-GPU checkpoint clock and the worker restart handshake |
+| `src/course_explorer_admin/provisioning.py` | Explicit worker code update and read-only preflight |
+| `src/course_explorer_admin/provisioning_worker.py` | Worker-side resource readiness and preparation, the prepared-runtime check, the per-key generation components with their fallback, the published or local translation artifact and its derived source URL, and its one `check` action |
+| `src/course_explorer_admin/worker_install.py` | The interactive worker install that writes the worker's working files, identity and selected model preset, prepares its stack, and recreates a running same-machine worker with its generated GPU override |
+| `src/course_explorer_admin/working_files.py` | One owner for materializing a checkout's absent working files from the tracked examples |
+| `src/course_explorer_admin/reboot.py` | The loaded-GPU checkpoint clock and the host restart handshakes of the WSL, native Linux and same-machine worker host kinds |
 | `src/course_explorer_admin/runtime.py` | The owned model runtime shared by the two worker stages |
 
-The behavior these owners implement is described in [Worker sessions](/docs/operations/worker-sessions.md) and [Datasets](/docs/operations/datasets.md).
+The behavior these owners implement is described in [Worker sessions](/docs/operations/worker-sessions.md) and [Datasets](/docs/operations/datasets.md). The session lifecycle seam, the dataset owners and the model runtime are described in [Worker dataset owners](/docs/operations/worker-dataset-owners.md).
 
 ## The reservation helper
 
@@ -36,24 +38,78 @@ uv run python -m course_explorer_admin.machine_locks release worker INSTANCE_KEY
 
 ## The transport abstraction
 
-`SshWslTransport(runner: mechanics.ProcessRunner, settings: WorkerConnectionSettings)` owns four boundaries.
+`build_worker_transport(runner: mechanics.ProcessRunner, settings: WorkerConnectionSettings)` is the one construction owner. It returns `SshWslTransport` for `WORKER_HOST_KIND = "wsl"`, `SshLinuxTransport` for `WORKER_HOST_KIND = "linux"`, and `ComposeExecTransport` for `WORKER_HOST_KIND = "same-machine"`. Every kind extends `WorkerTransport`, which owns four boundaries.
 
 | Method | Boundary |
 |---|---|
 | `run(argv, *, cwd, env=None, stdin_path=None, timeout=None)` | One command with captured stdout and a classified result |
 | `start_detached(argv, *, cwd, env, output_path, timeout=None)` | One detached command and its log file |
-| `upload(source, destination, *, reuse_matching=False, timeout=None)` | One file streamed to the worker and renamed into place |
-| `download(source, destination, *, timeout=None)` | One file streamed back to an atomic local mode-0600 file |
+| `upload(source, destination, *, reuse_matching=False, timeout=None)` | One file streamed to the worker and renamed into place, or a same-machine local copy beside its destination |
+| `download(source, destination, *, timeout=None)` | One file streamed back to an atomic local mode-0600 file, or a same-machine local copy |
 
-The keepalive methods are `start_keepalive`, `keepalive_is_alive`, `stop_keepalive`, and `terminate_remote_keepalive`. The worker-host identity methods are `read_windows_boot_id` and `request_windows_reboot`.
+The WSL kind carries every command through `wsl.exe -d <distribution> -- bash -lc` with the cmd.exe metacharacter escaping that Windows OpenSSH requires. Its keepalive methods are `start_keepalive`, `keepalive_is_alive`, `stop_keepalive`, and `terminate_remote_keepalive`. The WSL kind reads the native Windows last-boot identity and restarts Windows, and the native Linux kind runs one `bash -lc` command over plain SSH, reads the kernel boot id and restarts through `sudo -n /usr/bin/systemctl reboot`. The native Linux kind refuses every keepalive operation with one fixed `ValueError`.
 
-Every command body runs through one wrapper that installs an exit trap before the working directory change. The trap emits exactly one `COURSE_EXPLORER_TRANSPORT_RESULT <phase> <status>` record on standard error, where the phase is `bootstrap` before the payload starts and `command` after. `_classify` reads the process status and the records: a zero status must carry exactly one zero `command` record, a nonzero status with a valid nonzero record raises `WorkerCommandError`, and a nonzero status without a record raises `WorkerAvailabilityError`. Any other shape raises `ValueError`, so an unproven completion is never mistaken for a success. The wrapper rejects an environment override whose key is not on `_WORKER_ENVIRONMENT_ALLOWLIST`, which holds the stage state roots, the derived database name, the GPU detection flag, and the checkpoint-reboot interval.
+The same-machine kind runs every command as `docker compose exec -T worker bash -lc` through the server's Compose bridge, so the command path holds one Compose client and no SSH client. It reads the worker container's paths as this host's paths, so every same-machine operation runs inside the administration container and one run outside it refuses with that rule before any Compose command. The server and the worker container read the same mounted checkout, shared directory and session directory.
+
+An upload whose two paths are one file returns without a transfer, and another upload is a local copy beside its destination. A same-machine stage uses the instance's own `db` service, so this kind owns no database service and records none. It starts no keepalive.
+
+`read_host_boot_id` reads the kernel boot id through the container. `request_host_reboot` issues one fixed `--rm --privileged --pid=host` one-shot of the running container's own image, which enters the host's namespaces and runs the host's `systemctl reboot`. The worker container's Docker socket carries that authority. The host severs the exec connection, and the changed kernel boot id is the proof.
+
+The handshake retries that transport availability loss inside the configured reboot budget, and the administration backend's startup resume continues the interrupted same-machine session.
+
+The `worker` service belongs to the instance stack under the `worker` profile, and `up` starts it when the configured host kind is `same-machine`. The install writes `docker-compose.worker.yml` with the host's ROCm device nodes and group ids, or the NVIDIA runtime and the three CUDA toolkit sonames. The Compose bridge adds that file and the profile to every command on a same-machine host, so the service is built, started and inspected through the same bridge as the other services. A remote-worker host runs its Compose commands without either addition.
+
+Every command body runs through one wrapper that installs an exit trap before the working directory change. The trap emits exactly one `COURSE_EXPLORER_TRANSPORT_RESULT <phase> <status>` record on standard error, where the phase is `bootstrap` before the payload starts and `command` after. `_classify` reads the process status and the records: a zero status must carry exactly one zero `command` record, a nonzero status with a valid nonzero record raises `WorkerCommandError`, and a nonzero status without a record raises `WorkerAvailabilityError`. Any other shape raises `ValueError`, so an unproven completion is never mistaken for a success. The wrapper rejects an environment override whose key is not on `_WORKER_ENVIRONMENT_ALLOWLIST`, which holds the stage state roots, the derived database name, and the checkpoint-reboot toggle and interval.
 
 `WorkerRecovery` owns one retry-admission budget. `begin()` fixes one deadline of `connection.stop_timeout_seconds`, `remaining()` reports what is left of it, and `call(operation)` retries only `WorkerAvailabilityError` while the budget lasts and the optional `run_allowed` admission holds. `WorkerConnectionLost` is the expired-recovery subclass, and `WorkerRecoveryCancelled` is raised when live run intent is withdrawn.
 
-The connection values name where the transport goes. `TRANSLATION_CONTROLLER_SSH_CONNECT_TIMEOUT_SECONDS` bounds one connect attempt, `TRANSLATION_CONTROLLER_STOP_TIMEOUT_SECONDS` is the recovery and stop bound, and `TRANSLATION_CONTROLLER_HEALTH_INTERVAL_SECONDS` spaces the retries and polls. The target, the environment, and the worker checkout path are non-secret worker identity values in `config/worker.toml`, so a machine change does not change shared code.
+The connection values name where the transport goes. They are non-secret worker identity values in `config/worker.toml`, so a machine change does not change shared code. [The worker connection values](#the-worker-connection-values) lists them and the rules that bind each host kind.
 
-Transport protocols at the level the module fixes them: each command is one SSH invocation against the configured worker target, and each command body runs inside the configured environment on the worker. The boot identity read and the restart request use the same target without the command wrapper. The keepalive is one detached local SSH child that holds a remote sleep open for the session, and `terminate_remote_keepalive` stops the exact session-named remote process.
+Transport protocols at the level the module fixes them: an SSH command is one SSH invocation against the configured worker target, and each command body runs inside the configured environment on the worker. A WSL command carries the `wsl.exe` wrapper, and a native Linux command is one `bash -lc` over SSH. A same-machine command is one `docker compose exec -T worker bash -lc` invocation through the server's bridge. The host boot read and the restart request use the same target without the wrapper on the SSH kinds. The WSL kind sends the native Windows commands, and the native Linux kind sends the kernel boot read and the one allowed restart command. The same-machine kind reads the kernel boot id through its exec, and its restart request is the one fixed privileged one-shot over the worker container's Docker socket. The WSL keepalive is one detached local SSH child that holds a remote sleep open for the session, and `terminate_remote_keepalive` stops the exact session-named remote process.
+
+## The worker connection values
+
+`WORKER_HOST_KIND` selects the kind. The `wsl` and `linux` kinds require the SSH target, and the `same-machine` kind refuses it. The `wsl` kind requires the distribution, and the other kinds refuse it. A same-machine worker's project root is its container path. `WORKER_SSH_CONNECT_TIMEOUT_SECONDS` bounds one connect attempt, `WORKER_STOP_TIMEOUT_SECONDS` is the recovery and stop bound, and `WORKER_HEALTH_INTERVAL_SECONDS` spaces the retries and polls.
+
+| File | Key | Holds |
+|---|---|---|
+| `config/worker.toml` | `WORKER_HOST_KIND` | `wsl` reaches a Windows host through a WSL distribution, `linux` reaches a native Linux host over plain SSH, and `same-machine` reaches the instance's worker container with no SSH hop. The example file carries `wsl`. |
+| `config/worker.toml` | `WORKER_SSH_TARGET` | The SSH target of a `wsl` or `linux` worker. A `same-machine` worker removes the key. The example file carries a placeholder value. |
+| `config/worker.toml` | `WORKER_WSL_DISTRIBUTION` | The WSL distribution on that target that holds the checkout. A `linux` worker names no value. The example file carries a placeholder value. |
+| `config/worker.toml` | `WORKER_PROJECT_ROOT` | The absolute path of the project checkout on the worker, or `/app` for a same-machine worker. The example file carries a placeholder value. |
+| `config/worker.toml` | `WORKER_SETUP_PROJECT_URL` | The expected origin URL. The worker update compares both checkout origins against it, the preflight compares the server checkout origin against it, and the example file carries a placeholder value. On a same-machine worker the server checkout's origin is the worker's, because its image is built from that checkout. |
+| `config/worker.toml` | `WORKER_SSH_CONNECT_TIMEOUT_SECONDS` | The bound on one connect attempt, 10 seconds in the example. |
+| `config/worker.toml` | `WORKER_SETUP_TIMEOUT_SECONDS` | The bound on each remote install, download, or build step, four hours in the example. |
+| `config/worker.toml` | `WORKER_GPU_REBOOT_ENABLED` | Turns the periodic checkpoint reboot on. The example leaves it off, and a deployment that wants the periodic restart turns it on. |
+| `config/worker.toml` | `WORKER_GPU_REBOOT_INTERVAL_MINUTES` | The loaded-model run time after which the worker restarts, 120 minutes in the example. |
+| `config/worker.toml` | `WORKER_GPU_BACKEND` | `rocm` builds llama.cpp with HIP and launches the model children with the ROCm device variables, and `cuda` builds it with CUDA and launches them with the CUDA device variable. The example file carries `rocm`. |
+| `config/worker.toml` | `WORKER_GPU_TARGET` | The ROCm compute target such as `gfx1201` for `rocm`, and the CUDA compute capability without the dot such as `86` for `cuda`. The example file carries `gfx1201`. |
+| `config/worker.toml` | `WORKER_GPU_DEVICE_INDEX` | The vendor index of the card the model servers use, from 0 to 15. The example file carries `0`. |
+| `config/database.toml` | `ADMIN_SHARED_ROOT` | The machine-wide shared directory the worker preparation loads. Preparation creates its `models/` and `locks/` directories at mode 0700, so the key holds one value before preparation runs. |
+| `config/translation.toml` | `WORKER_HEALTH_INTERVAL_SECONDS`, `WORKER_STOP_TIMEOUT_SECONDS` | The retry and poll interval, 2 seconds in the example, and the recovery and stop bound, 660 seconds in the example. |
+| `config/translation.toml`, `config/inference.toml` | The artifact keys | The configured model files and runtimes the worker holds, named by `TRANSLATION_ARTIFACT_PATH`, `TRANSLATION_ARTIFACT_SHA256` and the translation source keys, each `INFERENCE_LOCAL_VARIANTS` entry's `artifact_path` and `artifact_sha256`, and the rerank artifact keys. A path is absolute or relative to the worker checkout, and a model file the worker shares with another checkout is stored under `ADMIN_SHARED_ROOT/models/` and named by its absolute path. A model file at that path in the checkout, holding its pinned bytes, satisfies the readiness read. A local translation conversion is installed at its path beforehand. |
+| `config/translation.toml`, `config/inference.toml` | `TRANSLATION_CONTROLLER_STATE_ROOT`, `INFERENCE_CONTROLLER_STATE_ROOT` | The repository-relative roots that hold each controller's recorded state. |
+
+The install writes the worker's own copy of these values from its answers and the detected host, and the server keeps its own `config/worker.toml` with the same connection values, because the code update and the preflight reach the worker through them. A server copy for a WSL worker also names the distribution. [A Windows WSL worker](/docs/getting-started/worker-wsl.md) and [a Linux worker](/docs/getting-started/worker-linux.md) state the install answers, and [Configuration](/docs/backend/configuration.md#subsystem-keys) states every key of the subsystem files.
+
+## What the worker must provide
+
+- A `wsl` or `linux` worker's target accepts an SSH connection without a password prompt, because every remote command runs with batch mode set. One SSH target serves either host kind.
+- A `wsl` worker names the configured WSL distribution that exists on that target and runs every remote command inside it. A `linux` worker names no distribution and runs every remote command as `bash -lc` over plain SSH. A `same-machine` worker runs every command through `docker compose exec -T worker` in the instance's worker container.
+- The SSH target and, for a WSL worker, the WSL distribution are each 1 to 64 ASCII letters, digits, underscore, dot, or hyphen.
+- The project root is an absolute path without dot components, and a WSL worker's path carries no percent characters because Windows OpenSSH passes it through cmd.exe. A same-machine worker's project root is `/app`, the container path of the image root.
+- A WSL worker starts one keepalive process per session. A native Linux worker and a same-machine worker start none.
+- A `wsl` or `linux` worker's checkout exists at the configured project root on a non-detached Git branch with its origin remote set, because the code update reads it and applies a fast-forward pull. The update fetches the selected origin branch, refuses a local branch ahead of or diverged from the origin branch, switches the checkout onto the branch, and pulls the branch fast-forward. Git refuses an operation that would overwrite a local change. A same-machine worker's project root is the image's `/app`, and one deployment updates its image.
+- The install runs `sudo` in the operator's terminal, so it prompts for the account's password when a privileged step needs it.
+- The account reaches Docker through the `docker` group, because the stages run without a terminal and reach Docker through the Compose bridge. The group gives the account full control of the machine. The install starts the Docker service and joins the group, and the membership takes effect in a new login session.
+- A native Linux worker on its own machine allows exactly `/usr/bin/systemctl reboot` through one installed sudoers rule, because the checkpoint reboot runs that command over the same transport. The install offers the rule after the other steps, replaces the template's `WORKER_ACCOUNT` token with the account on the rule line, and checks the installed file with `visudo -c -f`. A WSL host and a same-machine host receive no rule.
+- A same-machine worker restarts its host at the checkpoint reboot through one fixed privileged one-shot over the worker container's Docker socket, so it needs no rule. The reboot takes the site and the console down for the boot, and the administration backend's startup resume relaunches the interrupted stage when the stack returns.
+- On a native Linux ROCm worker the account is in the `render` and `video` groups, because `/dev/kfd` and the `/dev/dri` nodes belong to them and the model servers open those nodes. The install joins both groups for a ROCm worker. A same-machine host joins the `docker` group alone, and its worker container receives the two device group ids in the generated override.
+- Docker and Docker Compose are available, because the prepared database image and the embedding image run through the Compose bridge. The database image build installs the serving extension from `docker/db/extension/`, and readiness requires its capability label.
+- The configured GPU stack answers, because preparation reads it before the first build and the model servers need it. A ROCm worker needs `rocminfo` to name the configured compute target, and its build reads `hipconfig` for the ROCm prefix, the HIP compiler and the clang path. A CUDA worker needs `nvcc` to answer and a card whose compute capability, read through `nvidia-smi`, equals the configured target. A CUDA same-machine worker also needs the NVIDIA Container Toolkit installed and its `nvidia` runtime registered with Docker, which `docker info` lists.
+- The package list follows the backend and the host kind, because the install runs it. A ROCm worker installs `rocm`, and a ROCm worker inside WSL adds `rocdxg-roct`. A CUDA worker installs no GPU package: its driver and CUDA toolkit are installed on the host.
+- Each backend and compute target has its own runtime directory `~/.local/src/llama.cpp-<revision>-<backend>-<target>`, so one machine holds the ROCm and CUDA builds of a revision and the builds for two targets beside each other. Preparation clones and builds there, and the built runtime carries no web UI because every model child runs with `--no-webui`.
+- A model child runs with `HIP_VISIBLE_DEVICES` set to the configured card index on a ROCm worker, and with `CUDA_VISIBLE_DEVICES` on a CUDA worker. A ROCm worker inside WSL also sets `HSA_ENABLE_DXG_DETECTION=1`, which its device path needs.
 
 ## The fixed worker log read
 
@@ -65,85 +121,9 @@ Only a command-phase exit status of 3 is classified as an absent log, which the 
 
 This read installs nothing, prepares nothing, reads no worker status, starts no keepalive and retries nothing, so it needs no `uv` invocation, no dependency check, no prepared checkout and no recovery episode.
 
-## The session lifecycle seam
-
-`WorkerStage` in `src/course_explorer_admin/worker_session.py` is the seam a worker stage implements. Its methods are `connection`, `load_session`, `load_state`, `require_policy`, `publish_prepared`, `run`, `read_import_receipt`, `finalize`, `status`, `stop_updates`, and `require_cleanup_evidence`, and its attributes name the stage, the controller lock name, and the artifacts that cleanup removes.
-
-| Function | Owns |
-|---|---|
-| `prepare_worker_session(stage, session, *, runner)` | The canonical prepare and the already-prepared acknowledgement |
-| `run_worker_session(stage, session_id, *, runner, ...)` | One session run under the session instance lock |
-| `request_worker_action(stage, session_id, action, *, runner, ...)` | Pause, resume, and stop, and their acknowledgement |
-| `finalize_worker_session(stage, session_id, *, runner)` | The one import and publication of a terminal session |
-| `cleanup_worker_session(stage, session_id, *, runner)` | The receipt-gated drop and evidence removal |
-| `read_worker_status(stage, session_id, *, clock)` | The read-only operator status |
-| `project_worker_lifecycle(state, *, directory)` | The interrupted projection of a vanished runner |
-| `await_worker_quiescence(...)` and `require_worker_quiescence(state, directory)` | The bounded exit wait and the locked re-proof |
-| `require_worker_database_schema(session)` | The received-database schema-head precondition |
-| `worker_main(stage)` | The prepare, run, pause, resume, status, finalize, cleanup, and stop subcommands |
-
-The server-side adapter is `remote_stages.RemoteStage`. `run(context)` captures the session, brings the worker up, launches the run, and mirrors progress until a terminal status. `release(context)` is the pause path, and `finalize(context)` is the stop path that finalizes, returns, cleans, and releases. `_bring_up(context, transport, connection, session, *, recovery)` starts the keepalive, the worker database service, the remote session directory, the uploads, the check of the locked environment, and the worker restore. `_launch(...)` re-arms a retained session and starts the detached run, and `_await_launch_acknowledgment(...)` resolves a lost launcher response from read-only status. `_mutation_with_reconcile(operation, read_status, accepted)` reads the real status before a retry, and the closed accepted sets are `_RESUME_ACCEPTED`, `_PAUSE_ACCEPTED`, `_STOP_ACCEPTED`, `_FINALIZE_ACCEPTED`, and `_CLEANUP_ACCEPTED`. `_transport(runner, connection)` is the single construction point, and `_worker_helper(...)` wraps every worker invocation in `uv run --no-sync --offline --no-python-downloads`.
-
-Where to change what:
-
-| Behavior | Owner |
-|---|---|
-| Adding a remote stage | A `WorkerStage` implementation plus a `RemoteStage` built in `remote_stages.py` |
-| The control vocabulary | `WorkerControl` in `remote.py` and `publish_worker_control` in `worker_session.py` |
-| The worker subcommand set | `worker_main` in `worker_session.py` |
-| The transport or its recovery budget | `transport.py` |
-| The session identity fields | `WorkerDatasetSession` in `remote.py` |
-
-## Worker commands
-
-These commands run on the worker. The first two act on the session directory of one prepared session, and the third reads the worker's resources and takes no session.
-
-```bash
-uv run --no-sync --offline --no-python-downloads python -m course_explorer_admin.translation.controller_worker status SESSION_ID
-uv run --no-sync --offline --no-python-downloads python -m course_explorer_admin.remote prepare SESSION_ID
-uv run --no-sync --offline --no-python-downloads python -m course_explorer_admin.provisioning_worker check
-```
-
-`course_explorer_admin.remote` exposes `prepare`, `export`, and `cleanup`. The stage worker modules expose `prepare`, `run`, `pause`, `resume`, `status`, `finalize`, `cleanup`, and `stop` through the shared shell. `course_explorer_admin.provisioning_worker` exposes `check` and `prepare`.
-
-## Dataset owners and predicates
-
-`src/course_explorer/datasets.py` owns the DTOs and the read-only checks. `DatasetReceipt.validate_kind_identity` enforces the initial, returned and copied receipt shapes, `DatasetPointer` is the strict pointer, `DatabaseSnapshot` binds a dump digest to a session and a verification, and `DatasetVerification` carries the migration head, the table row counts, the catalogue summary, and the coverage reads. One public dataset read applies the state-tree guard once and passes the checked root down, so one listing does not walk the tree once per pointer and receipt. `read_dataset_role(state_root, role)` reads one role and decides bootstrap, `resolve_dataset_role(state_root, role)` raises the role guidance, `resolve_selected_dataset(state_root)` delegates to that resolver, `read_dataset_receipt(state_root, dataset_id)` reads one confined receipt after the state guard, `dataset_state_refusal(state_root)` reports a redirected state tree, `require_selected_dataset_root(state_root)` refuses one, `require_database_schema(connection)` compares the current migration head and raises `DatabaseSchemaMismatchError`, and `read_dataset_verification(settings)` opens one disposable engine for the verification read.
-
-`src/course_explorer_admin/datasets.py` owns every write. `admin_state_path(settings)` returns the repository-relative state root, `admin_state_root(settings)` resolves it and refuses the backups boundary, `initialize_selected_dataset(*, runner)` enrolls the initial dataset, `ensure_selected_dataset(*, runner)` applies the example-database exception for deploy, `migrate_dataset(role, *, runner)` applies the head to the named role's database, where a Working migration takes the checkout reservation under the `migrate_working` operation and requires every stage idle and a Selected migration does neither, `copy_to_working(source_dataset_id, *, runner)` creates a verified copy and publishes Working, and `retain_returned_dataset(session, snapshot, dump, *, runner)` restores, verifies, writes the returned receipt, publishes Working, and rotates.
-
-The receipt predicate and the path helpers sit beside those writes. `require_returned_dataset_receipt(receipt, session, *, server_database)` is the receipt predicate, `read_optional_dataset_receipt(root, dataset_id)` tells an absent receipt from a malformed one, `require_droppable_database(database_name)` refuses a protected name, `_retain_dump(source, destination)` copies a dump into its confined path, `_walk_chain(receipts, start)` validates one chain through the action's receipt index, and `_rotate_locked(settings, root, runner)` drops the databases outside both role pairs.
-
-`save_activity_configuration(file, key, value, *, settings_families)` saves one activity policy key and refreshes the stored activity of the Selected and Working databases, or of the configured database when no Selected pointer exists, with every stage idle under the datasets action lock. `run_administrative_config_set` routes `CURRENT_ACADEMIC_YEAR` and `ACTIVE_ACADEMIC_YEAR_WINDOW` of `config/curriculum.toml` to it, and every other key takes the file save alone.
-
-`src/course_explorer_admin/remote.py` owns the session-side dataset work. `create_worker_dataset_session(stage, *, session_id, course_limit=None, runner)` snapshots the Working dataset, `prepare_worker_database(session, *, runner)` restores the uploaded input dump and checks it against the snapshot digest, `export_worker_database(session, *, runner)` verifies and exports the return snapshot, `return_worker_database(session, *, transport, runner)` downloads and retains it, and `cleanup_returned_worker_database(session, receipt, *, runner)` drops the exact worker database after the recorded session, the receipt and the return snapshot agree on their session and database identity. `worker_dataset_session_directory(session_id)` and `remote_worker_session_directory(connection, session_id)` own the two session path forms.
-
-`src/course_explorer_admin/snapshots.py` owns the process commands. `dump_database(*, runner, root, settings, destination, include_embeddings, timeout=None)` dumps into a fresh temporary, publishes it at mode 0600 and returns its producer digest, `restore_database(...)` creates or verifies a target and restores into it, checks a supplied expected digest once, and compares the restored database's verification with the supplied snapshot verification, and `database_dump_contains_embedding_data(listing)` matches `_EMBEDDING_TABLE_DATA_PATTERN` for the embedding-data policy. A transferred or moved dump is restored with its snapshot digest, while a same-operation copy passes no separate digest and relies on the producer digest stored in the receipt and the restore verification.
-
-Where to change what:
-
-| Behavior | Owner |
-|---|---|
-| The receipt, snapshot, or verification shape | `src/course_explorer/datasets.py` |
-| Enrollment, copy, return, or rotation | `src/course_explorer_admin/datasets.py` |
-| The dump and restore commands | `src/course_explorer_admin/snapshots.py` |
-| The derived database names | `AdministrativeDatasetSettings.dataset_database_prefix` and `worker_database_prefix` in `src/course_explorer/config.py` |
-
-## The checkpoint clock and the model runtime
-
-`reboot.WorkerGpuClock(directory, *, session_id, settings, monotonic=time.monotonic)` counts loaded seconds only. `loaded()` opens one segment, `unloaded()` closes it, `checkpoint()` samples the open segment and publishes `WorkerGpuCheckpoint` as `gpu-clock.json`, and `due` reports the last published sample. `worker_gpu_reboot_due(directory, *, session_id, settings)` is the read-only due check, and `reboot_windows_worker(transport, connection, *, run_allowed, recovery=None, sleep=..., monotonic=...)` issues one restart request and proves a changed boot plus a healthy worker environment before it returns.
-
-`runtime.OwnedWorkerRuntime(runner, *, root, directory, sleep=...)` owns one model child through the `runtime.json` ownership record. `start(spec, *, attempts, interval, timeout)` reuses a live identical record or spawns after `provisioning_worker.require_prepared_runtime`, and `stop(*, timeout, interval)` retires only a proved-owned process. `WorkerInferenceRuntime` adds `activate`, `stop`, `start_rerank`, `stop_rerank`, and `request_scope` over that owner, and the inference stage passes its `WorkerGpuClock` in so a mode switch closes and opens the loaded segment.
-
 ## Tests that pin this behavior
 
 | Test module | Covers |
 |---|---|
-| `tests/admin/test_remote_lifecycle.py` | The due reboot and the same-session resume, the pending-pause suppression, the bounded mirror failure and its diagnostics, the stop recovery, the failed return, and the genuine helper error |
-| `tests/admin/test_datasets.py` | Enrollment idempotency, the pointer-only interruption, Working assignment on return, copy and deletion authorities, both role pairs and rotation, the redirected collection, listing availability, Working deletion, and the serialized worker export |
-| `tests/admin/test_dataset_database.py` | The real dump, restore, copy and return round trip, vector and verification preservation, role-pair rotation, and the guarded role migration |
-| `tests/admin/test_worker_setup.py` | The fast-forward code update, preservation of user work in a dirty checkout, the read-only resource check, and the artifact verification |
-| `tests/admin/test_checkpoint_reboot.py` | The clock arithmetic and the changed-boot plus healthy-environment requirement |
+| `tests/admin/test_worker_setup.py` | The fast-forward code update, preservation of user work in a dirty checkout, the read-only resource check, the per-key artifact downloads with the fallback component, the published and local translation artifact, the install of each of the three model presets, the local install's working files, identity and privileged steps, the same-machine identity with its generated ROCm and CUDA override, and the same-machine preflight over the server code identity and the image environment |
 | `tests/admin/test_log_reads.py` | Each fixed local source, a redirected session directory chain, the classified absent worker log beside a genuine read failure, the symlink refusals, and the one fixed worker command |
-| `tests/admin/test_runtime.py` | The configured runtime builders, the ownership record, the occupied port, the reused foreign PID, and the record from another boot |
-| `tests/datasets/test_datasets.py` | The pointer resolution, the presence-based roles, the cached-alias guard, and the failure shapes |

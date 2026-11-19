@@ -1,0 +1,9 @@
+# One worker model preset: the generation keys the install writes into config/inference.toml.
+# The preset targets a 16 GB card. The main key is the Qwen3.8-27B IQ3-MIX artifact at 131072
+# tokens with MTP speculation. The fallback key is the Qwen3.8-27B UD-IQ2_S artifact at 262144
+# tokens. Each key carries its own source model and artifact identity, so the two keys name two
+# files.
+INFERENCE_LOCAL_VARIANTS = [
+    { alias = "qwen3.8-27b-iq3-mix-128k-mtp", port = 18140, context_size = 131072, kv_cache_type = "q4_0", batch_size = 256, ubatch_size = 256, speculative_type = "draft-mtp,ngram-mod", mtp_draft_n_max = 2, achieved_max_context = 131072, model_repository = "Qwen/Qwen3.8-27B-FP8", model_revision = "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a", artifact_repository = "vmarcelo/Qwen3.8-27B-MIX_GGUF", artifact_revision = "f922f9d9bbe67ede1c49e364d71737b8f067e49b", artifact_file = "Qwen3.8-27B-IQ3-MIX.gguf", artifact_path = "models/qwen3.8-27b-iq3-mix-f922f9d9/Qwen3.8-27B-IQ3-MIX.gguf", artifact_sha256 = "3089d39401e60551a03e0858d775d6b33f966f6e6513f31f75a011cfc8f56309", artifact_quant = "IQ3_MIX" },
+    { alias = "qwen3.8-27b-fallback", port = 18160, context_size = 262144, kv_cache_type = "q4_0", batch_size = 256, ubatch_size = 256, speculative_type = "ngram-mod", achieved_max_context = 262144, model_repository = "Qwen/Qwen3.8-27B", model_revision = "37561816e66b5b9153b1b64c10968c18c1e6f4a0", artifact_repository = "unsloth/Qwen3.8-27B-GGUF", artifact_revision = "4af51b3542f775b0a8e4b310bfb3f17e01c306c9", artifact_file = "Qwen3.8-27B-UD-IQ2_S.gguf", artifact_path = "models/qwen3.8-27b-ud-iq2-s-4af51b35/Qwen3.8-27B-UD-IQ2_S.gguf", artifact_sha256 = "f213bf4ff7dd70531cf7dea9e217baffb6b8e6a7d608bf7c175d9f155e1d000d", artifact_quant = "UD-IQ2_S" },
+]

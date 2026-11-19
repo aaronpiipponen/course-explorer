@@ -6,15 +6,31 @@ A worker session is one run of a remote stage on the worker, from the prepared c
 
 The translation and inference stages are [remote stages](/docs/reference/glossary.md#administration). Each run of one of them is a [worker session](/docs/reference/glossary.md#administration), and one session binds the identity of the source dataset, the stage, the derived worker database, and the full input snapshot of the Working dataset.
 
-The worker database name is derived from the session id with `ADMIN_WORKER_DATABASE_PREFIX`, and the name of the returned server database with `ADMIN_DATASET_DATABASE_PREFIX`. Both prefixes are in `config/worker.toml`. The session evidence lives under `ADMIN_STATE_ROOT`, which is in `config/database.toml`, and the worker holds the same evidence under its own copy of that path.
+The worker database name is derived from the session id with `ADMIN_WORKER_DATABASE_PREFIX`, and the name of the returned server database with `ADMIN_DATASET_DATABASE_PREFIX`. Both prefixes are in `config/worker.toml`. The session evidence lives under `ADMIN_STATE_ROOT`, which is in `config/database.toml`. A remote worker holds the same evidence under its own copy of that path, and a same-machine session reads that path from the server and from the worker container as one mounted directory.
 
 Each read of the session record, the control record, and the worker state checks the session identity. A mismatch fails before any model or command work.
 
 ## Explicit setup and the recurring start
 
-The worker is prepared and checked by two explicit operations. `setup worker` fast-forwards its checkout to one origin branch, installs its locked environment and prepares its resources, and `preflight` reads the same facts without changing anything. [Preparing the worker](/docs/getting-started/worker-stages.md#preparing-the-worker) states both operations, their options and their reports.
+The worker is installed, updated and checked by three explicit operations. The install runs on the worker and prepares its stack and resources, `setup worker` fast-forwards its checkout to one origin branch and installs its locked environment, and `preflight` reads the prepared facts without changing anything. A same-machine worker's image is built from the server checkout, so one deployment updates it and `setup worker` refuses with that guidance. [A Windows WSL worker](/docs/getting-started/worker-wsl.md#install-the-worker) and [a Linux worker](/docs/getting-started/worker-linux.md#install-a-remote-worker) state what each host needs, and [Installing a worker](/docs/getting-started/worker-install.md#the-install-steps) states the install command, its prompts and its steps. The preflight and the code update belong to [Setup and preflight](/docs/operations/setup-and-preflight.md).
 
 A session start never fetches, installs or downloads. It checks the installed locked environment without syncing it and runs every worker helper without dependency resolution or download, so the prepared worker is a prerequisite of the first remote stage start.
+
+## Running a stage
+
+The translation and inference stages run through the administration container, and each command prints one JSON report. `PROJECT` is the instance's Compose project.
+
+```bash
+docker exec PROJECT-admin-1 python scripts/admin.py translation start
+docker exec PROJECT-admin-1 python scripts/admin.py translation status
+docker exec PROJECT-admin-1 python scripts/admin.py translation stop
+docker exec PROJECT-admin-1 python scripts/admin.py inference start
+docker exec PROJECT-admin-1 python scripts/admin.py inference status
+docker exec PROJECT-admin-1 python scripts/admin.py inference stop
+docker exec PROJECT-admin-1 python scripts/admin.py dispose inference TARGET_ID {nothing|done|failed}
+```
+
+A start captures the session, brings the worker up and launches one detached run. A status reads the recorded state and reaches no worker. A stop publishes the stop request, finalizes the retained output, returns the worker's copy of the dataset and returns the stage to idle. The dispose command records one operator decision for one target course, and it requires every stage idle, a verified returned or copied Working dataset, and the current schema head. [The stage tools](/docs/operations/operator-menu.md#the-stage-tools) lists the same entries in the numbered menu, and [the dataset return](/docs/operations/datasets.md#the-return-and-the-working-role) and [rotation](/docs/operations/datasets.md#rotation) state the receipt and the guards of a returned copy.
 
 ## Starting a session
 
@@ -22,10 +38,10 @@ A start captures a session when the stage holds none. The administration command
 
 Preparation brings the worker up in order:
 
-1. One keepalive process starts and holds the session's environment open.
-2. The session starts the worker database service when it is not already running and records that it did. A database service that is already running without recorded ownership refuses the session.
-3. The remote session directory is created once.
-4. The session record, the stage policy, and the input dump are uploaded. An upload reuses a byte-identical file already on the worker.
+1. A WSL worker starts one keepalive process that holds the session's environment open. A native Linux worker and a same-machine worker start none.
+2. A remote worker starts its own database service when it is not already running and records that it did. A remote database service that is already running without recorded ownership refuses the session. A same-machine session requires the instance's `db` service to be running, records no ownership of it, and starts and stops nothing.
+3. The remote session directory is created once. A same-machine session uses the canonical session directory that the capture created, because the server path and the container path are one mounted directory.
+4. The session record, the stage policy, and the input dump are uploaded. An upload reuses a byte-identical file already on the worker, and a same-machine upload whose two paths are one file copies nothing.
 
 The worker then restores the input dump into its derived database and checks the restored database against the input snapshot. A mismatch fails the session.
 
@@ -57,13 +73,13 @@ A stage status reads the durable state and the owned process, and it writes noth
 
 A pause publishes a pause request, waits for the worker to exit, and releases the resources the session started. The session record, the state, the retained output, and the other evidence stay, so a resume can re-arm the work.
 
-A stop is the authoritative end of a session. It publishes a stop request, waits for the worker to exit, and finalizes the session through its owning writer. The worker import writes the retained output into the worker's own copy of the dataset, and the inference stage publishes the accepted proposals and equivalence groups there. A session that already holds an import receipt is never imported a second time.
+A stop is the authoritative end of a session. It publishes a stop request, waits for the worker to exit, and finalizes the session through its owning writer. The worker import writes the retained output into the worker's own copy of the dataset, and the inference stage publishes the accepted proposals and equivalence groups there. A session that already holds an import receipt is never imported a second time. A same-machine stop returns the dataset through the same path and leaves the instance's `worker` container running under its restart policy.
 
-The worker exports its database as a verified return snapshot, and the return downloads it, restores it into the derived server database, verifies it, and only then publishes it as Working. The worker cleanup drops the worker's own database after the import receipt and the returned dataset receipt exist. [The dataset return](/docs/operations/datasets.md#the-return-and-the-working-role) and [rotation](/docs/operations/datasets.md#rotation) state the receipt, and [failure outcomes](/docs/operations/datasets.md#failure-outcomes) states the cleanup of the worker copy.
+The worker exports its database as a verified return snapshot, and the return downloads or copies it, restores it into the derived server database, verifies it, and only then publishes it as Working. A same-machine return copies the dump from the mounted session directory. The worker cleanup drops the worker's own database after the import receipt and the returned dataset receipt exist. [The dataset return](/docs/operations/datasets.md#the-return-and-the-working-role) and [rotation](/docs/operations/datasets.md#rotation) state the receipt, and [failure outcomes](/docs/operations/datasets.md#failure-outcomes) states the cleanup of the worker copy.
 
 The dataset path of one session runs from the Working snapshot through the worker's own copy to the worker database cleanup.
 
-![The Working dataset is snapshotted into a verified input copy that the worker restores into its own database, where the worker stage runs with checkpoints. The exported return snapshot is downloaded, restored and verified as the Working dataset, and the worker database cleanup drops the worker's copy after the receipts exist.](/docs/diagrams/worker-session-return.svg)
+![The Working dataset is snapshotted into a verified input copy that the worker restores into its own database, where the worker stage runs with checkpoints. The exported return snapshot is returned, restored and verified as the Working dataset, and the worker database cleanup drops the worker's copy after the receipts exist.](/docs/diagrams/worker-session-return.svg)
 
 > [!CAUTION]
 > A stop that fails before the return completes leaves the selection in place and keeps the worker copy, the retained output, and the session evidence. The next stop verifies the recorded state again and continues from there.
@@ -86,13 +102,13 @@ Both wait for an exiting runner first and then decide under the session lock. A 
 
 ## Owned resources only
 
-A session records only the resources it created or started: its keepalive process and the boot it ran in, whether it started or attempted to start the worker database service, whether it created the remote session directory, and whether the worker was prepared. Release touches only those.
+A session records only the resources it created or started: on a WSL worker its keepalive process and the boot it ran in, whether it started or attempted to start the worker database service, whether it created the remote session directory, and whether the worker was prepared. Release touches only those. A native Linux session and a same-machine session have no keepalive to stop, and a same-machine session records no database service.
 
-A database service that another run started before the session is left alone. A worker database service that is already running without recorded ownership refuses the session, so release can never act on a resource the session did not create.
+A database service that another run started before the session is left alone. A remote worker database service that is already running without recorded ownership refuses the session, so release never acts on a resource the session did not create. A same-machine session requires the instance's `db` service and leaves it running.
 
 ## Lost connection and recovery
 
-Each worker step gets one ordinary invocation. A transient availability loss admits retries inside one bounded recovery episode whose budget is the configured remote-stage stop timeout, `TRANSLATION_CONTROLLER_STOP_TIMEOUT_SECONDS` in `config/translation.toml`, which the example sets to 660 seconds. The retries are spaced by `TRANSLATION_CONTROLLER_HEALTH_INTERVAL_SECONDS`, which the example sets to 2 seconds.
+Each worker step gets one ordinary invocation. A transient availability loss admits retries inside one bounded recovery episode whose budget is the configured remote-stage stop timeout, `WORKER_STOP_TIMEOUT_SECONDS` in `config/translation.toml`, which the example sets to 660 seconds. The retries are spaced by `WORKER_HEALTH_INTERVAL_SECONDS`, which the example sets to 2 seconds.
 
 A completed worker helper that reports a nonzero status is a genuine failure and not an availability loss. It propagates at once, and its class and integer status are recorded in the stage failure record together with the step that was executing. A missing or malformed configuration value fails the same way.
 
@@ -106,9 +122,11 @@ The stage reports the content-free failure record on every status read, and a co
 
 A [periodic reboot](/docs/reference/glossary.md#administration) restarts the worker after a configured amount of model run time. The clock of the session counts only the time a local model is loaded on the worker, it accumulates across model switches and pauses, and it samples at a completed unit of work and at every recorded failed generation attempt. Repeated local failures therefore reach the restart as well.
 
-`WORKER_GPU_REBOOT_INTERVAL_MINUTES` in `config/worker.toml` sets the interval, and the example sets 120 minutes.
+`WORKER_GPU_REBOOT_ENABLED` in `config/worker.toml` turns the restart on, and the example leaves it off. `WORKER_GPU_REBOOT_INTERVAL_MINUTES` in the same file sets the interval, and the example sets 120 minutes.
 
-When a sample reaches the interval, the worker publishes a paused state with the restart due. The administration command releases the resources the session owns, restarts the worker once, proves that the worker came back, brings the session's resources up again, and launches the same session with its pending work. The session identity, the retained output, and the receipt do not change, and neither do the session's reservations: the reboot releases no reservation and rewrites no reservation file.
+When a sample reaches the interval, the worker publishes a paused state with the restart due. The administration command releases the resources the session owns, restarts the worker once, proves that the worker came back, brings the session's resources up again, and launches the same session with its pending work. A WSL worker proves a changed Windows boot and a healthy WSL. A native Linux worker proves a changed kernel boot id through the one reboot-only sudoers rule. The session identity, the retained output, and the receipt do not change, and neither do the session's reservations: the reboot releases no reservation and rewrites no reservation file.
+
+A same-machine worker requests the restart through one fixed privileged one-shot over its worker container's Docker socket, and the changed kernel boot id is the proof. The site and the console are down for the boot. The rebooting session cannot observe its own return, so the administration backend's startup resume reads the stage state once and calls the resume action only for a `starting` or `running` stage whose requested action is `run` and whose recorded process belongs to an earlier boot. An operator pause or stop, a same-boot process, a fresh state and a remote worker are not resumed. A failed resume prints one class line and the console serves the readable stage state.
 
 A pause or a stop that arrives before the restart issues no restart. The clock record belongs to one session and one worker boot, and a record from another boot reports not due and is not rewritten until a real checkpoint. [Inference scheduling and disposition](/docs/backend/inference/inference-scheduling.md#the-periodic-reboot) states the timing rule for the inference stage.
 
@@ -116,9 +134,9 @@ The stage status carries the last mirrored `reboot_due` value inside the progres
 
 ## Status and report scope
 
-`uv run python scripts/admin.py <stage> status` reads the durable state and the owned process. It starts no service and reaches no worker, so a remote stage reports the last status its run recorded.
+`docker exec PROJECT-admin-1 python scripts/admin.py <stage> status` reads the durable state and the owned process. It starts no service and reaches no worker, so a remote stage reports the last status its run recorded.
 
-A remote stage's status therefore refreshes from server state alone, while its two worker logs are read on demand. `uv run python scripts/admin.py logs read inference SESSION_ID worker-runner --lines N` and the same command with `worker-runtime` read the worker's own `runner.log` and `runtime.log` over the transport, and `keepalive` reads the shared session directory's `keepalive.log`. [The fixed log reads](/docs/backend/interfaces/administration-commands.md#the-fixed-log-reads) lists every source and its refusals.
+A remote stage's status therefore refreshes from server state alone, while its two worker logs are read on demand. `docker exec PROJECT-admin-1 python scripts/admin.py logs read inference SESSION_ID worker-runner --lines N` and the same command with `worker-runtime` read the worker's own `runner.log` and `runtime.log` over the transport, and `keepalive` reads the shared session directory's `keepalive.log`. [The fixed log reads](/docs/backend/interfaces/administration-commands.md#the-fixed-log-reads) lists every source and its refusals.
 
 The server-side logs live beside the session receipt. A local stage's detached worker writes `runner.out` and `runner.err` there, and the keepalive log of a remote session sits in the shared session directory. The inference stage launches its server process with its output sent to the null device, so its two runner streams are reported as unavailable rather than written. A stop removes the two runner streams and the keepalive log with the rest of the session's scratch.
 

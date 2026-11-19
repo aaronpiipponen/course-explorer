@@ -29,13 +29,13 @@ from course_explorer.config import (
     UsageSettings,
     WebSettings,
     WorkerConnectionSettings,
-    load_administrative_site_settings,
+    WorkerGpuSettings,
     load_inference_context_settings,
 )
 from course_explorer.enums import OfficialTextField
 from course_explorer.instance import UNIVERSITIES
 from course_explorer_admin import compose
-from tests.config._support import FIXTURE_VALUES
+from tests.config._support import FIXTURE_VALUES, set_administrative_controller_environment
 from tests.support import write_example_config_tree
 
 
@@ -80,15 +80,17 @@ def test_loads_automatic_configuration_and_applies_override_precedence(
     assert WebSettings().display_label == UNIVERSITIES["example"].display_label
     assert WebSettings().university.name_en == UNIVERSITIES["example"].name_en
     assert WebSettings().university.name_fi == UNIVERSITIES["example"].name_fi
-    # The six site and worker identities load from their owning subsystem files.
+    # The worker host kind and the worker identities load from their owning subsystem file.
     worker = WorkerConnectionSettings()
+    assert worker.host_kind == "wsl"
     assert worker.ssh_target == "replace-with-ssh-target"
     assert worker.wsl_distribution == "replace-with-wsl-distribution"
     assert worker.worker_project_root == Path("/home/replace-with-user/course-explorer")
-    site = load_administrative_site_settings()
-    assert site.web_service_unit == "replace-with-web.service"
-    assert site.admin_service_unit == "replace-with-admin.service"
-    assert site.web_service_scope == "user"
+    # The worker GPU backend, its build target and the card index load from the same file.
+    gpu = WorkerGpuSettings()
+    assert gpu.gpu_backend == "rocm"
+    assert gpu.gpu_target == "gfx1201"
+    assert gpu.gpu_device_index == 0
     # One app address supplies both consumers, and the feedback origin drops its root slash.
     assert WebSettings().web_app_url == "http://localhost:8037/"
     assert AdminWebSettings().web_app_url == "http://localhost:8037/"
@@ -102,6 +104,13 @@ def test_loads_automatic_configuration_and_applies_override_precedence(
     assert shared.shared_root == Path.home() / ".local/share/course-explorer"
     assert shared.models_root == shared.shared_root / "models"
     assert shared.locks_root == shared.shared_root / "locks"
+    # A container expands the home prefix against the Docker host's home it names, so the resolved
+    # path addresses the host's directory rather than the container account's.
+    host_home = tmp_path / "host-home"
+    with monkeypatch.context() as container:
+        container.setenv("HOME", "/home/course")
+        container.setenv("COURSE_EXPLORER_HOST_HOME", str(host_home))
+        assert SharedStorageSettings().shared_root == (host_home / ".local/share/course-explorer")
     relative = Path("models/bge-m3-q8_0.gguf")
     assert shared.resolve_embedding_artifact(relative) == shared.shared_root / relative
     absolute = Path("/srv/models/bge-m3-q8_0.gguf")
@@ -142,9 +151,6 @@ def test_loads_automatic_configuration_and_applies_override_precedence(
     monkeypatch.setenv("FEEDBACK_BROWSER_SUBMISSIONS_PER_HOUR", "9")
     monkeypatch.setenv("FEEDBACK_GITHUB_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("ADMIN_SHARED_ROOT", "/synthetic/shared")
-    monkeypatch.setenv("ADMIN_SITE_WEB_SERVICE_UNIT", "synthetic-site-web.service")
-    monkeypatch.setenv("ADMIN_SITE_ADMIN_SERVICE_UNIT", "synthetic-site-admin.service")
-    monkeypatch.setenv("ADMIN_SITE_WEB_SERVICE_SCOPE", "system")
     monkeypatch.setenv("ADMIN_WEB_PORT", "18027")
     monkeypatch.setenv("ADMIN_WEB_SESSION_IDLE_MINUTES", "5")
     monkeypatch.setenv("ADMIN_WEB_POLL_SECONDS", "3")
@@ -187,9 +193,6 @@ def test_loads_automatic_configuration_and_applies_override_precedence(
     assert AdminWebSettings().admin_web_port == 18027
     assert AdminWebSettings().admin_web_session_idle_minutes == 5
     assert AdminWebSettings().admin_web_poll_seconds == 3
-    assert load_administrative_site_settings().web_service_unit == "synthetic-site-web.service"
-    assert load_administrative_site_settings().admin_service_unit == "synthetic-site-admin.service"
-    assert load_administrative_site_settings().web_service_scope == "system"
 
     # An instance-key override selects that university's mapped source facts, so the Kori and
     # normalization families read one source base, root, first year and guide base.
@@ -274,6 +277,7 @@ def test_compose_bridge_carries_interpolation_aliases_and_cleans_up(
         postgres_user="synthetic-user",
         postgres_password=SecretStr("syn'thetic-password"),
         postgres_port=5555,
+        admin_state_root=Path("data/synthetic-admin"),
     )
     embedding = SimpleNamespace(
         embedding_server_image="synthetic-image@sha256:" + "a" * 64,
@@ -289,12 +293,24 @@ def test_compose_bridge_carries_interpolation_aliases_and_cleans_up(
         embedding_artifact_path=Path("models/synthetic.gguf"),
     )
     instance = SimpleNamespace(instance_key="example")
+    feedback = SimpleNamespace(feedback_postgres_password=SecretStr("synthetic-feedback-password"))
     monkeypatch.setattr(compose, "load_raw_database_settings", lambda: database)
     monkeypatch.setattr(compose, "load_embedding_runtime_settings", lambda: embedding)
     monkeypatch.setattr(compose, "load_instance_settings", lambda: instance)
+    monkeypatch.setattr(compose, "load_feedback_settings", lambda: feedback)
     monkeypatch.setattr(administration, "repository_root", lambda: tmp_path)
+    set_administrative_controller_environment(monkeypatch)
     monkeypatch.setenv("ADMIN_SHARED_ROOT", str(tmp_path / "shared"))
+    monkeypatch.setenv("WORKER_HOST_KIND", "linux")
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", "/home/test-user/course-explorer")
+    monkeypatch.delenv("WORKER_WSL_DISTRIBUTION", raising=False)
     monkeypatch.delenv(compose.COMPOSE_PROJECT_NAME_ALIAS, raising=False)
+    socket_path = tmp_path / "docker.sock"
+    socket_path.touch()
+    monkeypatch.setattr(compose, "DOCKER_SOCKET_PATH", socket_path)
+    monkeypatch.delenv(compose.HOST_ROOT_ALIAS, raising=False)
+    monkeypatch.delenv(compose.HOST_HOME_ALIAS, raising=False)
+    monkeypatch.delenv(compose.SSH_DIRECTORY_ALIAS, raising=False)
 
     captures: list[dict[str, object]] = []
 
@@ -323,22 +339,60 @@ def test_compose_bridge_carries_interpolation_aliases_and_cleans_up(
     assert compose.main(["--", "version"]) == 0
 
     first, second, third = captures
-    assert ("--project-name", "synthetic-proof-project") == third["command"][7:9]
+    project_index = third["command"].index("--project-name")
+    assert third["command"][project_index + 1] == "synthetic-proof-project"
+    assert project_index < third["command"].index("--env-file")
     assert "COMPOSE_PROJECT_NAME" not in str(third["content"])
 
-    values: dict[str, str] = {}
-    for line in str(first["content"]).splitlines():
-        key, _, quoted = line.partition("=")
-        values[key] = quoted
+    def bridge_values(content: object) -> dict[str, str]:
+        rendered: dict[str, str] = {}
+        for line in str(content).splitlines():
+            key, _, quoted = line.partition("=")
+            rendered[key] = quoted
+        return rendered
+
+    values = bridge_values(first["content"])
     assert values["POSTGRES_PASSWORD"] == "'syn\\'thetic-password'"
+    assert values["FEEDBACK_POSTGRES_PASSWORD"] == "'synthetic-feedback-password'"
     assert values["COURSE_EXPLORER_PROJECT_NAME"] == "'course-explorer-example'"
     assert values["EMBEDDING_ARTIFACT_PATH"] == (
         "'" + str(tmp_path / "shared" / "models" / "synthetic.gguf") + "'"
     )
+    assert values["COURSE_EXPLORER_UID"] == f"'{os.getuid()}'"
+    assert values["COURSE_EXPLORER_GID"] == f"'{os.getgid()}'"
+    assert values["COURSE_EXPLORER_DOCKER_GID"] == f"'{socket_path.stat().st_gid}'"
+    assert values["COURSE_EXPLORER_HOST_ROOT"] == f"'{tmp_path}'"
+    assert values["COURSE_EXPLORER_HOST_HOME"] == f"'{Path.home()}'"
+    assert values["COURSE_EXPLORER_SSH_DIR"] == f"'{Path.home() / '.ssh'}'"
+    assert values["ADMIN_SHARED_ROOT"] == f"'{tmp_path / 'shared'}'"
+    assert values["ADMIN_STATE_ROOT"] == "'data/synthetic-admin'"
     assert first["file_mode"] == 0o600
     assert first["directory_mode"] == 0o700
     assert first["directory"] is not second["directory"]
     assert not first["directory"].exists() and not second["directory"].exists()
+
+    # The host home alias supplies COURSE_EXPLORER_HOST_HOME independently of the SSH directory.
+    host_home = tmp_path / "host-home"
+    monkeypatch.setenv(compose.HOST_HOME_ALIAS, str(host_home))
+    assert compose.main(["--", "config", "--quiet"]) == 0
+    home_values = bridge_values(captures[3]["content"])
+    assert home_values["COURSE_EXPLORER_HOST_HOME"] == f"'{host_home}'"
+    assert home_values["COURSE_EXPLORER_SSH_DIR"] == f"'{Path.home() / '.ssh'}'"
+
+    # A remote worker host runs the stack without the worker profile or its generated override.
+    assert "--profile" not in first["command"]
+    assert first["command"].count("--file") == 1
+
+    # A same-machine host adds both the profile and the generated override to every command.
+    monkeypatch.setenv("WORKER_HOST_KIND", "same-machine")
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", "/app")
+    monkeypatch.delenv("WORKER_SSH_TARGET", raising=False)
+    assert compose.main(["--", "config", "--quiet"]) == 0
+    same_machine = captures[4]["command"]
+    assert str(tmp_path / "docker-compose.yml") in same_machine
+    assert str(tmp_path / "docker-compose.worker.yml") in same_machine
+    assert same_machine[same_machine.index("--profile") + 1] == "worker"
+    assert same_machine.index("--profile") < same_machine.index("config")
 
 
 def test_unsourced_cli_loads_policy(tmp_path: Path) -> None:
@@ -371,19 +425,18 @@ def test_unsourced_cli_loads_policy(tmp_path: Path) -> None:
     assert exported["POSTGRES_DB"] == "course_explorer"
     assert exported["EMBEDDING_PORT"] == "8081"
     assert exported["SEARCH_TIER_PRIORITY"] == '["exact_code","substring","fuzzy_name","semantic"]'
+    assert exported["WORKER_GPU_REBOOT_ENABLED"] == "0"
     assert exported["WORKER_GPU_REBOOT_INTERVAL_MINUTES"] == "120"
     assert exported["EXAMPLE_POSTGRES_DB"] == "course_explorer"
     assert exported["WEB_APP_URL"] == "http://localhost:8037/"
-    # The worker and site identities are non-secret subsystem values, so the shell exports them.
-    assert exported["TRANSLATION_CONTROLLER_SSH_TARGET"] == "replace-with-ssh-target"
-    assert exported["TRANSLATION_CONTROLLER_WSL_DISTRIBUTION"] == "replace-with-wsl-distribution"
-    assert (
-        exported["TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT"]
-        == "/home/replace-with-user/course-explorer"
-    )
-    assert exported["ADMIN_SITE_WEB_SERVICE_UNIT"] == "replace-with-web.service"
-    assert exported["ADMIN_SITE_ADMIN_SERVICE_UNIT"] == "replace-with-admin.service"
-    assert exported["ADMIN_SITE_WEB_SERVICE_SCOPE"] == "user"
+    # The worker host kind and identity are non-secret subsystem values, so the shell exports them.
+    assert exported["WORKER_HOST_KIND"] == "wsl"
+    assert exported["WORKER_SSH_TARGET"] == "replace-with-ssh-target"
+    assert exported["WORKER_WSL_DISTRIBUTION"] == "replace-with-wsl-distribution"
+    assert exported["WORKER_PROJECT_ROOT"] == "/home/replace-with-user/course-explorer"
+    assert exported["WORKER_GPU_BACKEND"] == "rocm"
+    assert exported["WORKER_GPU_TARGET"] == "gfx1201"
+    assert exported["WORKER_GPU_DEVICE_INDEX"] == "0"
     assert (
         not {
             "POSTGRES_PASSWORD",
@@ -393,3 +446,80 @@ def test_unsourced_cli_loads_policy(tmp_path: Path) -> None:
         }
         & exported.keys()
     )
+
+
+def test_worker_host_kind_requires_its_own_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each host kind requires its own reach values and refuses another kind's."""
+    set_administrative_controller_environment(monkeypatch)
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", "/home/test-user/course-explorer")
+
+    monkeypatch.setenv("WORKER_HOST_KIND", "wsl")
+    monkeypatch.delenv("WORKER_WSL_DISTRIBUTION")
+    monkeypatch.delenv("WORKER_SSH_TARGET")
+    with pytest.raises(ValidationError):
+        WorkerConnectionSettings()
+
+    monkeypatch.setenv("WORKER_SSH_TARGET", "worker-host")
+    with pytest.raises(ValidationError):
+        WorkerConnectionSettings()
+
+    monkeypatch.setenv("WORKER_WSL_DISTRIBUTION", "Ubuntu-24.04")
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", "/home/test-user/100%checkout")
+    with pytest.raises(ValidationError):
+        WorkerConnectionSettings()
+
+    monkeypatch.setenv("WORKER_HOST_KIND", "linux")
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", "/home/test-user/course-explorer")
+    with pytest.raises(ValidationError):
+        WorkerConnectionSettings()
+
+    monkeypatch.delenv("WORKER_WSL_DISTRIBUTION")
+    loaded = WorkerConnectionSettings()
+    assert loaded.host_kind == "linux"
+    assert loaded.wsl_distribution is None
+    assert loaded.ssh_target == "worker-host"
+
+    # A same-machine worker refuses the SSH target it never uses, and needs none.
+    monkeypatch.setenv("WORKER_HOST_KIND", "same-machine")
+    with pytest.raises(ValidationError):
+        WorkerConnectionSettings()
+
+    monkeypatch.delenv("WORKER_SSH_TARGET")
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", "/app")
+    same_machine = WorkerConnectionSettings()
+    assert same_machine.host_kind == "same-machine"
+    assert same_machine.ssh_target is None
+    assert same_machine.worker_project_root == Path("/app")
+
+    # A Linux worker requires its SSH target.
+    monkeypatch.setenv("WORKER_HOST_KIND", "linux")
+    with pytest.raises(ValidationError):
+        WorkerConnectionSettings()
+
+
+def test_gpu_backend_requires_its_own_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ROCm worker needs a gfx target and a CUDA worker a compute capability."""
+    set_administrative_controller_environment(monkeypatch)
+    monkeypatch.setenv("WORKER_GPU_DEVICE_INDEX", "0")
+
+    monkeypatch.setenv("WORKER_GPU_BACKEND", "rocm")
+    monkeypatch.setenv("WORKER_GPU_TARGET", "86")
+    with pytest.raises(ValidationError):
+        WorkerGpuSettings()
+
+    monkeypatch.setenv("WORKER_GPU_BACKEND", "cuda")
+    monkeypatch.setenv("WORKER_GPU_TARGET", "gfx1201")
+    with pytest.raises(ValidationError):
+        WorkerGpuSettings()
+
+    monkeypatch.setenv("WORKER_GPU_BACKEND", "rocm")
+    monkeypatch.setenv("WORKER_GPU_TARGET", "gfx1201")
+    rocm = WorkerGpuSettings()
+    assert rocm.gpu_backend == "rocm"
+    assert rocm.gpu_target == "gfx1201"
+
+    monkeypatch.setenv("WORKER_GPU_BACKEND", "cuda")
+    monkeypatch.setenv("WORKER_GPU_TARGET", "120")
+    cuda = WorkerGpuSettings()
+    assert cuda.gpu_backend == "cuda"
+    assert cuda.gpu_target == "120"

@@ -8,7 +8,7 @@ The bundled vectors cover Finnish and English only, so a site whose official lan
 
 ## What the loader needs
 
-- A copy set up by the [Installation](/docs/getting-started/installation.md) steps, with the Python dependencies installed and the configuration and environment files in place.
+- A copy set up by the [Installation](/docs/getting-started/installation.md) steps, with the configuration and environment files in place and the images built. [First-run installation reference](/docs/operations/first-run-setup.md) states the example workflow and the working files.
 - The database service running, and the database at the checkout's migration head. The first step below applies the migration.
 - A bootstrap dataset state root under `ADMIN_STATE_ROOT`: no Selected or Working pointer and no dataset or session records. The loader refuses an enrolled root. The example configuration sets `POSTGRES_DB` and `EXAMPLE_POSTGRES_DB` to `course_explorer`.
 
@@ -40,10 +40,12 @@ Each action reads the fixture and sends no request to the curriculum source and 
 
 ## Loading the example dataset
 
+The actions run in the administration container. `PROJECT` is the instance's Compose project.
+
 1. Apply the schema migrations.
 
    ```bash
-   uv run python -m alembic upgrade head
+   docker exec PROJECT-admin-1 python -m alembic upgrade head
    ```
 
    The migration creates or updates the database the settings name, at the single head revision of the checkout. The loader requires the database at that head and refuses a database at any other revision, so run this step after an update to the checkout.
@@ -54,17 +56,17 @@ Each action reads the fixture and sends no request to the curriculum source and 
 2. Load the curriculum and its vectors.
 
    ```bash
-   uv run python scripts/mock_data.py load
+   docker exec PROJECT-admin-1 python scripts/mock_data.py load
    ```
 
-   The loader imports the fixture through the capture and normalization path, adds the bundled vectors of its chunks, and prints one JSON line holding the embedding coverage of the loaded dataset, with the total, pending, completed, and failed chunk counts and one row per field, language, and text origin.
+   The action imports the fixture through the capture and normalization path, adds the bundled vectors of its chunks, and prints one JSON line holding the embedding coverage of the loaded dataset, with the total, pending, completed, and failed chunk counts and one row per field, language, and text origin.
 
 ## Loading the curriculum alone
 
 The `load-curriculum` action stops after the curriculum and leaves the vectors out, so the dataset holds courses, modules, and rules with no embeddings.
 
 ```bash
-uv run python scripts/mock_data.py load-curriculum
+docker exec PROJECT-admin-1 python scripts/mock_data.py load-curriculum
 ```
 
 It prints the normalization report, which counts the periods, canonical courses, active courses, modules, and versions the batch wrote, with the per-version classification counts. The action sends no request to the embedding service.
@@ -90,8 +92,8 @@ The reuse is conditional, and the failure messages name the condition:
 `write-artifacts` calls the same `build_serving_artifacts()` owner the administrative command uses, so it writes the same files, and on an embeddings-on site the same derived tables, into one artifact family under the configured admin state root. It writes no tracked file, so a deployment leaves the checkout as it is. [Serving artifact build](/docs/backend/text-and-vectors/serving-artifact-build.md) lists the files and the tables.
 
 ```bash
-uv run python scripts/mock_data.py load
-uv run python scripts/mock_data.py write-artifacts
+docker exec PROJECT-admin-1 python scripts/mock_data.py load
+docker exec PROJECT-admin-1 python scripts/mock_data.py write-artifacts
 ```
 
 On a site that serves the embedding features, run the artifact action when the stored vectors changed and the hub files, the centroid rows and the neighbour rows must match them again. The bundled file is the artifact an import reads, so a bundle that does not name the fixture's chunks fails the import:
@@ -103,15 +105,15 @@ On a site that serves the embedding features, run the artifact action when the s
 
 On a site that serves the embedding features, the artifact action needs complete embedding coverage of the configured database: every desired chunk of a represented course must hold a completed compatible vector. A database with no current chunk builds with two empty hubs and zero counts, and a database that has current chunks needs at least one learning-outcomes chunk among them. An embeddings-off site builds the same action over incomplete coverage.
 
-`write-bundle` rewrites the tracked bundled vector file `data/mock/embeddings.json` from the stored vectors of the prepared fixture, under the configured embedding configuration. It is the explicit rewrite of a tracked file, and no build or deploy path runs it.
+`write-bundle` rewrites the tracked bundled vector file `data/mock/embeddings.json` in the mounted checkout from the stored vectors of the prepared fixture, under the configured embedding configuration. It is the explicit rewrite of a tracked file, and no build or deploy path runs it.
 
 ```bash
-uv run python scripts/mock_data.py write-bundle
+docker exec PROJECT-admin-1 python scripts/mock_data.py write-bundle
 ```
 
 The action prints nothing. It and `write-artifacts` each prepare the fixture capture and refuse a database that holds curriculum outside the fixture before any file is written, with the same message as the loader.
 
-The builder writes every file of one build before the dataset tables change. On an embeddings-on site the table replacement and the `current` switch commit as one unit, and an embeddings-off site replaces no table. [Serving artifact build](/docs/backend/text-and-vectors/serving-artifact-build.md) states the files and the transaction, and [Administration commands](/docs/backend/interfaces/administration-commands.md#the-serving-artifact-command) states what a failed build restores.
+The builder writes every file of one build before the dataset tables change. On an embeddings-on site the table replacement and the `current` switch commit as one unit, and an embeddings-off site replaces no table. [Serving artifact build](/docs/backend/text-and-vectors/serving-artifact-build.md) states the files and the transaction, and [Self-host and deploy commands](/docs/backend/interfaces/self-host-and-deploy-commands.md#the-serving-artifact-command) states what a failed build restores.
 
 The supervisor opens the artifact build and both catalogue bodies once before it forks its workers. On a site that serves the embedding features that opened set holds the build's shared centroid and chunk stores, and a site with them off holds the catalogue and the study fragments alone. A completed build reaches serving after the full supervisor restart that [the operations overview](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) describes, and that restart changes the serving dataset identity the feature read reports. A browser reads data that an import or a stage changed in place on its next uncached read or reload after that restart. [Embeddings](/docs/backend/text-and-vectors/embeddings.md#the-hubs) describes what the two hubs are and [Course centroids](/docs/backend/text-and-vectors/embeddings.md#course-centroids) describes the centroid rows.
 
@@ -122,10 +124,10 @@ The loader prints its own failure message.
 | Message | Cause | Fix |
 |---|---|---|
 | `mock data import requires a bootstrap dataset state root` | A Selected or Working pointer or dataset records exist under `ADMIN_STATE_ROOT`. | Clear the dataset state for the example path, then run the action again. |
-| `the received database does not match the executing checkout's single Alembic head` | The loader opened a database that is not at the checkout's migration head. | Run `uv run python -m alembic upgrade head`, then run the action again. |
+| `the received database does not match the executing checkout's single Alembic head` | The loader opened a database that is not at the checkout's migration head. | Run `docker exec PROJECT-admin-1 python -m alembic upgrade head`, then run the action again. |
 | `database already holds curriculum outside the fictional mock fixture` | The configured database holds curriculum that is not the example dataset. | Point the loader at an empty configured database, or use the prepared-dataset path. |
 | `retained mock import manifest does not match the current fixture` | The capture retained under `--raw-root` holds different response bytes than the fixture. | Remove the retained capture directory, or point `--raw-root` at an empty path. |
 | `multiple mock import manifests are ambiguous` | More than one capture is retained under `--raw-root`. | Leave the one capture the run continues and remove the others, or point `--raw-root` at an empty path. |
 | `bundled mock embeddings do not match the current fixture chunks` | The bundled vector file names a different chunk set than the fixture. | Restore the bundled file that matches the fixture, or rebuild it with `write-bundle` from a database whose stored vectors match the fixture's chunks. |
 
-[Installation](/docs/getting-started/installation.md) lists the failures of the dependency, copy, and serving steps.
+[First-run troubleshooting](/docs/operations/first-run-troubleshooting.md) lists the failures of the setup, copy, and serving steps.

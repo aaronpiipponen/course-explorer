@@ -1,7 +1,9 @@
-# Example PostgreSQL connection components and administration paths.
-# `course_explorer.config.DatabaseSettings` owns the connection components and `ADMIN_STATE_ROOT`,
-# `SharedStorageSettings` owns `ADMIN_SHARED_ROOT`, and `AdministrativeDatasetSettings` also reads
-# `ADMIN_STATE_ROOT`.
+# Example PostgreSQL connection components and administration paths. `DatabaseSettings` reads the
+# connection components and `ADMIN_STATE_ROOT`, `SharedStorageSettings` reads `ADMIN_SHARED_ROOT`
+# and `PROXY_BIND_ADDRESS`, and `AdministrativeDatasetSettings` reads `ADMIN_STATE_ROOT`.
+# `PROXY_BIND_ADDRESS` is an optional IPv4 or IPv6 literal that names the one host address the
+# machine-wide site proxy binds. Absent, the proxy listens on every host address. An operator sets
+# it by adding the line by hand.
 POSTGRES_DB = "course_explorer"
 # The example database name. A site whose POSTGRES_DB equals this value serves the example data
 # without an enrolled dataset.
@@ -9,6 +11,9 @@ EXAMPLE_POSTGRES_DB = "course_explorer"
 POSTGRES_USER = "course_explorer"
 POSTGRES_HOST = "127.0.0.1"
 POSTGRES_PORT = 5433
+# Repository-relative directory that holds the dataset pointers, receipts, session records and
+# serving artifacts. The value is resolved against the repository root and contains no `.` or `..`
+# component.
 ADMIN_STATE_ROOT = "data/admin"
 # Machine-wide directory that the example setup workflow creates or adopts outside the checkout.
 # An absolute path, or one beginning with `~/`, which expands against the home directory.

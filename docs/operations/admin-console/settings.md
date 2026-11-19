@@ -6,7 +6,7 @@ The Settings tab edits the site's settings files and holds the dataset roles and
 
 The **Configuration** editor spans the tab first, then the **Datasets** panel, **Backups**, **Rebuild** and **Worker provisioning**, and **Feature switches** last.
 
-![The Settings tab with the configuration file list, the Datasets panel, the backup list, the rebuild steps, the worker provisioning form and the three feature switches](/docs/screenshots/admin-console-settings.png)
+![The Settings tab with the configuration file list, the Datasets panel, the backup list, the two rebuild actions, the worker provisioning form and the three feature switches](/docs/screenshots/admin-console-settings.png)
 
 ## Configuration editor
 
@@ -45,29 +45,28 @@ The **Backups** panel lists one row per backup file, with its name, its modifica
 
 ## Rebuild
 
-The **Rebuild** panel lists the four steps of an app rebuild in order: **Build the site frontend**, **Recreate the database and embedding containers**, **Restart the site's web server** and **Verify the web server's loopback bind**. The web server status in **Dashboard** reads its unit from the same manager. [Setup and preflight](/docs/operations/setup-and-preflight.md#the-two-rebuild-scopes) states what each step runs and the manager the restart uses.
+The **Rebuild** panel holds **Rebuild app** and **Rebuild administration console**. The **Website** panel in **Dashboard** reads the same site container. [Setup and preflight](/docs/operations/setup-and-preflight.md#the-two-rebuild-scopes) states what each step runs.
 
-**Rebuild app** asks for confirmation first. It runs the four steps and shows the steps it ran and the bind it verified. The rebuild holds the checkout reservation for its whole run, so it refuses before any step while a preparation stage or a Working dataset operation holds the checkout.
+**Rebuild app** asks for confirmation first, with the question **Rebuild the site image and re-create the database, embedding and site containers, then check the site's loopback address?** A completed rebuild adds the steps it ran, in order, as **Build the site image**, **Re-create the database and embedding containers**, **Re-create the site container** and **Check the site's loopback address**, and a **bind** row with the address it checked. The step list and the bind row appear only in the report of a completed rebuild. The rebuild holds the checkout reservation for its whole run, so it refuses before any step while a preparation stage or a Working dataset operation holds the checkout.
 
 ![The Rebuild app confirmation dialog with the rebuild question above Cancel and Confirm](/docs/screenshots/admin-console-settings-rebuild-dialog.png)
 
-**Rebuild administration console** asks for confirmation first, and the dialog states that it signs all operators out. It builds the console, and the administration backend then restarts. The console returns to the sign-in screen with **The administration console is restarting. Sign in again.**
+**Rebuild administration console** asks for confirmation first, and the dialog states that it signs all operators out. It builds the console image, and the administration backend then re-creates its own container from a detached one-off. The console returns to the sign-in screen with **The administration console is restarting. Sign in again.**
 
-While either action runs, the panel shows **Running…** and disables both actions. A failed rebuild shows its failure in the panel. A restart step without the grant fails the rebuild, and the panel shows the failure. A completed administration rebuild ends every administration session, and a failed administration build queues no restart and leaves the console signed in.
+While either action runs, the panel shows **Running…** and disables both actions. A failed rebuild shows its failure in the panel, and a failed step stops the rebuild at that step. A completed administration rebuild ends every administration session, and a failed administration build starts no re-create and leaves the console signed in.
 
 ## Worker provisioning
 
-The **Worker provisioning** panel sets up or updates the worker.
+The **Worker provisioning** panel updates the worker code and reads its prepared resources.
 
 1. Enter the **origin branch**.
-2. Leave **code only** off for a full setup, or switch it on to update the code and its locked dependencies alone.
-3. Select **Worker setup or update**.
+2. Select **Worker code update**.
 
-The origin branch input starts empty. **Worker setup or update** is disabled until a branch is entered, and the panel shows **Enter an origin branch before the setup.** The confirmation names the branch, and **Cancel**, Escape and a click outside the dialog close it and change nothing.
+The origin branch input starts empty. **Worker code update** is disabled until a branch is entered, and the panel shows **Enter an origin branch before the code update.** The confirmation reads **Update the worker code on the {branch} branch?** and names the branch. **Cancel**, Escape and a click outside the dialog close it and change nothing.
 
-A full setup also performs the worker bootstrap and prepares its resources. The report shows the code branch, the code revision, whether the server origin differs, whether the resources are ready and, when they are not, the missing resources. With **code only** on, the setup reports the code facts and shows resource readiness as **unknown**.
+The update fast-forwards the worker checkout to that branch and installs its locked project environment. It installs no system package, prepares no resource and downloads no model, because the worker's own install command owns its stack. The report shows the code branch, the code revision, whether the server origin differs, and resource readiness as **unknown**, because the update prepares no resource.
 
-**Preflight** compares this checkout's Git origin with the configured origin, reports whether this checkout differs from its origin branch, and reads the worker's code branch and revision, together with the worker's prepared resources. It sends nothing on its own, shows a preflight report from the worker when selected, and holds that report separate from a setup report. The panel's marker says **manual**.
+**Preflight** compares this checkout's Git origin with the configured origin, reports whether this checkout differs from its origin branch, and reads the worker's code branch and revision, together with the worker's prepared resources. It sends nothing on its own, shows a preflight report from the worker when selected, and holds that report separate from an update report. The panel's marker says **manual**.
 
 [Worker sessions](/docs/operations/worker-sessions.md) describes the worker session that the stages run.
 

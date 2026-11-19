@@ -50,9 +50,9 @@
   <text x="806" y="346" text-anchor="middle" font-size="16" fill="#ececf2">Publication</text>
   <text x="806" y="368" text-anchor="middle" font-size="14" fill="#a3a4b8">Sets and groups</text>
 
-  <rect x="48" y="448" width="240" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
-  <text x="168" y="474" text-anchor="middle" font-size="16" fill="#ececf2">Official prerequisites</text>
-  <text x="168" y="496" text-anchor="middle" font-size="14" fill="#a3a4b8">Enter at the proposal</text>
+  <rect x="48" y="448" width="260" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
+  <text x="178" y="474" text-anchor="middle" font-size="16" fill="#ececf2">Official prerequisites</text>
+  <text x="178" y="496" text-anchor="middle" font-size="14" fill="#a3a4b8">Enter at the proposal</text>
 
   <rect x="700" y="448" width="212" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
   <text x="806" y="474" text-anchor="middle" font-size="16" fill="#ececf2">Inferred sets</text>
@@ -74,6 +74,6 @@
         marker-end="url(#arrow)"/>
   <line x1="806" y1="384" x2="806" y2="448" stroke="#a3a4b8" stroke-width="1.5"
         marker-end="url(#arrow)"/>
-  <polyline points="288,480 384,480 384,376 400,376" fill="none" stroke="#a3a4b8"
+  <polyline points="308,480 384,480 384,376 400,376" fill="none" stroke="#a3a4b8"
             stroke-width="1.5" marker-end="url(#arrow)"/>
 </svg>

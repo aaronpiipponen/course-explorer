@@ -1,10 +1,10 @@
 # Instance key, display label, external app address, loopback bind, process supervision,
 # browser-drawing and served-feature policy for read-only HTTP serving.
 # The university instance this site presents, as one key of the university map.
+# `INSTANCE_DISPLAY_LABEL` is an optional override of that map entry's display label. It is
+# lowercase with hyphen-separated segments, and one label serves both interface languages. Absent,
+# the configured university's map label applies. An operator sets it by adding the line by hand.
 INSTANCE_KEY = "example"
-# Optional override of the map label for this instance, `INSTANCE_DISPLAY_LABEL`: lowercase and the
-# same in both interface languages. When it is absent, the configured university's map label
-# applies.
 
 # External root address of this site. The administration console's App link and the feedback
 # exact Host and Origin boundary both read this key. One absolute address at the root: HTTPS, or
@@ -18,7 +18,8 @@ WEB_WORKERS = 4
 # each worker retains under concurrency.
 WEB_MALLOC_ARENA_MAX = 2
 # The supervisor replaces an exited router or worker on the same listening socket. This many
-# exits of the same role inside the window stop the unit for systemd to restart.
+# exits of the same role inside the window stop the process, and the container restart policy
+# restarts it.
 WEB_RESPAWN_EXIT_LIMIT = 3
 WEB_RESPAWN_WINDOW_SECONDS = 60
 # Maximum report-graph drawing nodes plus edges before the browser refuses layout.

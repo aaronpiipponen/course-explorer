@@ -135,7 +135,7 @@ def install_worker_boundaries(
     monkeypatch: Any, *, root: Path, boundary_path: Path, stage: str
 ) -> None:
     """Install the external boundary substitutions the bootstrap's modes use."""
-    checkout = Path(os.environ["TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT"])
+    checkout = Path(os.environ["WORKER_PROJECT_ROOT"])
     redirect_repository_root(root)
     _install_cwd_runner(monkeypatch, checkout)
     _install_boot_identity(monkeypatch, boundary_path)

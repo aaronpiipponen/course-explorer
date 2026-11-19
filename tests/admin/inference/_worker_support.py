@@ -77,7 +77,7 @@ def configure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         **POSTGRES_KEYS,
     }.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT", str(tmp_path / "worker"))
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", str(tmp_path / "worker"))
     monkeypatch.setenv("INFERENCE_CONTROLLER_STATE_ROOT", "state")
     monkeypatch.setenv("ADMIN_STATE_ROOT", "data/admin")
     monkeypatch.setenv("INGESTION_CONTROLLER_STATE_ROOT", "data/admin/ingestion")

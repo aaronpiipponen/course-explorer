@@ -2,16 +2,16 @@
 
 The operator menu is the numbered surface of the administration command, and each entry runs fixed commands over its owning services.
 
-An entry prints the report of the command it runs, apart from the administration rebuild. The administration rebuild runs two fixed commands in sequence, the administration build and its own-unit restart, and it prints the restart command's acknowledgment alone.
+An entry prints the report of the command it runs, apart from the administration rebuild. The administration rebuild runs two fixed commands in sequence, the administration image build and the detached one-off that re-creates its own service, and it prints the re-create command's acknowledgment alone.
 
 ## Starting the menu
 
 ```bash
-uv run python scripts/admin.py
-uv run python scripts/admin.py menu
+docker exec -it PROJECT-admin-1 python scripts/admin.py
+docker exec -it PROJECT-admin-1 python scripts/admin.py menu
 ```
 
-Both forms start the numbered menu, and the two are the same command. The menu command takes no other argument.
+Both forms start the numbered menu, and the two are the same command. The menu runs inside the administration container, which mounts the checkout's configuration, runtime state and datasets, the checkout, the shared directory and the Docker socket. `PROJECT` is the instance's Compose project, `course-explorer-<instance key>`. The menu command takes no other argument.
 
 The menu runs until one of three things happens. Choosing **0 Exit** returns 0, an end of input returns 0, and an interrupt returns 130. None of the three stops running work, and none of them starts one. An end of input and an interrupt leave the whole menu rather than the entry they were entered from. A failed operation prints its failure and the menu continues running.
 
@@ -34,27 +34,25 @@ Every other menu draws **0 Back**, which returns to the main menu without starti
 
 ## Setup and preflight
 
-Choice 1 opens the 13 setup and preflight entries.
+Choice 1 opens the 11 setup and preflight entries.
 
 | Choice | Entry | Asks for |
 |---|---|---|
 | 1 | Enroll/select dataset | Nothing |
 | 2 | Copy dataset to Working | `Dataset id to copy to Working (0 to cancel): `, then `Copy dataset <id> (<database name>) to Working?` |
-| 3 | Worker setup/update | `Origin branch [<server branch>]:` when the server checkout is not on `main` |
+| 3 | Worker code update | `Origin branch [<server branch>]:` when the server checkout is not on `main` |
 | 4 | Read-only worker preflight | Nothing |
 | 5 | Migrate dataset | `Dataset role` with **1 Selected**, **2 Working** and **0 Cancel** |
 | 6 | Dataset cleanup | `Dataset id: `, then `Delete dataset <id> (<database name>)?` or `Delete Working dataset <id> (<database name>)? Working becomes absent.` |
 | 7 | Backup cleanup | `Backup file name: `, then `Delete backup <name>?` |
 | 8 | Configuration | `Configuration file (0 to cancel): `, `Configuration key (0 to cancel): `, `JSON value: `, then `Save configuration <file> key <key>?` |
-| 9 | Rebuild app | `Rebuild this site's frontend, containers and web server?` |
+| 9 | Rebuild app | `Rebuild the site image, re-create the database and embedding containers, re-create the site container and prove its bind?` |
 | 10 | Administration password | `Username (0 to cancel): `, then the command's hidden `Password: ` and `Repeat password: ` prompts |
 | 11 | Rebuild administration console | `Rebuild the administration console? This signs all operators out.` |
-| 12 | Set up example site | `University` with the implemented entries, `Feature web port [<default>]: `, `Administration port [<default>]: `, `Database port [<default>]: `, `Embedding port [<default>]: `, `Shared directory [<default>]: `, `App URL [<derived address>]: `, `Administration origin [<derived origin>]: `, `Administration username (0 to cancel): `, `Startup mode`, `Download the pinned embedding model if it is absent?`, `Set up feedback publication?`, then the hidden token prompt after a publication choice and the hidden password prompts |
-| 13 | Set up real empty database | `Database name [course_explorer_real]: ` and `Startup mode` |
 
 Except for the administration rebuild, each entry prints the report of the command it runs. [Setup and preflight](/docs/operations/setup-and-preflight.md) states what each entry does, the machine command behind it, and its prompts and confirmations.
 
-Choices 12 and 13 run the two self-host workflows. The administration console offers no action for either workflow. Choice 12 refuses at the host preflight when another process holds one of its loopback ports, except the database port or the embedding port of a container this project already runs, and the entry runs again with another port. In foreground mode, choice 13 refuses a busy feature or administration port and asks for the first workflow's foreground pair to end first.
+First-run setup is not a menu entry. The example and real-database workflows run from `scripts/self-host.sh` on the host, as [the first-run reference](/docs/operations/first-run-setup.md#the-bootstrap) states, and the administration console offers no action for either workflow.
 
 ## The stage tools
 
@@ -62,11 +60,11 @@ The four stage tools share five entries. The inference tool adds one, and the em
 
 | Choice | Entry | Machine command |
 |---|---|---|
-| 1 | Start | `uv run python scripts/admin.py <stage> start` |
-| 2 | Pause | `uv run python scripts/admin.py <stage> pause` |
-| 3 | Resume | `uv run python scripts/admin.py <stage> resume` |
-| 4 | Status | `uv run python scripts/admin.py <stage> status` |
-| 5 | Stop | `uv run python scripts/admin.py <stage> stop` |
+| 1 | Start | `docker exec PROJECT-admin-1 python scripts/admin.py <stage> start` |
+| 2 | Pause | `docker exec PROJECT-admin-1 python scripts/admin.py <stage> pause` |
+| 3 | Resume | `docker exec PROJECT-admin-1 python scripts/admin.py <stage> resume` |
+| 4 | Status | `docker exec PROJECT-admin-1 python scripts/admin.py <stage> status` |
+| 5 | Stop | `docker exec PROJECT-admin-1 python scripts/admin.py <stage> stop` |
 | 0 | Back | Returns to the main menu |
 
 The inference tool inserts **6 Dispose target** before **0 Back**, and the embedding tool inserts **6 Build serving artifacts** there.
@@ -97,7 +95,7 @@ Choice 6 under Inference records one operator decision for one target course. It
 | 3 | FAILED (terminal) |
 | 0 | Cancel |
 
-Cancel, an unrecognised answer, an end of input, and an interrupt all change nothing and stop nothing. The machine command is `uv run python scripts/admin.py dispose inference TARGET_ID {nothing|done|failed}`, where `nothing` clears the decision. The read the entry performs before it asks is also a machine command, `uv run python scripts/admin.py target inference TARGET_ID`, and it prints the target's identity and current decision alone, so an operator can read a decision state without a decision to record.
+Cancel, an unrecognised answer, an end of input, and an interrupt all change nothing and stop nothing. The machine command is `docker exec PROJECT-admin-1 python scripts/admin.py dispose inference TARGET_ID {nothing|done|failed}`, where `nothing` clears the decision. The read the entry performs before it asks is also a machine command, `docker exec PROJECT-admin-1 python scripts/admin.py target inference TARGET_ID`, and it prints the target's identity and current decision alone, so an operator can read a decision state without a decision to record.
 
 > [!WARNING]
 > A **done** decision completes the target course with no inferred output, and a **failed** decision leaves the cycle incomplete while it stands. [Inference scheduling and disposition](/docs/backend/inference/inference-scheduling.md#operator-disposition) states what each decision does to the scheduling and to the published results.
@@ -110,10 +108,10 @@ This entry holds the four read-only reports, and it prints one fixed line before
 
 | Choice | Entry | Machine command |
 |---|---|---|
-| 1 | Catalogue summary | `uv run python scripts/admin.py summary catalogue --role <selected|working>` |
-| 2 | Teaching-text/translation coverage | `uv run python scripts/admin.py coverage teaching-text --role <selected|working>` |
-| 3 | Embedding coverage | `uv run python scripts/admin.py coverage embedding --role <selected|working>` |
-| 4 | Inference summary | `uv run python scripts/admin.py summary inference --role <selected|working>` |
+| 1 | Catalogue summary | `docker exec PROJECT-admin-1 python scripts/admin.py summary catalogue --role <selected|working>` |
+| 2 | Teaching-text/translation coverage | `docker exec PROJECT-admin-1 python scripts/admin.py coverage teaching-text --role <selected|working>` |
+| 3 | Embedding coverage | `docker exec PROJECT-admin-1 python scripts/admin.py coverage embedding --role <selected|working>` |
+| 4 | Inference summary | `docker exec PROJECT-admin-1 python scripts/admin.py summary inference --role <selected|working>` |
 
 Every report choice asks `Dataset role` with **1 Selected**, **2 Working** and **0 Cancel** first. The fixed line states the scope of every report in this entry: it reads the named role, and the progress of a remote stage that has not returned is read from that stage's Status entry instead. The `coverage` and `summary` machine commands print the same line to standard error. The inference summary carries the retained coverage, the publication diagnostics and the failures, and it states the three configured inference policy values `routing_policy`, `recommendation_policy` and `finding_filter_policy` from the loaded generation settings.
 
@@ -139,10 +137,10 @@ An end of input and an interrupt at any prompt write nothing and leave the whole
 
 ## Building the serving artifacts
 
-Choice 6 under Embedding builds the served dataset's serving artifact set for the site's embedding switch. The machine command is the same build, and the embedding menu and the console preparation action run it for the served dataset without asking for a second command. The four preparation stages write Working, so a stage run changes nothing the site serves and needs no build or restart. [Serving artifact build](/docs/backend/text-and-vectors/serving-artifact-build.md#the-embedding-switch) states the files it writes, the artifact family and the transaction, and [Administration commands](/docs/backend/interfaces/administration-commands.md#the-serving-artifact-command) states what a failed build restores, including the interrupted build that no `current` names and that `--prune` collects.
+Choice 6 under Embedding builds the served dataset's serving artifact set for the site's embedding switch. The machine command is the same build, and the embedding menu and the console preparation action run it for the served dataset without asking for a second command. The four preparation stages write Working, so a stage run changes nothing the site serves and needs no build or restart. [Serving artifact build](/docs/backend/text-and-vectors/serving-artifact-build.md#the-embedding-switch) states the files it writes, the artifact family and the transaction, and [Self-host and deploy commands](/docs/backend/interfaces/self-host-and-deploy-commands.md#the-serving-artifact-command) states what a failed build restores, including the interrupted build that no `current` names and that `--prune` collects.
 
 ```bash
-uv run python scripts/admin.py serving-artifacts
+docker exec PROJECT-admin-1 python scripts/admin.py serving-artifacts
 ```
 
 `--dataset ID` builds an in-pipeline dataset. `--prune` is housekeeping after a successful restart. It builds nothing, changes no table or `current` target, and removes the target database's obsolete or failed builds, the other year families' builds, and owned temporary files, including temporary files inside the kept build. It retains the active family's current build, unknown names and other database namespaces.
@@ -152,7 +150,7 @@ The embedding directories the prune retains follow the resolved embedding mode, 
 On a site that serves the embedding features the build requires the target dataset and complete current embedding coverage: every desired chunk of a represented course must be a completed chunk with a compatible vector. A dataset with no current chunk builds with two empty hubs and zero counts, and a dataset that has current chunks needs at least one learning-outcomes chunk among them. An embeddings-off site builds without that coverage.
 
 > [!IMPORTANT]
-> A completed build reaches the site after the full supervisor restart that [Operations](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) states, and `serving-artifacts --prune` runs after that restart succeeds. The supervisor opens the build before it forks its workers, as [Web supervisor](/docs/backend/interfaces/web-supervisor.md#startup-and-validation) describes. The artifact command replaces no running worker and restarts no unit.
+> A completed build reaches the site after the full supervisor restart that [Operations](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) states, and `serving-artifacts --prune` runs after that restart succeeds. The supervisor opens the build before it forks its workers, as [Web supervisor](/docs/backend/interfaces/web-supervisor.md#startup-and-validation) describes. The artifact command replaces no running worker and restarts no container.
 
 ## The menu entries and the console tabs
 
@@ -164,7 +162,7 @@ The [administration console](/docs/operations/admin-console/README.md) runs the 
 | [Data preparation](/docs/operations/admin-console/data-preparation.md) | The ingestion, translation and embedding stage tools, Coverage/summaries choices 1 to 3, and Embedding choice 6, the serving-artifact build |
 | [Inference](/docs/operations/admin-console/inference.md) | The inference stage tool, Inference choice 6 with its target read, and Coverage/summaries choice 4 |
 | [Logs](/docs/operations/admin-console/logs.md) | Server/logs choices 2 to 5, including the embedding runtime log that `logs embedding` reads |
-| [Settings](/docs/operations/admin-console/settings.md) | Setup choices 1, 2, 3, 4, 5, 6, 7, 8, 9 and 11, the enrollment, the copy to Working, the role migrations, the dataset cleanup, the worker setup and preflight, the backup cleanup, the configuration editor and the two rebuild scopes |
+| [Settings](/docs/operations/admin-console/settings.md) | Setup choices 1, 2, 3, 4, 5, 6, 7, 8, 9 and 11, the enrollment, the copy to Working, the role migrations, the dataset cleanup, the worker code update and preflight, the backup cleanup, the configuration editor and the two rebuild scopes |
 
 The Settings tab holds the [Dataset roles](/docs/operations/admin-console/dataset-roles.md) panel.
 
@@ -175,10 +173,8 @@ The [Operations](/docs/operations/README.md#the-two-operator-surfaces) overview 
 | Entry | Writes | Waits for work |
 |---|---|---|
 | Enroll/select dataset | The initial receipt and the Selected pointer | No |
-| Set up example site | The checkout rename of a checkout with no working file, the absent working files, the chosen instance key, ports, origins, feature-switch defaults and shared directory, both generated database passwords, the administration account when absent, the pinned model after confirmation, the database and embedding services, the example data, the feedback application store, the built artifacts and frontends, and the chosen startup mode's units or children | No |
-| Set up real empty database | One named database, the initial receipt and the Selected pointer, the serving artifacts, and the chosen startup mode's units or children | No |
 | Copy dataset to Working | The copied receipt and the Working pointer | No |
-| Worker setup/update | The worker checkout, its locked environment, and its pointed resources | No |
+| Worker code update | The worker checkout and its locked environment | No |
 | Read-only worker preflight | Nothing | No |
 | Migrate dataset | The named role's database schema | A Working migration only |
 | Start and Resume | The stage state, and one detached worker launch | Returns once the launch is acknowledged |
@@ -193,8 +189,8 @@ The [Operations](/docs/operations/README.md#the-two-operator-surfaces) overview 
 | Server status | Nothing | No |
 | Session log, Embedding log and Command log | Nothing | No |
 | Usage | The usage file, with the retained records | No |
-| Rebuild app | The built site frontend, the two recreated containers, and the restarted web unit | No |
-| Rebuild administration console | The built administration frontend, and the administration unit's queued restart | No |
+| Rebuild app | The built site image, the recreated database and embedding containers, and the re-created site container | No |
+| Rebuild administration console | The built administration image, and the started one-off that re-creates the administration service | No |
 | Build serving artifacts | The versioned artifact directory with its study fragments and catalogue artifact, and, on a site that serves the embedding features, its hub pair, shared stores and packed search relation, the course centroid table and the stored neighbour table | No |
 
 ## What an entry needs
@@ -202,10 +198,8 @@ The [Operations](/docs/operations/README.md#the-two-operator-surfaces) overview 
 | Operation | Requires before it runs |
 |---|---|
 | `setup datasets` | A reachable configured database |
-| `self-host example` | A prepared checkout with both frontend package directories, the host tools, the native libraries, free loopback ports, disk space for the pinned model, an example database name, and a state root with no pointer or enrollment record |
-| `self-host real-database` | The working files, the running database and embedding services, every stage idle, free feature and administration ports in foreground mode, and a state root with no pointer or enrollment record |
-| `setup worker` | A non-detached server checkout whose origin matches the configured origin, a non-detached worker checkout whose origin matches the configured origin, and passwordless `sudo` on the worker |
-| `preflight` | A non-detached server checkout whose origin matches the configured origin, the worker connection, and a non-detached worker checkout |
+| `setup worker` | A non-detached server checkout whose origin matches the configured origin, the configured worker connection, and a worker checkout installed by its own command. A same-machine worker needs no separate checkout, and one deployment updates its image |
+| `preflight` | A non-detached server checkout whose origin matches the configured origin, the worker connection, and a non-detached worker checkout. A same-machine worker reports the server checkout's identity |
 | `migrate selected` | A Selected dataset and the running server database service |
 | `migrate working` | Every stage idle, a Working dataset, and the running server database service |
 | A stage start | The stage state root, a Working dataset, and its database at this checkout's migration head |
@@ -223,15 +217,15 @@ The [Operations](/docs/operations/README.md#the-two-operator-surfaces) overview 
 | `password --username USERNAME` | A nonblank username, a terminal that hides the entry, and write access to the administration state directory |
 | `dispose inference ...` | Every stage idle, a verified returned or copied Working dataset, and the current schema head |
 | `target inference ...` | A Working dataset and the current schema head |
-| `server status` | A loaded site web unit from this checkout, `ADMIN_SITE_WEB_SERVICE_UNIT` in `config/admin_web.toml`, the Compose services of this checkout, and passwordless `sudo` for Compose |
+| `server status` | The Compose services of this checkout, and write access to the Docker socket |
 | `logs sessions` | The four stage state roots (an absent root contributes no entry) |
 | `logs commands` | Access to the administration state directory (an absent log reports an empty entry list) |
 | `logs read` | A listed session of the chosen stage, the recorded worker session when one exists, and the worker connection for a worker source with a receipt |
-| `logs embedding` | The Compose services of this checkout, and passwordless `sudo` for Compose |
+| `logs embedding` | The Compose services of this checkout, and write access to the Docker socket |
 | `usage --hours HOURS` | A positive hour count at most the configured retention, and write access to the usage file (an absent file reports an empty window) |
-| `rebuild` | The prepared frontend, the two prepared container images, the site's own loaded web unit from this checkout, the manager that owns that unit with its passwordless grant when the manager is the system manager, and passwordless `sudo` for Compose |
-| `rebuild-admin` | The installed administration frontend dependencies, and the loaded administration unit of this checkout named by `ADMIN_SITE_ADMIN_SERVICE_UNIT` in `config/admin_web.toml` |
-| `restart-admin` | The loaded administration unit of this checkout named by `ADMIN_SITE_ADMIN_SERVICE_UNIT` in `config/admin_web.toml`, and the systemd user manager that owns it |
+| `rebuild` | The checkout, write access to the Docker socket, the prepared database and embedding images, and the site bind |
+| `rebuild-admin` | The checkout and write access to the Docker socket |
+| `restart-admin` | The checkout, write access to the Docker socket, and a running administration service |
 | `serving-artifacts` | The Selected dataset, or the named `--dataset` target. On a site that serves the embedding features it also needs complete current embedding coverage. |
 | `coverage` and `summary` | The named dataset role and its database at the current schema head |
 

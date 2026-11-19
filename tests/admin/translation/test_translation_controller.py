@@ -1,4 +1,4 @@
-"""Contracts for controller status, paths, and SSH/WSL transport."""
+"""Contracts for controller status, paths, and the worker transport."""
 
 from __future__ import annotations
 
@@ -13,9 +13,11 @@ from course_explorer.administration import sha256_file
 from course_explorer.config import WorkerConnectionSettings
 from course_explorer_admin import mechanics
 from course_explorer_admin.transport import (
+    SshLinuxTransport,
     SshWslTransport,
     WorkerAvailabilityError,
     WorkerCommandError,
+    build_worker_transport,
 )
 
 SESSION_ID = "0123456789abcdef0123456789abcdef"
@@ -26,12 +28,13 @@ def controller_settings(
     worker_project_root: str = "/home/test-user/course-explorer",
 ) -> WorkerConnectionSettings:
     return WorkerConnectionSettings(
-        TRANSLATION_CONTROLLER_SSH_TARGET="test-worker",
-        TRANSLATION_CONTROLLER_SSH_CONNECT_TIMEOUT_SECONDS=10,
-        TRANSLATION_CONTROLLER_WSL_DISTRIBUTION="Ubuntu-24.04",
-        TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT=worker_project_root,
-        TRANSLATION_CONTROLLER_HEALTH_INTERVAL_SECONDS=2,
-        TRANSLATION_CONTROLLER_STOP_TIMEOUT_SECONDS=660,
+        WORKER_HOST_KIND="wsl",
+        WORKER_SSH_TARGET="test-worker",
+        WORKER_SSH_CONNECT_TIMEOUT_SECONDS=10,
+        WORKER_WSL_DISTRIBUTION="Ubuntu-24.04",
+        WORKER_PROJECT_ROOT=worker_project_root,
+        WORKER_HEALTH_INTERVAL_SECONDS=2,
+        WORKER_STOP_TIMEOUT_SECONDS=660,
     )
 
 
@@ -113,6 +116,9 @@ class RecordingRunner:
 
 def test_upload_reuses_only_exact_matching_remote_file(tmp_path: Path) -> None:
     """Default upload rejects a destination that exists. Reuse matches only exact digest."""
+    assert isinstance(
+        build_worker_transport(RecordingRunner(), controller_settings()), SshWslTransport
+    )
     source = tmp_path / "import-receipt.json"
     source.write_bytes(b"receipt-bytes")
     destination = PurePosixPath("/home/test-user/state/s/import-receipt.json")
@@ -441,3 +447,46 @@ def test_transport_rejects_unapproved_environment_before_io() -> None:
     assert runner.calls == []
     assert secret_value not in str(excinfo.value)
     assert "UNLISTED_SECRET_KEY" not in str(excinfo.value)
+
+
+def test_native_linux_transport_runs_one_plain_ssh_command_without_a_keepalive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Linux worker runs one plain SSH command and refuses the WSL keepalive."""
+    # The example environment names a WSL distribution, and a native Linux worker names none.
+    monkeypatch.delenv("WORKER_WSL_DISTRIBUTION")
+    settings = WorkerConnectionSettings(
+        WORKER_HOST_KIND="linux",
+        WORKER_SSH_TARGET="test-worker",
+        WORKER_SSH_CONNECT_TIMEOUT_SECONDS=10,
+        WORKER_PROJECT_ROOT="/home/test-user/course-explorer",
+        WORKER_HEALTH_INTERVAL_SECONDS=2,
+        WORKER_STOP_TIMEOUT_SECONDS=660,
+    )
+    runner = RecordingRunner([b"payload-out"])
+    transport = build_worker_transport(runner, settings)
+
+    assert isinstance(transport, SshLinuxTransport)
+    assert transport.keepalive_required is False
+    assert (
+        transport.run(
+            ("printf", "payload-out"),
+            cwd=PurePosixPath("/home/test-user/course-explorer"),
+        )
+        == b"payload-out"
+    )
+    assert len(runner.calls) == 1
+    argv, _ = runner.calls[0]
+    assert "BatchMode=yes" in argv
+    assert "ConnectTimeout=10" in argv
+    assert "test-worker" in argv
+    assert argv[-1].startswith("bash -lc ")
+    assert "wsl.exe" not in " ".join(argv)
+    assert "^" not in " ".join(argv)
+
+    with pytest.raises(ValueError, match="the keepalive belongs to a WSL worker"):
+        transport.start_keepalive(
+            SESSION_ID,
+            stdout_path=tmp_path / "keepalive.log",
+            stderr_path=tmp_path / "keepalive.log",
+        )

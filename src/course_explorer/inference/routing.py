@@ -1,24 +1,16 @@
-"""One fit-only routing owner around the sole complete-target evidence writer.
+"""Route one whole-target inference call through the fit-only local keys to the evidence writer.
 
-This module owns the operating path's real execution orchestration: it prepares the one rendered
-request and its one route-bound work identity, counts its prompt tokens through the first ordered
-local key's pinned template/tokenize endpoints, selects the first key that genuinely fits, and
-routes strictly by fit: the same open first-key provider generates when it fits, and only the
-selected larger no-MTP key is opened when only it fits.
-A caller may supply a :class:`GenerationRuntimeControl` to load/unload the selected local key on a
-worker. With no runtime the externally prepared bounded endpoints are used and no process action is
-taken.
-
-A packet fitting neither ordered local key has no local route. The default behaviour is the fixed,
-:class:`TargetContextError` capacity failure. A caller may instead inject an
-:class:`OversizeRouteFactory` that opens one explicitly configured alternative route for that same
-whole-target call, so no route vocabulary, provider, credential or module is named here.
-
-It never forks an HTTP/retry/validation/evidence path: every route calls the one
-:func:`run_operational_target` writer, receives the identical live admission and request-scope
-callbacks, and reports the exact planned work identity through ``on_identity`` immediately before
-generation. A tokenizer or generation failure is never a fit condition, and a refused admission is
-the fixed cooperative :class:`RequestNotStarted` signal, not a fit failure.
+The module prepares the rendered request and its route-bound work identity, counts the prompt tokens
+through the first ordered local key's pinned template and tokenize endpoints, and selects the first
+key that fits. The same first key generates when it fits, and only the selected larger no-MTP key is
+opened when only it fits. A caller may supply a :class:`GenerationRuntimeControl` to load and unload
+the selected local key, and without one the externally prepared bounded endpoints run with no
+process action. A packet fitting neither key raises :class:`TargetContextError` unless the caller
+injects an :class:`OversizeRouteFactory` for that whole-target call. Every route shares the one
+HTTP, retry, validation and evidence path of :func:`run_operational_target`, receives the identical
+live admission and request-scope callbacks, and reports the planned work identity through
+``on_identity`` immediately before generation. A tokenizer or generation failure is never a fit
+condition, and a refused admission raises the cooperative :class:`RequestNotStarted` signal.
 """
 
 from __future__ import annotations
@@ -89,7 +81,7 @@ def local_execution(
     """Derive the execution profile for one selected local fit key."""
     return InferenceExecutionProfile(
         route="local",
-        model_identity=settings.primary_model_identity,
+        model_identity=settings.local_model_identity(variant),
         runtime_identity=settings.local_runtime_identity(variant),
     )
 

@@ -62,7 +62,7 @@ Each nonempty hub is a JSON array of 1024 numbers in the embedding directory of 
 
 For a dataset with current chunks, the command requires complete current embedding coverage of the dataset it builds: the Selected dataset, the configured database in bootstrap, or the named `--dataset` target. Every desired chunk of the represented courses must be a completed chunk with a compatible stored vector, and at least one learning-outcomes chunk must exist. It runs after an embedding run that completes the coverage of that dataset. A dataset with no represented course has no desired chunk, so it builds both hubs empty.
 
-The embedding stage writes the Working dataset. It changes no served vector, artifact file or serving identity. The site serves the Selected dataset's stored vectors and artifact set. A Working embedding run reaches the site after that dataset is promoted to Selected, which builds its serving artifacts, restarts the web unit and proves the served catalogue.
+The embedding stage writes the Working dataset. It changes no served vector, artifact file or serving identity. The site serves the Selected dataset's stored vectors and artifact set. A Working embedding run reaches the site after that dataset is promoted to Selected, which builds its serving artifacts, re-creates the site container and proves the served catalogue.
 
 ```bash
 uv run python scripts/admin.py serving-artifacts

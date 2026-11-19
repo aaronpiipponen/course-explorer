@@ -30,6 +30,7 @@ from course_explorer.config import (
     load_instance_settings,
     load_raw_database_settings,
     load_worker_gpu_reboot_settings,
+    load_worker_gpu_settings,
 )
 from course_explorer.db.session import create_database_engine, create_session_factory
 from course_explorer.inference.failures import InferenceTargetsFailed
@@ -342,6 +343,8 @@ class InferenceWorkerStage:
                 directory=directory,
                 settings=load_inference_settings(),
                 rerank_settings=load_inference_rerank_settings(),
+                gpu=load_worker_gpu_settings(),
+                host_kind=settings.host_kind,
                 health_attempts=settings.inference_controller_health_attempts,
                 interval=settings.poll_interval_seconds,
                 stop_timeout_seconds=settings.stop_timeout_seconds,

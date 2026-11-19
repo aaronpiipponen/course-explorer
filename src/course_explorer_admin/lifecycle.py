@@ -1,17 +1,14 @@
 """One shared lifecycle core for the ingestion, embedding, translation and inference stages.
 
-This module owns the single detached lifecycle every stage uses: one mutable ``state.json``
-per stage root that names the sole current session and carries control intent, the exact owned
-process record, resource ownership and progress. One immutable ``session.json`` execution
-receipt per session, and one short-held per-stage flock that serializes the real CLI and worker
-writers of that one file. The public five-action algorithm (``start``/``pause``/``resume``/
-``status``/``stop``) lives here exactly once. Each stage adapter delegates work selection, source
-access, envelope verification, provenance, vector generation and product database access to its
-product command.
-
-The generic core loads only the neutral ``LocalLifecycleSettings``. A stage's
-``require_prepared``/``require_database``/``run``/``finalize`` methods own every stage-specific
-resource and product decision.
+The core owns one mutable ``state.json`` per stage root, which names the current session and carries
+control intent, the owned process record, resource ownership and progress, and one immutable
+``session.json`` execution receipt per session. One short-held per-stage flock serializes the real
+CLI and worker writers of that file. The five actions ``start``, ``pause``, ``resume``, ``status``
+and ``stop`` live here once, and each stage delegates work selection, source access, envelope
+verification, provenance, vector generation and product database access to its product command. The
+core loads only the neutral ``LocalLifecycleSettings``, and a stage's ``require_prepared``,
+``require_database``, ``run`` and ``finalize`` methods own every stage-specific resource and product
+decision.
 """
 
 from __future__ import annotations
@@ -27,7 +24,7 @@ from pathlib import Path
 from typing import Annotated, Literal, Protocol
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from course_explorer import administration
 from course_explorer.administration import (
@@ -258,12 +255,6 @@ class WorkerResources(_LifecycleModel):
     worker_database_start_attempted: bool = False
     remote_session_created: bool = False
     worker_prepared: bool = False
-
-    @model_validator(mode="after")
-    def validate_prepared_consistency(self) -> WorkerResources:
-        if self.worker_prepared and not self.remote_session_created:
-            raise ValueError("a prepared worker requires a created remote session")
-        return self
 
 
 class LifecycleSession(_LifecycleModel):

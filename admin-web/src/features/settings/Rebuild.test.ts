@@ -22,13 +22,13 @@ const ADMIN_PATH = "/api/settings/rebuild-admin";
 
 const APP_REPORT: RebuildReport = {
   schema_version: 1,
-  steps: ["frontend", "containers", "web", "bind"],
+  steps: ["image", "containers", "web", "bind"],
   host: "127.0.0.1",
   port: 18026,
 };
 const ADMIN_REPORT: AdminRebuildReport = {
   schema_version: 1,
-  steps: ["frontend"],
+  steps: ["image"],
 };
 
 /** One action the panel offers, with its own label, confirmation and route. */
@@ -160,6 +160,10 @@ describe.each(CASES)("rebuild confirmation for the $name", (kase) => {
     // Both separate actions are offered, and no action has run.
     expect(container.textContent).toContain(wording.settings.rebuildApp);
     expect(container.textContent).toContain(wording.settings.rebuildAdmin);
+    // The panel states no step before a rebuild reports one.
+    expect(container.textContent).not.toContain(
+      wording.settings.rebuildSteps.image,
+    );
     expect(calls).toEqual([]);
 
     // The action's own confirmation is shown, and cancelling it runs nothing.
@@ -193,6 +197,10 @@ describe.each(CASES)("rebuild confirmation for the $name", (kase) => {
     expect(adminRebuilds).toBe(0);
     expect(container.textContent).toContain(
       `${APP_REPORT.host}:${APP_REPORT.port}`,
+    );
+    // The reported steps render in their reported order.
+    expect(container.textContent).toContain(
+      wording.settings.rebuildSteps.image,
     );
   });
 });

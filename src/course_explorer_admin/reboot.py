@@ -1,19 +1,16 @@
-"""One shared checkpoint clock and native Windows reboot handshake for worker GPU modes.
+"""One shared checkpoint clock and host reboot handshake for worker GPU modes.
 
 This module owns the two worker-lifecycle mechanics that the translation and inference remote
-modes share but that no single stage may duplicate: the loaded-GPU checkpoint clock and the
-Windows worker restart. The clock measures only elapsed time while an owned local GPU
-runtime is loaded, including its between-unit dwell, accumulates across runtime switches and
-same-WSL-boot pauses, and persists at completed atomic-unit checkpoints as well as at committed
-failed-generation-attempt checkpoints (so repeated local rejections cannot starve the reboot
-interval). The handshake reads the
-native Windows boot identity, issues exactly one restart through the SSH/WSL transport,
-and proves a changed Windows boot plus a healthy configured WSL before returning.
-
-Both owners work from one per-session ``gpu-clock.json`` schema-1 record and the
-transport/connection settings. The clock measures loaded-GPU dwell alone, and a restart is
-claimed only after an observed boot change. It is worker-side: the persisted record is written
-by whichever worker host runs the GPU mode.
+modes share but that no single stage may duplicate: the loaded-GPU checkpoint clock and the worker
+host restart. The clock measures only elapsed time while an owned local GPU runtime is loaded,
+including its between-unit dwell, accumulates across runtime switches and same-boot pauses, and
+persists at completed atomic-unit checkpoints as well as at committed failed-generation-attempt
+checkpoints (so repeated local rejections cannot starve the reboot interval). The clock and the
+due read honour the one configured restart toggle. The handshake reads the worker host's boot
+identity, issues exactly one restart through the worker transport, and proves a changed boot plus
+a healthy worker environment before returning. Both owners read one per-session ``gpu-clock.json``
+schema-1 record and the transport/connection settings, and whichever worker host runs the GPU mode
+writes that record.
 """
 
 from __future__ import annotations
@@ -37,16 +34,18 @@ from course_explorer.datasets import DatasetId
 from course_explorer.validation import require_finite_nonnegative
 from course_explorer_admin import mechanics
 from course_explorer_admin.transport import (
-    SshWslTransport,
+    KERNEL_BOOT_ID_PATH,
     WorkerAvailabilityError,
     WorkerConnectionLost,
     WorkerRecovery,
+    WorkerTransport,
+    parse_kernel_boot_id,
 )
 
 _CHECKPOINT_NAME = "gpu-clock.json"
 
 # The fixed WSL kernel boot-id read.
-_WSL_BOOT_ID_ARGV = ("cat", "/proc/sys/kernel/random/boot_id")
+_WSL_BOOT_ID_ARGV = ("cat", KERNEL_BOOT_ID_PATH)
 
 
 class WorkerGpuCheckpoint(BaseModel):
@@ -96,10 +95,13 @@ def worker_gpu_reboot_due(
 ) -> bool:
     """Report whether the saved sample proves this worker boot has reached the interval.
 
-    The read writes nothing. An absent record means no loaded work and raises no error. A symlinked,
-    malformed, or foreign-identity record refuses. A record from another worker boot
-    reports not-due (its stored kernel boot id differs) without rewriting it.
+    The read writes nothing. It reports not-due while the configured restart toggle is off. An
+    absent record means no loaded work and raises no error. A symlinked, malformed, or
+    foreign-identity record refuses. A record from another worker boot reports not-due (its stored
+    kernel boot id differs) without rewriting it.
     """
+    if not settings.worker_gpu_reboot_enabled:
+        return False
     checkpoint = _read_checkpoint(directory, session_id=session_id)
     if checkpoint is None:
         return False
@@ -160,7 +162,7 @@ class WorkerGpuClock:
         A checkpoint with no open loaded segment returns without publishing. When loaded, it adds
         the segment delta and reopens the segment at the same sample instant, so consecutive
         checkpoints never double-count. Callers invoke it at a completed atomic unit and after a
-        committed failed generation attempt.
+        committed failed generation attempt. The due latch follows the configured restart toggle.
         """
         if self._segment_start is None:
             return
@@ -168,7 +170,9 @@ class WorkerGpuClock:
         self._seconds += max(0.0, now - self._segment_start)
         self._segment_start = now
         self._publish()
-        self._due = self._seconds >= self._settings.worker_gpu_reboot_interval_minutes * 60
+        self._due = self._settings.worker_gpu_reboot_enabled and (
+            self._seconds >= self._settings.worker_gpu_reboot_interval_minutes * 60
+        )
 
     @property
     def due(self) -> bool:
@@ -198,14 +202,19 @@ def _bounded_timeout(
 
 
 def _native_transient(exc: Exception) -> bool:
-    """Report whether a native command failure is an expected severed-connection observation."""
+    """Report whether a native command failure is an expected severed-connection observation.
+
+    A transport availability loss is the same severed observation as exit 255 or a timeout.
+    """
+    if isinstance(exc, WorkerAvailabilityError):
+        return True
     if isinstance(exc, subprocess.TimeoutExpired):
         return True
     return isinstance(exc, subprocess.CalledProcessError) and exc.returncode == 255
 
 
 def _wsl_healthy(
-    transport: SshWslTransport,
+    transport: WorkerTransport,
     connection: WorkerConnectionSettings,
     *,
     timeout: float,
@@ -216,7 +225,7 @@ def _wsl_healthy(
     Only a classified availability loss (the shell never reported a completed command) is an
     expected not-ready observation within the bounded recovery. A completed command failure,
     protocol error, or malformed boot id is a real output error and propagates. A valid parsed UUID
-    boot id is the health proof.
+    boot id is the health proof, and the transport's one kernel boot identity reader parses it.
     """
     try:
         raw = transport.run(
@@ -227,15 +236,12 @@ def _wsl_healthy(
     except WorkerAvailabilityError as exc:
         recovery.last_returncode = exc.returncode
         return False
-    try:
-        UUID(raw.decode("ascii").strip())
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise RuntimeError("worker WSL boot id is not a UUID") from exc
+    parse_kernel_boot_id(raw)
     return True
 
 
-def reboot_windows_worker(
-    transport: SshWslTransport,
+def reboot_worker(
+    transport: WorkerTransport,
     connection: WorkerConnectionSettings,
     *,
     run_allowed: Callable[[], bool],
@@ -243,16 +249,20 @@ def reboot_windows_worker(
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> bool:
-    """Read the Windows boot, restart the worker once, and prove a changed boot plus healthy WSL.
+    """Read the worker host boot, restart the worker once, and prove a changed boot plus a healthy
+    worker environment.
 
-    The boot before the restart is read first, then ``run_allowed`` is rechecked immediately before
-    the single irreversible request. A denied control returns ``False`` without issuing anything.
-    After the request, the one shared recovery deadline (the configured stop timeout) bounds every
-    probe: a different Windows boot and a parsed UUID WSL boot id must both be observed, or a fixed
-    :class:`WorkerConnectionLost` is raised. A request that severs its SSH connection (exit 255 or
-    timeout) continues only to this mandatory boot proof. Once the request is issued the bounded
-    health observation finishes even if a pause/stop arrives. This owner does not re-arm or launch
-    work for that pending control.
+    A WSL worker proves the native Windows boot changed and then a parsed WSL kernel boot id. A
+    native Linux worker proves the kernel boot id changed, which is itself a completed read on the
+    returned host. The boot before the restart is read first, then ``run_allowed`` is rechecked
+    immediately before the single irreversible request. A denied control returns ``False`` without
+    issuing anything. After the request, the one shared recovery deadline (the configured stop
+    timeout) bounds every probe: the required boot change must be observed, or a fixed
+    :class:`WorkerConnectionLost` is raised. A request that severs its connection continues only to
+    this mandatory boot proof, whether the observation is a transport availability loss, exit 255 or
+    a timeout. Once the request is issued the bounded health observation finishes even if a
+    pause/stop arrives. This owner does not re-arm or launch work for that pending control. Only the
+    changed boot claims success.
     """
     if recovery is None:
         recovery = WorkerRecovery(
@@ -268,9 +278,13 @@ def reboot_windows_worker(
         if attempt_timeout <= 0:
             raise WorkerConnectionLost(recovery.last_returncode) from None
         try:
-            old_boot = transport.read_windows_boot_id(timeout=attempt_timeout)
+            old_boot = transport.read_host_boot_id(timeout=attempt_timeout)
             break
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            WorkerAvailabilityError,
+        ) as exc:
             if not _native_transient(exc):
                 raise
             recovery.last_returncode = _native_returncode(exc)
@@ -284,33 +298,42 @@ def reboot_windows_worker(
     if reboot_timeout <= 0:
         raise WorkerConnectionLost(recovery.last_returncode) from None
     try:
-        transport.request_windows_reboot(timeout=reboot_timeout)
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+        transport.request_host_reboot(timeout=reboot_timeout)
+    except (
+        subprocess.TimeoutExpired,
+        subprocess.CalledProcessError,
+        WorkerAvailabilityError,
+    ) as exc:
         if not _native_transient(exc):
             raise
         recovery.last_returncode = _native_returncode(exc)
         # The reboot may have severed its own connection. Only the boot proof may claim success.
     interval = connection.poll_interval_seconds
     while True:
-        remaining = deadline - monotonic()
-        if remaining <= 0:
+        probe_timeout = _bounded_timeout(deadline, monotonic, connect_timeout)
+        if probe_timeout <= 0:
             raise WorkerConnectionLost(recovery.last_returncode) from None
-        probe_timeout = min(float(connect_timeout), remaining)
         try:
-            new_boot = transport.read_windows_boot_id(timeout=probe_timeout)
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+            new_boot = transport.read_host_boot_id(timeout=probe_timeout)
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            WorkerAvailabilityError,
+        ) as exc:
             if not _native_transient(exc):
                 raise
             recovery.last_returncode = _native_returncode(exc)
             new_boot = None
         if new_boot is not None and new_boot != old_boot:
-            remaining = deadline - monotonic()
-            if remaining > 0 and _wsl_healthy(
-                transport,
-                connection,
-                timeout=min(float(connect_timeout), remaining),
-                recovery=recovery,
-            ):
+            if connection.host_kind != "wsl":
+                # A changed kernel boot is the whole proof for a native or same-machine worker.
+                return True
+            # The health probe receives the one timeout the budget still allows, so a probe never
+            # starts with an exhausted budget.
+            probe = _bounded_timeout(deadline, monotonic, connect_timeout)
+            if probe <= 0:
+                raise WorkerConnectionLost(recovery.last_returncode) from None
+            if _wsl_healthy(transport, connection, timeout=probe, recovery=recovery):
                 return True
         remaining = deadline - monotonic()
         if remaining <= 0:
@@ -319,7 +342,9 @@ def reboot_windows_worker(
 
 
 def _native_returncode(exc: Exception) -> int | None:
-    """Return the available native subprocess status, or ``None`` for a timeout."""
+    """Return the available status of a severed observation, or ``None`` for a timeout."""
+    if isinstance(exc, WorkerAvailabilityError):
+        return exc.returncode
     if isinstance(exc, subprocess.CalledProcessError):
         return exc.returncode
     return None

@@ -16,6 +16,7 @@ import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -29,14 +30,18 @@ from course_explorer.config import (
 from course_explorer.datasets import DatasetPointer
 from course_explorer.ingestion.capture import capture_curriculum
 from course_explorer.ingestion.manifest import RawCaptureStore
-from course_explorer_admin import local_stages
+from course_explorer_admin import local_stages, mechanics, remote_stages
 from course_explorer_admin.lifecycle import (
+    InferenceProgress,
     IngestionOptions,
     IngestionProgress,
+    LifecycleState,
+    TranslationProgress,
     read_lifecycle_state,
     require_retained_ingestion_manifest,
     run_lifecycle_command,
     stage_state_root,
+    write_lifecycle_state,
 )
 from course_explorer_admin.worker import make_stage
 from tests.admin._lifecycle_support import (
@@ -844,3 +849,107 @@ def test_stage_start_requires_working_before_launch(
         assert runner.started == []
     finally:
         runner.close()
+
+
+def test_startup_resume_continues_only_reboot_interrupted_same_machine_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The startup resume relaunches only a same-machine run whose recorded process is from an
+    earlier boot, and never an operator pause or stop, a same-boot process, a fresh state or a
+    remote worker."""
+    roots = {"translation": tmp_path / "translation", "inference": tmp_path / "inference"}
+    earlier = UUID("00000000-0000-4000-8000-000000000001")
+    current = UUID("00000000-0000-4000-8000-000000000002")
+    resumed: list[tuple[str, str]] = []
+
+    def write(
+        stage: str,
+        *,
+        lifecycle: str,
+        requested_action: str = "run",
+        boot_id: UUID | None = None,
+        owned: bool = True,
+    ) -> None:
+        root = roots[stage]
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        progress = (
+            TranslationProgress(kind="translation")
+            if stage == "translation"
+            else InferenceProgress(kind="inference")
+        )
+        write_lifecycle_state(
+            root,
+            LifecycleState(
+                session_id="0" * 32,
+                lifecycle=lifecycle,  # type: ignore[arg-type]
+                requested_action=requested_action,  # type: ignore[arg-type]
+                process=(
+                    mechanics.OwnedProcessRecord(
+                        schema_version=1,
+                        pid=4321,
+                        argv=("python", "-m", f"course_explorer_admin.{stage}.controller_worker"),
+                        boot_id=boot_id,
+                    )
+                    if owned
+                    else None
+                ),
+                progress=progress,
+                work_complete=False,
+                active_seconds=0.0,
+            ),
+        )
+
+    def record_translation(action, *, runner, clock, sleep):
+        resumed.append(("translation", action))
+
+    def record_inference(action, *, runner, clock, sleep):
+        resumed.append(("inference", action))
+
+    monkeypatch.setattr(remote_stages, "stage_state_root", roots.__getitem__)
+    monkeypatch.setattr(
+        remote_stages,
+        "load_worker_connection_settings",
+        lambda: SimpleNamespace(host_kind="same-machine"),
+    )
+    monkeypatch.setattr(mechanics, "current_boot_id", lambda: current)
+    monkeypatch.setattr(remote_stages, "run_translation_lifecycle_command", record_translation)
+    monkeypatch.setattr(remote_stages, "run_inference_lifecycle_command", record_inference)
+    runner = mechanics.SubprocessRunner()
+
+    # A same-machine translation run and an inference run from an earlier boot both resume.
+    write("translation", lifecycle="running", boot_id=earlier)
+    write("inference", lifecycle="starting", boot_id=earlier)
+    assert remote_stages.resume_reboot_interrupted_stages(runner=runner) == (
+        "translation",
+        "inference",
+    )
+    assert resumed == [("translation", "resume"), ("inference", "resume")]
+
+    # A process recorded against the current boot is alive work, not an interrupted run.
+    resumed.clear()
+    write("translation", lifecycle="running", boot_id=current)
+    write("inference", lifecycle="running", boot_id=current)
+    assert remote_stages.resume_reboot_interrupted_stages(runner=runner) == ()
+    assert resumed == []
+
+    # A pending pause or stop stays the operator's decision.
+    write("translation", lifecycle="running", requested_action="pause", boot_id=earlier)
+    write("inference", lifecycle="running", requested_action="stop", boot_id=earlier)
+    assert remote_stages.resume_reboot_interrupted_stages(runner=runner) == ()
+    assert resumed == []
+
+    # A starting state with no recorded process and an absent state are fresh work.
+    write("translation", lifecycle="starting", owned=False)
+    roots["inference"] = tmp_path / "absent-inference"
+    assert remote_stages.resume_reboot_interrupted_stages(runner=runner) == ()
+    assert resumed == []
+
+    # A remote worker keeps its own session's restart, so its stage is never resumed here.
+    write("translation", lifecycle="running", boot_id=earlier)
+    monkeypatch.setattr(
+        remote_stages,
+        "load_worker_connection_settings",
+        lambda: SimpleNamespace(host_kind="linux"),
+    )
+    assert remote_stages.resume_reboot_interrupted_stages(runner=runner) == ()
+    assert resumed == []

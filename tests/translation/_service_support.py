@@ -56,14 +56,14 @@ __all__ = [
 
 PROVENANCE = (
     "google/translategemma-12b-it@d1b225e1caa17f1ddc7e62065d8637d0923f34e2"
-    ";Q5_K_M;sha256:6a4cd9eae938fd869ceeb310ed9c8de2f44bacb0c2d79541a4f4dbf2b201c6da"
+    ";Q5_K_M;sha256:be458d9ab099e0f418bc5687c5e97cf1555c3d32a012a196744db917656becbc"
 )
 
 
 def settings() -> TranslationSettings:
     return settings_factory(
         TranslationSettings,
-        TRANSLATION_ARTIFACT_PATH="models/translategemma-12b-it-Q5_K_M.gguf",
+        TRANSLATION_ARTIFACT_PATH="models/translategemma-12b-it.Q5_K_M.gguf",
     )
 
 

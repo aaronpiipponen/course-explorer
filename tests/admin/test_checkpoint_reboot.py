@@ -1,4 +1,4 @@
-"""Contracts for the shared loaded-GPU checkpoint clock and Windows handshake.
+"""Contracts for the shared loaded-GPU checkpoint clock and host reboot handshake.
 
 These contracts drive the real ``course_explorer_admin.reboot`` owners over a virtual monotonic
 clock and a synthetic process runner, proving the native command shapes, the boot-change
@@ -19,10 +19,16 @@ from course_explorer_admin import mechanics
 from course_explorer_admin.reboot import (
     WorkerGpuCheckpoint,
     WorkerGpuClock,
-    reboot_windows_worker,
+    reboot_worker,
     worker_gpu_reboot_due,
 )
-from course_explorer_admin.transport import SshWslTransport, WorkerConnectionLost
+from course_explorer_admin.transport import (
+    ComposeExecTransport,
+    SshLinuxTransport,
+    SshWslTransport,
+    WorkerAvailabilityError,
+    WorkerConnectionLost,
+)
 
 SESSION_ID = "0123456789abcdef0123456789abcdef"
 
@@ -40,18 +46,47 @@ class VirtualMonotonic:
         self.value += seconds
 
 
-def reboot_settings(*, minutes: int = 1) -> WorkerGpuRebootSettings:
-    return WorkerGpuRebootSettings(WORKER_GPU_REBOOT_INTERVAL_MINUTES=minutes)
+def reboot_settings(*, minutes: int = 1, enabled: bool = True) -> WorkerGpuRebootSettings:
+    return WorkerGpuRebootSettings(
+        WORKER_GPU_REBOOT_ENABLED=enabled, WORKER_GPU_REBOOT_INTERVAL_MINUTES=minutes
+    )
 
 
 def connection(tmp_path: Path, *, stop_timeout: float = 60.0) -> WorkerConnectionSettings:
     return WorkerConnectionSettings(
-        TRANSLATION_CONTROLLER_SSH_TARGET="test-worker",
-        TRANSLATION_CONTROLLER_SSH_CONNECT_TIMEOUT_SECONDS=10,
-        TRANSLATION_CONTROLLER_WSL_DISTRIBUTION="Ubuntu-24.04",
-        TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT=str(tmp_path / "worker"),
-        TRANSLATION_CONTROLLER_HEALTH_INTERVAL_SECONDS=0.01,
-        TRANSLATION_CONTROLLER_STOP_TIMEOUT_SECONDS=stop_timeout,
+        WORKER_HOST_KIND="wsl",
+        WORKER_SSH_TARGET="test-worker",
+        WORKER_SSH_CONNECT_TIMEOUT_SECONDS=10,
+        WORKER_WSL_DISTRIBUTION="Ubuntu-24.04",
+        WORKER_PROJECT_ROOT=str(tmp_path / "worker"),
+        WORKER_HEALTH_INTERVAL_SECONDS=0.01,
+        WORKER_STOP_TIMEOUT_SECONDS=stop_timeout,
+    )
+
+
+def linux_connection(tmp_path: Path, *, stop_timeout: float = 60.0) -> WorkerConnectionSettings:
+    return WorkerConnectionSettings(
+        WORKER_HOST_KIND="linux",
+        WORKER_SSH_TARGET="test-worker",
+        WORKER_SSH_CONNECT_TIMEOUT_SECONDS=10,
+        WORKER_WSL_DISTRIBUTION=None,
+        WORKER_PROJECT_ROOT=str(tmp_path / "worker"),
+        WORKER_HEALTH_INTERVAL_SECONDS=0.01,
+        WORKER_STOP_TIMEOUT_SECONDS=stop_timeout,
+    )
+
+
+def same_machine_connection(
+    tmp_path: Path, *, stop_timeout: float = 60.0
+) -> WorkerConnectionSettings:
+    return WorkerConnectionSettings(
+        WORKER_HOST_KIND="same-machine",
+        WORKER_SSH_TARGET=None,
+        WORKER_SSH_CONNECT_TIMEOUT_SECONDS=10,
+        WORKER_WSL_DISTRIBUTION=None,
+        WORKER_PROJECT_ROOT="/app",
+        WORKER_HEALTH_INTERVAL_SECONDS=0.01,
+        WORKER_STOP_TIMEOUT_SECONDS=stop_timeout,
     )
 
 
@@ -141,6 +176,22 @@ def test_gpu_clock_counts_only_loaded_checkpoint_time_and_survives_same_boot_res
     )
     assert fresh.due is False
 
+    # With the toggle off, the due read and a fresh checkpoint both report not due after the
+    # interval elapses.
+    disabled = reboot_settings(enabled=False)
+    assert worker_gpu_reboot_due(directory, session_id=SESSION_ID, settings=disabled) is False
+    disabled_clock = WorkerGpuClock(
+        directory,
+        session_id=SESSION_ID,
+        settings=disabled,
+        monotonic=clock,
+    )
+    disabled_clock.loaded()
+    clock.advance(60)
+    disabled_clock.checkpoint()
+    assert disabled_clock.due is False
+    assert worker_gpu_reboot_due(directory, session_id=SESSION_ID, settings=disabled) is False
+
     # A foreign session record refuses in both the read and the constructor.
     foreign = WorkerGpuCheckpoint(
         schema_version=1,
@@ -225,8 +276,7 @@ def test_windows_reboot_requires_changed_boot_and_healthy_wsl(tmp_path: Path) ->
     transport = SshWslTransport(runner, settings)
 
     assert (
-        reboot_windows_worker(transport, settings, run_allowed=lambda: True, sleep=lambda _s: None)
-        is True
+        reboot_worker(transport, settings, run_allowed=lambda: True, sleep=lambda _s: None) is True
     )
     assert runner.reboot_requests == 1
 
@@ -242,9 +292,7 @@ def test_windows_reboot_requires_changed_boot_and_healthy_wsl(tmp_path: Path) ->
     timed = ScriptedBootRunner(native_timeouts=1)
     timed_transport = SshWslTransport(timed, settings)
     assert (
-        reboot_windows_worker(
-            timed_transport, settings, run_allowed=lambda: True, sleep=lambda _s: None
-        )
+        reboot_worker(timed_transport, settings, run_allowed=lambda: True, sleep=lambda _s: None)
         is True
     )
     assert timed.reboot_requests == 1
@@ -256,7 +304,7 @@ def test_windows_reboot_requires_changed_boot_and_healthy_wsl(tmp_path: Path) ->
     exhausted = ScriptedBootRunner(native_timeouts=1)
     exhausted_transport = SshWslTransport(exhausted, exhausted_settings)
     with pytest.raises(WorkerConnectionLost):
-        reboot_windows_worker(
+        reboot_worker(
             exhausted_transport,
             exhausted_settings,
             run_allowed=lambda: True,
@@ -276,7 +324,7 @@ def test_windows_reboot_requires_changed_boot_and_healthy_wsl(tmp_path: Path) ->
         clock.advance(seconds)
 
     assert (
-        reboot_windows_worker(
+        reboot_worker(
             withdrawn_transport,
             settings,
             run_allowed=lambda: allowed["value"],
@@ -294,7 +342,7 @@ def test_windows_reboot_requires_changed_boot_and_healthy_wsl(tmp_path: Path) ->
     flaky_transport = SshWslTransport(flaky, settings)
     clock = VirtualMonotonic()
     assert (
-        reboot_windows_worker(
+        reboot_worker(
             flaky_transport,
             settings,
             run_allowed=lambda: True,
@@ -310,7 +358,7 @@ def test_windows_reboot_requires_changed_boot_and_healthy_wsl(tmp_path: Path) ->
     stuck = ScriptedBootRunner(change_windows_boot=False)
     stuck_transport = SshWslTransport(stuck, settings)
     with pytest.raises(WorkerConnectionLost):
-        reboot_windows_worker(
+        reboot_worker(
             stuck_transport,
             settings,
             run_allowed=lambda: True,
@@ -324,7 +372,7 @@ def test_windows_reboot_requires_changed_boot_and_healthy_wsl(tmp_path: Path) ->
     unhealthy = ScriptedBootRunner(wsl_boot=None)
     unhealthy_transport = SshWslTransport(unhealthy, settings)
     with pytest.raises(WorkerConnectionLost):
-        reboot_windows_worker(
+        reboot_worker(
             unhealthy_transport,
             settings,
             run_allowed=lambda: True,
@@ -336,9 +384,128 @@ def test_windows_reboot_requires_changed_boot_and_healthy_wsl(tmp_path: Path) ->
     denied = ScriptedBootRunner()
     denied_transport = SshWslTransport(denied, settings)
     assert (
-        reboot_windows_worker(
-            denied_transport, settings, run_allowed=lambda: False, sleep=lambda _s: None
-        )
+        reboot_worker(denied_transport, settings, run_allowed=lambda: False, sleep=lambda _s: None)
         is False
     )
     assert denied.reboot_requests == 0
+
+
+class NativeBootRunner:
+    """Synthetic process runner for the native Linux kernel boot read and restart request."""
+
+    def __init__(self, *, change_boot: bool = True) -> None:
+        self.calls: list[tuple[str, ...]] = []
+        self.boot_id = "00000000-0000-4000-8000-000000000001"
+        self.change_boot = change_boot
+        self.restart_requests = 0
+
+    def run(self, argv, *, cwd=None, env=None, stdin_path=None, stdout_path=None, timeout=None):
+        command = tuple(argv)
+        self.calls.append(command)
+        last = command[-1]
+        if last == "cat /proc/sys/kernel/random/boot_id":
+            return subprocess.CompletedProcess(
+                list(command), 0, stdout=(self.boot_id + "\n").encode(), stderr=b""
+            )
+        if last == "sudo -n /usr/bin/systemctl reboot":
+            self.restart_requests += 1
+            if self.change_boot:
+                self.boot_id = "00000000-0000-4000-8000-000000000002"
+            return subprocess.CompletedProcess(list(command), 0, stdout=b"", stderr=b"")
+        raise AssertionError("unexpected native host command")
+
+
+class SameMachineBootRunner:
+    """Synthetic process runner for the same-machine exec and its severed restart observation.
+
+    The boot read and the restart one-shot run through the worker container's exec argv. The first
+    boot read after the request is the connection the host severs, and every answered command
+    carries the wrapper's completion record.
+    """
+
+    def __init__(self, *, availability_losses: int = 1) -> None:
+        self.calls: list[tuple[str, ...]] = []
+        self.scripts: list[str] = []
+        self.boot_id = "00000000-0000-4000-8000-000000000001"
+        self.restart_requests = 0
+        self.availability_losses = availability_losses
+
+    def run(self, argv, *, cwd=None, env=None, stdin_path=None, stdout_path=None, timeout=None):
+        command = tuple(argv)
+        self.calls.append(command)
+        script = command[-1]
+        self.scripts.append(script)
+        record = b"COURSE_EXPLORER_TRANSPORT_RESULT command 0\n"
+        if "systemctl reboot" in script:
+            self.restart_requests += 1
+            self.boot_id = "00000000-0000-4000-8000-000000000002"
+            return subprocess.CompletedProcess(list(command), 0, stdout=b"", stderr=record)
+        if "cat /proc/sys/kernel/random/boot_id" in script:
+            if self.restart_requests > 0 and self.availability_losses > 0:
+                self.availability_losses -= 1
+                raise WorkerAvailabilityError(None)
+            return subprocess.CompletedProcess(
+                list(command), 0, stdout=(self.boot_id + "\n").encode(), stderr=record
+            )
+        raise AssertionError("unexpected same-machine exec command")
+
+
+def test_native_linux_reboot_requires_changed_kernel_boot(tmp_path: Path) -> None:
+    """A native Linux reboot proves the kernel boot id changed through the one allowed command."""
+    settings = linux_connection(tmp_path)
+    runner = NativeBootRunner()
+    transport = SshLinuxTransport(runner, settings)
+
+    assert (
+        reboot_worker(transport, settings, run_allowed=lambda: True, sleep=lambda _s: None) is True
+    )
+    assert runner.restart_requests == 1
+    assert sum(1 for call in runner.calls if call[-1] == "cat /proc/sys/kernel/random/boot_id") == 2
+
+    # The restart is exactly the one allowed command in a native SSH argv with no wrapper record.
+    requests = [call for call in runner.calls if call[-1] == "sudo -n /usr/bin/systemctl reboot"]
+    assert len(requests) == 1
+    assert requests[0][0] == "ssh"
+    assert requests[0][-2] == "test-worker"
+    assert "COURSE_EXPLORER_TRANSPORT_RESULT" not in " ".join(requests[0])
+
+    # An identical kernel boot id expires the bounded recovery after one request.
+    clock = VirtualMonotonic()
+    stuck_settings = linux_connection(tmp_path, stop_timeout=0.01)
+    stuck = NativeBootRunner(change_boot=False)
+    stuck_transport = SshLinuxTransport(stuck, stuck_settings)
+    with pytest.raises(WorkerConnectionLost):
+        reboot_worker(
+            stuck_transport,
+            stuck_settings,
+            run_allowed=lambda: True,
+            sleep=clock.advance,
+            monotonic=clock,
+        )
+    assert stuck.restart_requests == 1
+
+    # A denied control issues zero restarts.
+    denied = NativeBootRunner()
+    denied_transport = SshLinuxTransport(denied, settings)
+    assert (
+        reboot_worker(denied_transport, settings, run_allowed=lambda: False, sleep=lambda _s: None)
+        is False
+    )
+    assert denied.restart_requests == 0
+
+    # A same-machine worker proves the same changed kernel boot through the worker container's one
+    # fixed restart one-shot. The exec connection the host severs is an expected observation, and
+    # only the changed boot claims success.
+    same_settings = same_machine_connection(tmp_path)
+    same = SameMachineBootRunner()
+    same_transport = ComposeExecTransport(same, same_settings)
+    assert (
+        reboot_worker(
+            same_transport, same_settings, run_allowed=lambda: True, sleep=lambda _s: None
+        )
+        is True
+    )
+    assert same.restart_requests == 1
+    assert same.availability_losses == 0
+    assert all(call[:4] == mechanics.compose_prefix(interpreter=True) for call in same.calls)
+    assert all(call[4:9] == ("exec", "-T", "worker", "bash", "-lc") for call in same.calls)

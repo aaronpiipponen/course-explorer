@@ -1,15 +1,14 @@
-"""The one session listing and the fixed bounded reads of the operator's logs.
+"""The session listing and the fixed bounded reads of the operator's logs.
 
-This module owns two read-only operations. It discovers the four stage roots' own session receipts
-and lists them newest first, and it reads the last lines of exactly one fixed log source of one
-discovered session: the two server-side runner streams beside a lifecycle receipt, the shared
-session directory's ``keepalive.log``, and the two worker logs a remote session writes, which are
-read on demand over the SSH/WSL transport.
-
-Every read is confined to a fixed basename beneath a derived directory, so no caller supplies a
-path or a filename. A log the product never wrote is reported as unavailable rather than created,
-and a read failure is raised rather than reported as an empty log. Log text is the operator's
-transient result: it is never logged, stored, or included in an error.
+The module lists the session receipts of the four stage roots newest first. It reads the last lines
+of one fixed log source of one session: the two server-side runner streams beside a lifecycle
+receipt, the shared session directory's ``keepalive.log``, and the two worker logs a remote session
+writes. It also reads the last lines of the embedding service's own container log through the
+configured Compose project's log command. Every file read is confined to a fixed basename beneath a
+derived directory, and no caller supplies a path or a filename. A log the product never wrote is
+reported as unavailable rather than created, and a read failure is raised rather than reported as
+an empty log. Log text is the operator's transient result, and it is never logged, stored or
+included in an error.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ from pydantic import BaseModel, ConfigDict
 
 from course_explorer import administration
 from course_explorer.administration import load_private_model, session_directory
-from course_explorer.config import WorkerConnectionSettings, load_worker_connection_settings
+from course_explorer.config import load_worker_connection_settings
 from course_explorer.datasets import DatasetId
 from course_explorer_admin import mechanics
 from course_explorer_admin.lifecycle import LifecycleSession, StageName, stage_state_root
@@ -36,7 +35,7 @@ from course_explorer_admin.remote import (
     remote_worker_session_directory,
     worker_dataset_session_directory,
 )
-from course_explorer_admin.transport import SshWslTransport, WorkerCommandError
+from course_explorer_admin.transport import WorkerCommandError, build_worker_transport
 
 type LogSource = Literal[
     "server-stdout", "server-stderr", "keepalive", "worker-runner", "worker-runtime"
@@ -266,13 +265,6 @@ def _read_keepalive_log(stage: StageName, session_id: str, lines: int) -> LogRea
     )
 
 
-def _transport(
-    runner: mechanics.ProcessRunner, connection: WorkerConnectionSettings
-) -> SshWslTransport:
-    """Construct the one SSH/WSL transport a worker log read uses."""
-    return SshWslTransport(runner, connection)
-
-
 def _worker_log_script(path: PurePosixPath, lines: int) -> str:
     """Build the one fixed single-line guard-and-tail script for a derived worker log path.
 
@@ -308,7 +300,7 @@ def _read_worker_log(
     *,
     runner: mechanics.ProcessRunner,
 ) -> LogReadReport:
-    """Read one fixed worker log on demand over the SSH/WSL transport.
+    """Read one fixed worker log on demand over the configured worker transport.
 
     The recorded canonical session supplies the worker directory, so the path is derived server
     side. A genuinely absent worker receipt reports the log unavailable without loading worker
@@ -322,7 +314,7 @@ def _read_worker_log(
     connection = load_worker_connection_settings()
     remote_path = remote_worker_session_directory(connection, session_id) / _WORKER_SOURCES[source]
     try:
-        payload = _transport(runner, connection).run(
+        payload = build_worker_transport(runner, connection).run(
             ("bash", "-c", _worker_log_script(remote_path, lines)),
             cwd=PurePosixPath(str(connection.worker_project_root)),
             timeout=connection.stop_timeout_seconds,

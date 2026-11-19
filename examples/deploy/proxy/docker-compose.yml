@@ -1,0 +1,37 @@
+# The machine-wide public site proxy: one Caddy container serving every site file in `sites/` on
+# ports 80 and 443. A domain-mode setup or the publish command creates this project in the shared
+# directory.
+name: course-explorer-proxy
+
+services:
+  proxy:
+    image: caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
+    network_mode: host
+    volumes:
+      - type: bind
+        source: ./Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./sites
+        target: /etc/caddy/sites
+        read_only: true
+        bind:
+          create_host_path: false
+      - caddy_data:/data
+      - caddy_config:/config
+    cap_drop:
+      - ALL
+    cap_add:
+      # The host network namespace keeps the host's privileged-port boundary, so this is the
+      # one capability that binds ports 80 and 443.
+      - NET_BIND_SERVICE
+    security_opt:
+      - "no-new-privileges:true"
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

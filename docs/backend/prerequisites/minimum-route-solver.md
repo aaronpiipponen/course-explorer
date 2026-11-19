@@ -102,7 +102,7 @@ The machine host is `run_minimum_route_command(target_code, *, completed_codes, 
 
 `scripts/prerequisites.py --route` prints that JSON. The graph operation `run_prerequisite_command` shares the same preparation in points one to three and returns the drawing report instead. The web server exposes no route endpoint and starts no solver process.
 
-`SearchSettings.prerequisite_path_max_compact_nodes` in `src/course_explorer/config.py` reads `PREREQUISITE_PATH_MAX_COMPACT_NODES` from `config/search.toml` and requires a value greater than 0. `SearchSettings.assumed_course_credits` reads `ASSUMED_COURSE_CREDITS` and requires a positive finite decimal with at most two decimal places. The web graph route reports the allocation limit as `max_compact_nodes` and the assumption as `assumed_course_credits`, and the machine command reads both for the same solver. The worker request and route-cache identity carry the assumption, so a changed policy is a different calculation.
+`SearchSettings.prerequisite_path_max_compact_nodes` in `src/course_explorer/config/search.py` reads `PREREQUISITE_PATH_MAX_COMPACT_NODES` from `config/search.toml` and requires a value greater than 0. `SearchSettings.assumed_course_credits` reads `ASSUMED_COURSE_CREDITS` and requires a positive finite decimal with at most two decimal places. The web graph route reports the allocation limit as `max_compact_nodes` and the assumption as `assumed_course_credits`, and the machine command reads both for the same solver. The worker request and route-cache identity carry the assumption, so a changed policy is a different calculation.
 
 ## Tests
 

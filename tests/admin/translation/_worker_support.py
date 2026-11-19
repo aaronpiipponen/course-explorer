@@ -60,6 +60,7 @@ TRANSLATION_ENV = {
     "POSTGRES_PASSWORD": "synthetic-secret",
     "ADMIN_STATE_ROOT": "data/admin",
     "TRANSLATION_ARTIFACT_PATH": "models/model.gguf",
+    "TRANSLATION_ARTIFACT_FILE": "model.gguf",
     "TRANSLATION_ARTIFACT_SHA256": "d" * 64,
     "TRANSLATION_RUNTIME_REVISION": "e" * 40,
 }
@@ -95,14 +96,15 @@ def configure(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
     """Point every canonical loader at one temporary repository with deterministic settings."""
     for key, value in TRANSLATION_ENV.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_SSH_TARGET", "test-worker")
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_SSH_CONNECT_TIMEOUT_SECONDS", "10")
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_WSL_DISTRIBUTION", "Ubuntu-24.04")
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT", str(root))
+    monkeypatch.setenv("WORKER_HOST_KIND", "wsl")
+    monkeypatch.setenv("WORKER_SSH_TARGET", "test-worker")
+    monkeypatch.setenv("WORKER_SSH_CONNECT_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("WORKER_WSL_DISTRIBUTION", "Ubuntu-24.04")
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", str(root))
     monkeypatch.setenv("TRANSLATION_CONTROLLER_STATE_ROOT", "state")
     monkeypatch.setenv("TRANSLATION_CONTROLLER_HEALTH_ATTEMPTS", "3")
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_HEALTH_INTERVAL_SECONDS", "0.01")
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_STOP_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("WORKER_HEALTH_INTERVAL_SECONDS", "0.01")
+    monkeypatch.setenv("WORKER_STOP_TIMEOUT_SECONDS", "60")
     for key, value in WORKER_GPU_REBOOT_KEYS.items():
         monkeypatch.setenv(key, value)
     for key, value in ADMIN_DATASET_KEYS.items():

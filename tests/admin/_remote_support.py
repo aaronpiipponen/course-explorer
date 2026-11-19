@@ -225,10 +225,18 @@ def reap_record(record: dict[str, Any]) -> None:
 class LocalWorkerTransport:
     """Real local SSH/WSL transport double mapping remote paths into a worker-data root."""
 
+    keepalive_required = True
+    shares_worker_filesystem = False
+    owns_worker_database_service = True
+
+    def dependency_check_arguments(self) -> tuple[str, ...]:
+        """Return the locked-environment check a remote worker checkout satisfies."""
+        return ("uv", "sync", "--locked", "--check", "--offline", "--no-python-downloads")
+
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self._root = self.path.parent
-        self._checkout = Path(os.environ["TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT"])
+        self._checkout = Path(os.environ["WORKER_PROJECT_ROOT"])
         self._data_root = Path(os.environ["TEST_WORKER_DATA_ROOT"])
         self._runner = mechanics.SubprocessRunner()
 
@@ -477,10 +485,10 @@ class LocalWorkerTransport:
 
         self._fault("terminate_remote_keepalive", session_id, effect)
 
-    def read_windows_boot_id(self, *, timeout: float) -> str:
+    def read_host_boot_id(self, *, timeout: float) -> str:
         return str(read_fake(self.path).get("windows_boot", "111"))
 
-    def request_windows_reboot(self, *, timeout: float) -> None:
+    def request_host_reboot(self, *, timeout: float) -> None:
         with state_lock(self.path):
             state = read_fake(self.path)
             state["reboot_requests"] = int(state.get("reboot_requests", 0)) + 1

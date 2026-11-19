@@ -73,9 +73,12 @@ A failed translation writes one failure record beside the output. The record hol
 | `TRANSLATION_MODEL_ALIAS` | The model name every request asks the runtime for |
 | `TRANSLATION_MODEL_REPOSITORY` | The repository identity of the pinned model, recorded in the identity of a stored translation |
 | `TRANSLATION_MODEL_REVISION` | The pinned commit of the model |
+| `TRANSLATION_ARTIFACT_REPOSITORY` | The repository of a published artifact conversion, or absent for a local conversion |
+| `TRANSLATION_ARTIFACT_REVISION` | The pinned commit of that published conversion |
+| `TRANSLATION_ARTIFACT_FILE` | The GGUF file name of that published conversion |
 | `TRANSLATION_ARTIFACT_PATH` | The path of the pinned model artifact on the worker |
 | `TRANSLATION_ARTIFACT_SHA256` | The checksum of the pinned model artifact, checked before a fresh runtime launch |
-| `TRANSLATION_ARTIFACT_QUANT` | The quantization of the pinned artifact, recorded in the identity of a stored translation |
+| `TRANSLATION_ARTIFACT_QUANT` | The quantization of the pinned artifact, one of `Q5_K_M`, `Q4_K_M` and `Q2_K`, recorded in the identity of a stored translation |
 | `TRANSLATION_RUNTIME_REVISION` | The pinned commit of the runtime |
 | `TRANSLATION_CONTEXT_SIZE` | The text context the runtime serves |
 | `TRANSLATION_PARALLEL` | How many requests the runtime serves at once |
@@ -87,7 +90,11 @@ A failed translation writes one failure record beside the output. The record hol
 | `TRANSLATION_TEMPERATURE` | The sampling temperature of one request |
 | `TRANSLATION_CONTROLLER_STATE_ROOT` | The directory that holds the state of the translation stage |
 | `TRANSLATION_CONTROLLER_HEALTH_ATTEMPTS` | How many times a session waits for the runtime to answer before it gives up |
-| `TRANSLATION_CONTROLLER_HEALTH_INTERVAL_SECONDS` | The wait between two such checks |
-| `TRANSLATION_CONTROLLER_STOP_TIMEOUT_SECONDS` | How long the stop and the finalize of one session may take |
+| `WORKER_HEALTH_INTERVAL_SECONDS` | The wait between two such checks |
+| `WORKER_STOP_TIMEOUT_SECONDS` | How long the stop and the finalize of one session may take |
+
+The three artifact source keys are all present or all absent. With them, the install downloads a missing published file from the URL derived from the repository, revision and file and verifies its digest before publication. Without them, the artifact is a local conversion, and the install and the preflight verify the present file and download nothing. The 16 GB and 12 GB presets name the published `Q5_K_M` file of `mradermacher/translategemma-12b-it-GGUF`, and the 8 GB preset names its published `Q2_K` file. Both conversions come from the same repository at the same pinned revision.
+
+The provenance identity a stored translation records is the model repository and revision, the quantization and the artifact digest. The artifact source keys do not enter it.
 
 The example sets a context of 16384 tokens, an output cap of 8192 tokens, a temperature of 0, three attempts with a one-second delay before the first retry, and a request timeout of 600 seconds.

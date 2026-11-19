@@ -1,0 +1,8 @@
+# One worker model preset: the generation keys the install writes into config/inference.toml.
+# The preset targets an 8 GB card. The main key is the Gemma 4 12B Q3_K_M artifact at 131072 tokens.
+# The fallback key is the smaller Q3_K_S artifact of the same model at the 262144-token native
+# context. The two keys name two different files.
+INFERENCE_LOCAL_VARIANTS = [
+    { alias = "gemma-4-12b-main", port = 18140, context_size = 131072, kv_cache_type = "q4_0", batch_size = 256, ubatch_size = 256, speculative_type = "ngram-mod", achieved_max_context = 131072, model_repository = "google/gemma-4-12B-it", model_revision = "43c9d014b231474fa7212dbb48a762566c2b255d", artifact_repository = "unsloth/gemma-4-12b-it-GGUF", artifact_revision = "fc034cfff751157913579611efad8462ac1be606", artifact_file = "gemma-4-12b-it-Q3_K_M.gguf", artifact_path = "models/gemma-4-12b-it-Q3_K_M-fc034cff/gemma-4-12b-it-Q3_K_M.gguf", artifact_sha256 = "dbf58f4c413b82b27106867eb42f7087e4172a172f6f201e2e11598a6582e504", artifact_quant = "Q3_K_M" },
+    { alias = "gemma-4-12b-fallback", port = 18160, context_size = 262144, kv_cache_type = "q4_0", batch_size = 256, ubatch_size = 256, speculative_type = "ngram-mod", achieved_max_context = 262144, model_repository = "google/gemma-4-12B-it", model_revision = "43c9d014b231474fa7212dbb48a762566c2b255d", artifact_repository = "unsloth/gemma-4-12b-it-GGUF", artifact_revision = "fc034cfff751157913579611efad8462ac1be606", artifact_file = "gemma-4-12b-it-Q3_K_S.gguf", artifact_path = "models/gemma-4-12b-it-Q3_K_S-fc034cff/gemma-4-12b-it-Q3_K_S.gguf", artifact_sha256 = "564b1d460efbac33bbd3d16626a1fe484ba648c20d48db1a85a6b97d1d563cd7", artifact_quant = "Q3_K_S" },
+]

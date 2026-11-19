@@ -4,7 +4,9 @@ The product reads its tracked configuration, university table, migrations, nativ
 frontend bundle relative to the one ``course_explorer.administration.repository_root`` owner. A test
 that redirects that owner to a temporary root gets the same reads through links to this checkout.
 Product state, usage and serving writes resolve under the root and land in the temporary root. Each
-linked entry is the checkout's own path, so a write through a link reaches this checkout.
+linked entry is the checkout's own path, so a write through a link reaches this checkout. The
+device-local environment file is never linked: it holds this checkout's credentials, and a test that
+needs one writes its own synthetic file in its root.
 """
 
 from __future__ import annotations
@@ -15,7 +17,6 @@ from course_explorer import administration, configuration
 
 _CHECKOUT = Path(__file__).resolve().parents[2]
 _PRODUCT_ENTRIES = (
-    ".env",
     ".git",
     ".venv",
     "alembic.ini",

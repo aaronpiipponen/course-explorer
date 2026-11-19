@@ -1,13 +1,15 @@
 /**
- * The Rebuild panel: the site's four fixed steps and the administration's separate build.
+ * The Rebuild panel: the site rebuild action, the steps the command reported, and the
+ * administration's separate build.
  *
- * The panel shows the ordered steps the site rebuild command runs, confirms that action once, and
- * shows pending for it as a whole rather than inventing per-step progress. A successful rebuild
- * renders the steps and the bind the command itself reported, and a refused one shows that command's
- * own failure. Directly underneath, the administration action confirms separately, warns that it
- * signs the operators out, and hands a successful build to the shell, which discards the protected
- * session in memory. One pending operation disables both actions. No step pulls code, and the
- * administration action returns before the backend queues its own restart.
+ * The panel confirms the site rebuild once and shows pending for it as a whole rather than
+ * inventing per-step progress. Only a successful rebuild renders an ordered step list, from the
+ * steps the command itself reported, beside the bind it returned, and a refused one shows that
+ * command's own failure. Directly underneath, the administration action confirms separately, warns
+ * that it signs the operators out, and hands a successful build to the shell, which discards the
+ * protected session in memory. One pending operation disables both actions. No step pulls code, and
+ * the administration action returns with the backend's restart attached as a background task that
+ * runs after the response body is sent.
  */
 import { useState } from "react";
 import { failureText, handleAdmissionFailure } from "../../api/http";
@@ -17,9 +19,6 @@ import { ConfirmDialog } from "../../shared/ConfirmDialog";
 import { FailureNotice, Panel, Row, Rows } from "../../shared/Panel";
 import type { SessionAccess } from "../../shared/StagePanel";
 import { wording } from "../../shared/wording";
-
-/** The rebuild steps in the order the command runs them. */
-const STEPS = ["frontend", "containers", "web", "bind"];
 
 /** One confirmed maintenance action of this panel. */
 type Confirming = "app" | "admin";
@@ -81,14 +80,6 @@ export function Rebuild({
 
   return (
     <Panel title={detail.rebuild}>
-      <ol className="steps">
-        {STEPS.map((step) => (
-          <li key={step}>
-            <span className="dot" />
-            <div>{stepText(step)}</div>
-          </li>
-        ))}
-      </ol>
       <div className="acts">
         <button
           className="btn p"
@@ -109,13 +100,19 @@ export function Rebuild({
       </div>
       {pending ? <p className="note">{detail.pending}</p> : null}
       {report === null ? null : (
-        <Rows>
-          <Row
-            label={detail.steps}
-            value={report.steps.map(stepText).join(", ")}
-          />
-          <Row label={detail.bind} value={`${report.host}:${report.port}`} />
-        </Rows>
+        <>
+          <ol className="steps">
+            {report.steps.map((step) => (
+              <li key={step}>
+                <span className="dot" />
+                <div>{stepText(step)}</div>
+              </li>
+            ))}
+          </ol>
+          <Rows>
+            <Row label={detail.bind} value={`${report.host}:${report.port}`} />
+          </Rows>
+        </>
       )}
       <FailureNotice text={failure} />
       <ConfirmDialog

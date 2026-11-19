@@ -1,6 +1,6 @@
 # Command line
 
-The feature read scripts delegate to package commands and print one JSON report each, and the administration command, the example data loader and the launchers sit beside them.
+The feature read scripts delegate to package commands and print one JSON report each, and the administration command and the example data loader sit beside them.
 
 ## The scripts
 
@@ -16,7 +16,11 @@ The feature read scripts answer one read each and print one JSON report line.
 | `scripts/recommendations.py` | The courses similar to the chosen basis, ranked. |
 | `scripts/study_structure.py` | The official structure of one degree programme or module. |
 
-Six further entry points run the administration command, the example data loader, the web server launcher, the administration backend launcher, the feedback sender and the native library build. The administration command and the example data loader are described in [Administration commands](/docs/backend/interfaces/administration-commands.md), the launchers and the native build in [Command adapters](/docs/backend/interfaces/command-adapters.md), and the sender in [Feedback publication](/docs/backend/feedback-publication.md).
+Eight further entry points run beside the read scripts: `scripts/admin.py`, `scripts/mock_data.py`, `scripts/build_native.py`, `scripts/self-host.sh`, `scripts/install-worker.sh`, and the three module commands `python -m course_explorer_web.launch` for the site image, `python -m course_explorer_admin_web` for the administration image, and `python -m course_explorer.feedback.sender` for the `sender` service.
+
+`scripts/self-host.sh` runs the example and real-database setup workflows, the stack start and stop, the proxy publish and unpublish, and the container deployment of its own checkout inside the administration image. `scripts/install-worker.sh` checks for Git, curl and a Git checkout, installs `uv` when it is absent, syncs the locked environment and runs the worker install from the checkout the script sits in.
+
+The administration command and the example data loader are described in [Administration commands](/docs/backend/interfaces/administration-commands.md), the scripts and the module commands in [Command adapters](/docs/backend/interfaces/command-adapters.md), the sender in [Feedback publication](/docs/backend/feedback-publication.md), and the two host scripts in [Self-host and deploy commands](/docs/backend/interfaces/self-host-and-deploy-commands.md) and [Installing a worker](/docs/getting-started/worker-install.md).
 
 A feature script parses its arguments and calls one command function, so a rule lives in a package command and never in the script.
 

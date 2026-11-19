@@ -1,0 +1,20 @@
+# Keep the build context to the sources the server image stages copy. Runtime state, credentials
+# and host-built artifacts arrive as mounts at run time.
+.git
+.venv
+.env
+data
+deploy
+tests
+__pycache__
+**/__pycache__
+**/*.pyc
+node_modules
+**/node_modules
+web/dist
+admin-web/dist
+native/*.so
+# Model files and frontend environment files never enter the build context.
+models
+web/.env*
+admin-web/.env*

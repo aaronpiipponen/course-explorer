@@ -4,9 +4,13 @@ Usage:
     uv run python scripts/admin.py                       # operator menu
     uv run python scripts/admin.py menu
     uv run python scripts/admin.py setup datasets
-    uv run python scripts/admin.py setup worker [--branch BRANCH] [--code-only]
+    uv run python scripts/admin.py setup worker [--branch BRANCH]
     uv run python scripts/admin.py self-host example
     uv run python scripts/admin.py self-host real-database
+    uv run python scripts/admin.py self-host publish
+    uv run python scripts/admin.py self-host unpublish
+    uv run python scripts/admin.py self-host up
+    uv run python scripts/admin.py deploy
     uv run python scripts/admin.py preflight
     uv run python scripts/admin.py migrate selected
     uv run python scripts/admin.py migrate working
@@ -42,10 +46,9 @@ Usage:
     uv run python scripts/admin.py serving-artifacts [--dataset ID] [--prune]
 
 Options:
-    --branch BRANCH        Git branch the worker setup fast-forwards to, default main
-    --code-only            update the worker code and its locked environment alone
+    --branch BRANCH        Git branch the worker code update fast-forwards to, default main
     --confirm-working      confirm deletion of the Working dataset, with every stage idle
-    --confirm-restart      confirm the serving restart of copy-to-selected
+    --confirm-restart      confirm the site container re-create of copy-to-selected
     --query TEXT           literal case-insensitive substring over the stored text answers
     --filters JSON         JSON object of select field names and option values, default {}
     --lines N              number of trailing log lines to read
@@ -59,9 +62,9 @@ server-stderr, keepalive, worker-runner and worker-runtime. A coverage category 
 embedding or inference, and a summary category is catalogue or inference. Each subcommand prints its
 own options and arguments when it runs with `--help`.
 
-This adapter delegates once to the engine-owned ``course_explorer_admin.cli`` dispatcher, which
-owns the parser, the JSON output and the safe-error presentation. The wrapper loads the package of
-the checkout that contains it, so a copy writes only into that copy.
+This wrapper delegates once to the engine-owned ``course_explorer_admin.cli`` dispatcher, which owns
+the parser, the JSON output and the safe-error presentation. The wrapper loads the package of the
+checkout that contains it, so a copy writes only into that copy.
 """
 
 from __future__ import annotations

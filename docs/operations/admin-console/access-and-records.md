@@ -93,7 +93,7 @@ The count and the sessions live in the process's memory. A restart of the admini
 
 Each site holds one administration account in `data/admin-web/password`, a JSON document with the username and an argon2id encoded hash. The file is published at mode 0600 under a mode-0700 state directory. The password itself is never written, echoed or acknowledged.
 
-Set the account with the administration command's password entry, which prompts for the password twice at a hidden prompt. [Setup and preflight](/docs/operations/setup-and-preflight.md#the-administration-password) states the entry and its prompts, and [self-hosting](/docs/getting-started/self-hosting.md#the-administration-account) states the setup step. The command writes the credential file alone and changes neither the lock nor the failed-attempt count.
+Set the account with the administration command's password entry, which prompts for the password twice at a hidden prompt. [Setup and preflight](/docs/operations/setup-and-preflight.md#the-administration-password) states the entry and its prompts. The command writes the credential file alone and changes neither the lock nor the failed-attempt count.
 
 A sign-in verifies the stored argon2id hash before it compares the username. A wrong username or password answers `401` with `{"detail":"Authentication failed"}` and records one failed attempt. A malformed or unreadable stored hash raises an operational failure, which answers `500` with a content-free error and records no failed attempt.
 
@@ -148,7 +148,7 @@ The [Usage panel](/docs/operations/admin-console/logs.md#usage) reads the report
 
 ## Settings
 
-`config/admin_web.toml` holds the 10 required administration keys and the three site identity keys. The example file sets these values.
+`config/admin_web.toml` holds the 10 required administration keys. The example file sets these values.
 
 | Key | Meaning | Unit | Example |
 |---|---|---|---|
@@ -162,14 +162,11 @@ The [Usage panel](/docs/operations/admin-console/logs.md#usage) reads the report
 | `ADMIN_WEB_COMMAND_LOG_LIMIT` | The entries the command log retains | Entries | `200` |
 | `ADMIN_WEB_POLL_SECONDS` | The seconds between completed automatic reads of one enabled panel | Seconds | `60` |
 | `ADMIN_WEB_REPOSITORY_URL` | The HTTPS GitHub owner and repository address of the console's GitHub link | URL | `https://github.com/aaronpiipponen/course-explorer` |
-| `ADMIN_SITE_WEB_SERVICE_UNIT` | The systemd unit that runs this checkout's web process | Unit | `replace-with-web.service` |
-| `ADMIN_SITE_ADMIN_SERVICE_UNIT` | The systemd unit that runs this checkout's administration process | Unit | `replace-with-admin.service` |
-| `ADMIN_SITE_WEB_SERVICE_SCOPE` | The manager that owns the web unit | `user` or `system` | `user` |
 
-The host must be `127.0.0.1`, and the port must be a valid TCP port. The origin must be one exact HTTPS origin without credentials, a path, a query or a fragment. The repository address must name one owner and one repository on `github.com` over HTTPS. The two session lifetimes, the creation limit, its window, the command-log limit and the poll interval are positive integers. Each site unit value is one plain service basename, and the scope is `user` or `system`.
+The host must be `127.0.0.1`, and the port must be a valid TCP port. The origin must be one exact HTTPS origin without credentials, a path, a query or a fragment. The repository address must name one owner and one repository on `github.com` over HTTPS. The two session lifetimes, the creation limit, its window, the command-log limit and the poll interval are positive integers.
 
 The console's App link reads the inherited `WEB_APP_URL` from `config/web.toml`, which is one root HTTP or HTTPS address. The session report returns the values of `ADMIN_WEB_POLL_SECONDS`, `WEB_APP_URL`, `ADMIN_WEB_REPOSITORY_URL` and the site's display label as the console's presentation metadata. The administration origin is independent in `config/admin_web.toml`. The lock path and the failed-attempt limit are fixed in code. [Configuration](/docs/backend/configuration.md) states how the settings owner reads and validates the file.
 
 ## Related pages
 
-The [Administration console how-to](/docs/operations/admin-console/README.md) describes the console's tabs and their actions. The [Administration backend](/docs/backend/interfaces/admin-backend.md) and [Administration console code](/docs/frontend/admin-console.md) pages describe the implementation. [Configuration](/docs/backend/configuration.md) states the settings composition, and [self-hosting](/docs/getting-started/self-hosting.md#the-administration-account) states the first account and the deployment steps.
+The [Administration console how-to](/docs/operations/admin-console/README.md) describes the console's tabs and their actions. The [Administration backend](/docs/backend/interfaces/admin-backend.md) and [Administration console code](/docs/frontend/admin-console.md) pages describe the implementation. [Configuration](/docs/backend/configuration.md) states the settings composition, and [self-hosting](/docs/getting-started/self-hosting.md) states the deployment steps.

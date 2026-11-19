@@ -9,8 +9,6 @@ Environment=HOME=@HOME@
 Environment=PATH=@HOME@/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 UMask=0077
 Restart=on-failure
-# The deployment restarts the feature web unit through its passwordless sudo grant.
-NoNewPrivileges=false
 
 [Install]
 WantedBy=default.target

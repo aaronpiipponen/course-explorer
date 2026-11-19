@@ -1,0 +1,9 @@
+# Restart permission for the worker account the checkpoint reboot uses.
+#
+# Install on a native Linux worker, replacing @USER@ in the command with that account:
+#   sed '/^WORKER_ACCOUNT /s/WORKER_ACCOUNT/@USER@/' \
+#     examples/deploy/course-explorer-worker-reboot.sudoers.in \
+#     | sudo tee /etc/sudoers.d/course-explorer-worker-reboot >/dev/null
+#   sudo chmod 0440 /etc/sudoers.d/course-explorer-worker-reboot
+#   sudo visudo -c -f /etc/sudoers.d/course-explorer-worker-reboot
+WORKER_ACCOUNT ALL=(root) NOPASSWD: /usr/bin/systemctl reboot

@@ -1,19 +1,23 @@
-# Administrative-worker connection contract, validated by course_explorer.config
-# WorkerSetupSettings and the worker connection/dataset/lifecycle settings families.
+# Administrative-worker connection contract for the worker host, dataset names, lifecycle, runtime
+# and GPU, validated by course_explorer.config.
 #
-# Three of the four TRANSLATION_CONTROLLER_* values name the worker machine and the worker checkout.
-# The example values are placeholders, and a deployment states its own values in config/worker.toml.
-TRANSLATION_CONTROLLER_SSH_TARGET = "replace-with-ssh-target"
-TRANSLATION_CONTROLLER_WSL_DISTRIBUTION = "replace-with-wsl-distribution"
-TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT = "/home/replace-with-user/course-explorer"
-TRANSLATION_CONTROLLER_SSH_CONNECT_TIMEOUT_SECONDS = 10
-# WORKER_SETUP_PROJECT_URL is the expected Git origin that setup and preflight checks compare
-# against. The example value is a placeholder.
+# The WORKER_* values name the worker host kind, the worker machine and the worker checkout. The
+# example values are placeholders, and a deployment states its own values in config/worker.toml.
+# A native Linux worker sets WORKER_HOST_KIND = "linux" and removes WORKER_WSL_DISTRIBUTION. A
+# same-machine worker sets WORKER_HOST_KIND = "same-machine", removes WORKER_SSH_TARGET and
+# WORKER_WSL_DISTRIBUTION, and names the container project root /app.
+WORKER_HOST_KIND = "wsl"
+WORKER_SSH_TARGET = "replace-with-ssh-target"
+WORKER_WSL_DISTRIBUTION = "replace-with-wsl-distribution"
+WORKER_PROJECT_ROOT = "/home/replace-with-user/course-explorer"
+WORKER_SSH_CONNECT_TIMEOUT_SECONDS = 10
+# The expected Git origin. The worker setup compares the server and the worker checkout origins
+# against it, the preflight compares the server checkout origin against it, and another value stops
+# the run. The example value is a placeholder.
 WORKER_SETUP_PROJECT_URL = "replace-with-project-url"
 WORKER_SETUP_TIMEOUT_SECONDS = 14400
-# Server/worker database-name prefixes and the one timeout every dataset dump/restore/rotation
-# subprocess receives. The admin state root lives in config/database.toml. AdministrativeDatasetSettings
-# validates these portable values.
+# Server and worker database-name prefixes and the one timeout every dataset dump/restore/rotation
+# subprocess receives. AdministrativeDatasetSettings validates these portable values.
 ADMIN_DATASET_DATABASE_PREFIX = "course_admin"
 ADMIN_WORKER_DATABASE_PREFIX = "course_admin_worker"
 ADMIN_DATABASE_OPERATION_TIMEOUT_SECONDS = 3600
@@ -27,8 +31,16 @@ ADMIN_STOP_TIMEOUT_SECONDS = 660
 # generation launch. WorkerRuntimeSettings validates these portable, device-independent values.
 WORKER_RUNTIME_THREADS = 8
 WORKER_RUNTIME_THREADS_BATCH = 16
+# Whether the shared checkpoint reboot runs. The example leaves it off. A deployment that wants
+# the periodic restart turns it on.
+WORKER_GPU_REBOOT_ENABLED = false
 # The one portable checkpoint-reboot interval shared by every worker GPU mode (translation
 # generation and inference cross-encoder/whole-target generation). A mode reboots the worker at a
 # completed atomic unit once its loaded-GPU time reaches this many minutes. Validated by
 # WorkerGpuRebootSettings.
 WORKER_GPU_REBOOT_INTERVAL_MINUTES = 120
+# The example worker is a ROCm WSL worker. A CUDA worker sets WORKER_GPU_BACKEND = "cuda" and
+# WORKER_GPU_TARGET = "86", and its CUDA toolkit is installed on the host.
+WORKER_GPU_BACKEND = "rocm"
+WORKER_GPU_TARGET = "gfx1201"
+WORKER_GPU_DEVICE_INDEX = 0

@@ -4,18 +4,20 @@
 # The verify job runs on a GitHub-hosted runner. It installs the locked Python and Node
 # dependencies, builds the three native serving libraries and the test-only fixture library, and
 # runs the lint, format and diff checks and the network-free Python suite. It then copies the
-# committed example configuration into the runtime paths inside the checkout, runs both frontend
-# gates, builds the extension database image and starts its `db` service, runs the PostgreSQL
+# committed example configuration into the runtime paths inside the checkout, builds the three server
+# images and checks the site image's boundary, runs both frontend gates, builds the extension
+# database image and starts its `db` service, runs the PostgreSQL
 # integration selection and the browser journeys against the built app and disposable example
 # data, and removes the database service.
 #
 # The deploy job runs on the repository's self-hosted runner after verify succeeds. It admits
 # the serving checkout in its own run block, then runs `deploy/deploy.sh` on the admitted
-# commit. That script builds the extension database image, recreates the `db` service, builds
-# the native serving libraries, migrates the selected dataset or the configured raw database,
-# builds its artifacts, builds both frontends, restarts the two serving units, checks their
-# loopback listeners and HTTP answers, and prunes the superseded artifact builds. The job
-# checks out nothing and pulls nothing.
+# commit. That script runs the checkout's `scripts/self-host.sh deploy` inside the administration
+# image: it refuses while a stage is busy, builds the database and embedding images, starts those
+# services, enrolls and migrates the served dataset and builds its serving artifacts, builds and
+# starts the site and administration containers, a sender that already runs and a same-machine
+# worker, proves both HTML shells and prunes the superseded artifact builds. The job checks out
+# nothing and pulls nothing.
 name: CI
 
 on:
@@ -92,6 +94,15 @@ jobs:
           cp examples/config/wiki.json config/wiki.json
           cp examples/config/feedback-form.json config/feedback-form.json
           cp examples/docker-compose.yml docker-compose.yml
+      - name: Build the server images
+        # The site target must carry no administration package and no Docker, SSH, GitHub or Git
+        # client, so a stage or route that reaches them fails here before it merges.
+        run: |
+          docker build --target site -f docker/server/Dockerfile -t course-explorer-site:ci .
+          docker build --target admin -f docker/server/Dockerfile -t course-explorer-admin:ci .
+          docker build --target worker -f docker/server/Dockerfile -t course-explorer-worker:ci .
+          docker run --rm --entrypoint python course-explorer-site:ci -c "import importlib.util, shutil, sys; sys.exit(0 if importlib.util.find_spec('course_explorer_admin') is None and not any(shutil.which(name) for name in ('docker', 'ssh', 'gh', 'git')) else 1)"
+          docker image rm course-explorer-site:ci course-explorer-admin:ci course-explorer-worker:ci
       - name: npm --prefix web run typecheck
         run: npm --prefix web run typecheck
       - name: npm --prefix web run test
@@ -111,6 +122,7 @@ jobs:
       - name: Build the extension database image
         env: &database_environment
           POSTGRES_PASSWORD: synthetic-ci-password
+          FEEDBACK_POSTGRES_PASSWORD: synthetic-ci-password
           POSTGRES_DB: course_explorer_test
           COMPOSE_PROJECT_NAME: course-explorer-ci
         run: uv run python -m course_explorer_admin.compose --non-interactive -- build db
@@ -136,7 +148,7 @@ jobs:
     runs-on: [self-hosted, linux, ARM64, course-explorer-deploy]
     concurrency:
       # One deployment at a time. A newer push cancels its superseded verification and
-      # leaves an admitted deployment to finish its two restarts.
+      # leaves an admitted deployment to finish its container starts.
       group: serving-deploy
       cancel-in-progress: false
     steps:
@@ -147,7 +159,7 @@ jobs:
         run: |
           set -euo pipefail
           # Admission runs before any file of the serving checkout executes. An ordinary
-          # refusal exits zero and leaves both units as they are.
+          # refusal exits zero and leaves the containers as they are.
           if ! [[ "$TESTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
             echo "invalid tested commit" >&2
             exit 1

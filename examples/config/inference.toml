@@ -1,29 +1,29 @@
 # Portable prerequisite-inference runtime/provenance contract, validated by
-# course_explorer.config InferenceSettings. One shared pinned Qwen3.8-27B IQ3-MIX artifact serves two
-# measured local fit keys. Inference runs locally.
+# course_explorer.config InferenceSettings. Each ordered local fit key names its own source model
+# and artifact: the first key serves the Qwen3.8-27B IQ3-MIX artifact at 131072 tokens and the
+# second the Qwen3.8-27B UD-IQ2_S artifact at 262144. Inference runs locally.
 #
-# The two keys below carry their achieved ceilings 131072 and 163840. The stored-teaching-text
+# The two keys below carry their achieved ceilings 131072 and 262144. The stored-teaching-text
 # demand estimate is 393216 tokens of arithmetic demand from the stored teaching text, separate from
 # any achieved or context value here. A packet that fits neither key fails through the inference
 # target failure owner as one capacity failure per target, with no truncation and no fallback route.
+#
+# `INFERENCE_TARGET_FIELDS` and `INFERENCE_POOL_FIELDS` are optional prompt field selections. Each
+# takes an array of field names from name, content, outcomes, prerequisite_text and additional_info,
+# in that order. Absent, the configured university map entry's target and pool defaults apply. An
+# operator sets them by adding the lines by hand.
 INFERENCE_HOST = "127.0.0.1"
-# Ordered local fit keys. First is the MTP key and the request tokenizer authority. Second is the
-# larger no-MTP fallback. Exactly two unique ordered keys are required, ordered by increasing
-# context, with an MTP draft count only on the first. Fields: alias, port, context_size,
-# kv_cache_type, batch_size, ubatch_size, speculative_type, mtp_draft_n_max, achieved_max_context.
-# The second key omits mtp_draft_n_max, so the model default is None.
+# Ordered local fit keys. The first key is the request tokenizer authority and carries MTP only
+# because its speculation names it. The second is the larger fallback and carries no draft count.
+# Exactly two unique ordered keys are required, ordered by increasing context. Fields: alias, port,
+# context_size, kv_cache_type, batch_size, ubatch_size, speculative_type, mtp_draft_n_max,
+# achieved_max_context, model_repository, model_revision, artifact_repository, artifact_revision,
+# artifact_file, artifact_path, artifact_sha256, artifact_quant.
 INFERENCE_LOCAL_VARIANTS = [
-    { alias = "qwen3.8-27b-iq3-mix-128k-mtp", port = 18140, context_size = 131072, kv_cache_type = "q4_0", batch_size = 256, ubatch_size = 256, speculative_type = "draft-mtp,ngram-mod", mtp_draft_n_max = 2, achieved_max_context = 131072 },
-    { alias = "qwen3.8-27b-iq3-mix-160k", port = 18160, context_size = 163840, kv_cache_type = "q4_0", batch_size = 1024, ubatch_size = 1024, speculative_type = "ngram-mod", achieved_max_context = 163840 },
+    { alias = "qwen3.8-27b-iq3-mix-128k-mtp", port = 18140, context_size = 131072, kv_cache_type = "q4_0", batch_size = 256, ubatch_size = 256, speculative_type = "draft-mtp,ngram-mod", mtp_draft_n_max = 2, achieved_max_context = 131072, model_repository = "Qwen/Qwen3.8-27B-FP8", model_revision = "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a", artifact_repository = "vmarcelo/Qwen3.8-27B-MIX_GGUF", artifact_revision = "f922f9d9bbe67ede1c49e364d71737b8f067e49b", artifact_file = "Qwen3.8-27B-IQ3-MIX.gguf", artifact_path = "models/qwen3.8-27b-iq3-mix-f922f9d9/Qwen3.8-27B-IQ3-MIX.gguf", artifact_sha256 = "3089d39401e60551a03e0858d775d6b33f966f6e6513f31f75a011cfc8f56309", artifact_quant = "IQ3_MIX" },
+    { alias = "qwen3.8-27b-fallback", port = 18160, context_size = 262144, kv_cache_type = "q4_0", batch_size = 256, ubatch_size = 256, speculative_type = "ngram-mod", achieved_max_context = 262144, model_repository = "Qwen/Qwen3.8-27B", model_revision = "37561816e66b5b9153b1b64c10968c18c1e6f4a0", artifact_repository = "unsloth/Qwen3.8-27B-GGUF", artifact_revision = "4af51b3542f775b0a8e4b310bfb3f17e01c306c9", artifact_file = "Qwen3.8-27B-UD-IQ2_S.gguf", artifact_path = "models/qwen3.8-27b-ud-iq2-s-4af51b35/Qwen3.8-27B-UD-IQ2_S.gguf", artifact_sha256 = "f213bf4ff7dd70531cf7dea9e217baffb6b8e6a7d608bf7c175d9f155e1d000d", artifact_quant = "UD-IQ2_S" },
 ]
-INFERENCE_PRIMARY_MODEL_REPOSITORY = "Qwen/Qwen3.8-27B-FP8"
-INFERENCE_PRIMARY_MODEL_REVISION = "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a"
-INFERENCE_PRIMARY_ARTIFACT_REPOSITORY = "vmarcelo/Qwen3.8-27B-MIX_GGUF"
-INFERENCE_PRIMARY_ARTIFACT_REVISION = "f922f9d9bbe67ede1c49e364d71737b8f067e49b"
-INFERENCE_PRIMARY_ARTIFACT_FILE = "Qwen3.8-27B-IQ3-MIX.gguf"
-INFERENCE_PRIMARY_ARTIFACT_PATH = "models/qwen3.8-27b-iq3-mix-f922f9d9/Qwen3.8-27B-IQ3-MIX.gguf"
-INFERENCE_PRIMARY_ARTIFACT_SHA256 = "3089d39401e60551a03e0858d775d6b33f966f6e6513f31f75a011cfc8f56309"
-INFERENCE_PRIMARY_ARTIFACT_QUANT = "IQ3_MIX"
+
 INFERENCE_RUNTIME_REVISION = "4ff829ec2e2f526aa6afba529eebbfb3ef1f95ec"
 INFERENCE_PARALLEL = 1
 INFERENCE_GPU_LAYERS = "all"
@@ -47,9 +47,11 @@ INFERENCE_FIT_HEADROOM_TOKENS = 1024
 INFERENCE_TEMPERATURE = 0.0
 INFERENCE_SEED = 0
 INFERENCE_CHAT_TEMPLATE_KWARGS = { enable_thinking = false }
-# Closed policy literals. They bind the run/work policy identity: one solo local model with
-# strict fit-only routing, emitted recommendations retained, and no confidence/flag
-# cutoff, drop, demote, or stronger-model reroute. A target fitting neither local key fails.
+# Closed policy literals, each key accepting one value that the inference report states.
+# `INFERENCE_ROUTING_POLICY` selects `solo_fit_only`, one solo local model with fit-only routing.
+# `INFERENCE_RECOMMENDATION_POLICY` selects `include`, which retains the emitted recommendations.
+# `INFERENCE_FINDING_FILTER_POLICY` selects `none`, which applies no finding filter. A target that
+# fits neither local key fails.
 INFERENCE_ROUTING_POLICY = "solo_fit_only"
 INFERENCE_RECOMMENDATION_POLICY = "include"
 INFERENCE_FINDING_FILTER_POLICY = "none"
@@ -63,21 +65,16 @@ INFERENCE_PIPELINE_VERSION = "v1"
 # together with the official snapshot and its source attempt. A composition meaning or dedup-rule
 # change selects a different version.
 INFERENCE_PROPOSAL_VERSION = "v1"
-# Live multiview field views and the reciprocal-rank fusion offset wired into the installed
-# operational CE-only selection stage `select_operational_multiview_pool`. They are label-free
-# selection mechanics. The solo fit-only MIX model above is the operating local policy.
+# Live multiview field views and the reciprocal-rank fusion offset wired into the operational
+# CE-only selection stage `select_operational_multiview_pool`. They are label-free selection
+# mechanics. The solo fit-only MIX model above is the operating local policy.
 INFERENCE_MULTIVIEW_EVALUATION_FIELDS = ["name", "content", "outcomes"]
 INFERENCE_MULTIVIEW_FUSION_RANK_OFFSET = 60
-# Optional inference prompt field selection. When omitted, the configured university map entry's
-# target and pool defaults apply. `INFERENCE_TARGET_FIELDS` and `INFERENCE_POOL_FIELDS` each take an
-# array of field names from name, content, outcomes, prerequisite_text and additional_info, in that
-# order.
-
-# Embedding pool depth consumed by the installed operational CE-only selection stage
+# Embedding pool depth consumed by the operational CE-only selection stage
 # `select_operational_multiview_pool`. K=1000 is the operational selection depth.
 INFERENCE_SELECTION_POOL_K = 1000
-# The CE-only top-50 candidate count the operational whole-target packet carries. It is wired into
-# `rerank_operational_pool`.
+# The candidate count the CE-only selection keeps in the operational whole-target packet. The valid
+# range is 1 to 50, and the operational selection path requires the fixed ceiling of 50 candidates.
 INFERENCE_SELECTION_FINAL_K = 50
 
 # Cross-encoder reranking: one pinned multilingual BGE reranker served by the same pinned
@@ -95,9 +92,9 @@ INFERENCE_RERANK_ARTIFACT_PATH = "models/bge-reranker-v2-m3-3093af03/bge-reranke
 INFERENCE_RERANK_ARTIFACT_SHA256 = "a43c7c9b11a4c1517e5bf95151960e1621d1b72f7a493364b01e386cf1aaa1d3"
 INFERENCE_RERANK_ARTIFACT_QUANT = "Q8_0"
 INFERENCE_RERANK_CONTEXT_SIZE = 8192
-# Physical batch geometry. One value drives both --batch-size and --ubatch-size so
-# the pinned --embedding clamp cannot reduce the physical batch below a real 1536-character
-# document. It is serving geometry.
+# Physical batch geometry. One value drives both --batch-size and --ubatch-size so the pinned
+# --embedding clamp cannot reduce the physical batch below a document of
+# INFERENCE_RERANK_DOCUMENT_MAX_CHARACTERS characters. It is serving geometry.
 INFERENCE_RERANK_BATCH_SIZE = 2048
 # Bounded per-request timeout for one cross-encoder request through the loopback scorer. It is part
 # of the derived rerank runtime identity, so a timeout change selects a different rerank input identity.

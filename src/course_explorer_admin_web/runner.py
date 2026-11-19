@@ -1,20 +1,17 @@
 """The fixed-command runner of the administration backend.
 
 A closed read table answers the routine server, dataset, coverage, summary and stage-status reads in
-process through the same owning command functions the CLI uses, and passes them the caller's process
-runner so their own service probes keep the same boundary. The dataset promotion is the one admitted
-mutation that also runs in process: its owner is the only place that knows each coarse step, and an
-observer supplies those steps to the console's streamed report without any subprocess streaming
-machinery. Every other admitted command shape names one ``scripts/admin.py`` invocation, and this
-module builds its exact argument list. The caller never supplies an executable, a script, a shell
-fragment or an extra argument, so either path admits only the command shapes defined here. Every
-execution appends one fixed-label entry to the sole command log before it returns, except a
-successful automatic read, which appends none, and no command's captured streams or report are
-persisted.
-
-A command's own operation-specific guard stays with its owning service: the web layer validates the
-shape of a parameter and never the course existence, stage idleness, dataset chain or selected
-status.
+process through the same owning command functions the CLI uses, with the caller's process runner so
+their service probes keep the same boundary. The dataset promotion is the one admitted mutation that
+also runs in process, because its owner reports each coarse step to the console's streamed report
+without subprocess streaming. Every other admitted command names one ``scripts/admin.py``
+invocation, and the module builds its exact argument list. The caller never supplies an executable,
+a script, a shell fragment or an extra argument, so either path admits only the command shapes
+defined here. Every execution appends one fixed-label entry to the sole command log before it
+returns, except a successful automatic read, and no command's captured streams or report are
+persisted. A command's operation-specific guard stays with its owning service, and the web layer
+validates the shape of a parameter and never the course existence, stage idleness, dataset chain or
+selected status.
 """
 
 from __future__ import annotations
@@ -428,7 +425,7 @@ class RebuildCommand(BaseModel):
 
 
 class AdminRebuildCommand(BaseModel):
-    """The fixed administration frontend build command, whose request carries no argument."""
+    """The fixed administration image build command, whose request carries no argument."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -452,12 +449,11 @@ class DatasetSetupCommand(BaseModel):
 
 
 class WorkerSetupInput(BaseModel):
-    """One worker setup or update over the origin branch it selects and its code-only choice."""
+    """One worker code update over the origin branch it selects."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     branch: str
-    code_only: bool = Field(strict=True)
 
     @field_validator("branch")
     @classmethod
@@ -467,7 +463,7 @@ class WorkerSetupInput(BaseModel):
 
 
 class WorkerSetupCommand(WorkerSetupInput):
-    """The fixed worker setup or update command."""
+    """The fixed worker code update command."""
 
     kind: Literal["worker-setup"]
 
@@ -788,8 +784,7 @@ class FixedCommandRunner:
             case "datasets-migrate":
                 return (*prefix, "migrate", request.role)
             case "worker-setup":
-                argv = (*prefix, "setup", "worker", f"--branch={request.branch}")
-                return (*argv, "--code-only") if request.code_only else argv
+                return (*prefix, "setup", "worker", f"--branch={request.branch}")
             case "worker-preflight":
                 return (*prefix, "preflight")
         raise ValueError(f"command kind {request.kind} carries no process argument list")

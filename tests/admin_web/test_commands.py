@@ -227,12 +227,7 @@ _ADMITTED_SHAPES: dict[str, tuple[object, tuple[str, ...], str]] = {
         "migrate database",
     ),
     "worker-setup": (
-        WorkerSetupCommand(kind="worker-setup", branch="origin-branch", code_only=True),
-        ("setup", "worker", "--branch=origin-branch", "--code-only"),
-        "setup worker",
-    ),
-    "worker-setup-code-only-false": (
-        WorkerSetupCommand(kind="worker-setup", branch="origin-branch", code_only=False),
+        WorkerSetupCommand(kind="worker-setup", branch="origin-branch"),
         ("setup", "worker", "--branch=origin-branch"),
         "setup worker",
     ),
@@ -327,7 +322,7 @@ def test_admin_command_runner_executes_only_fixed_commands(
             runner.run({"kind": "usage", "hours": 24, "command": "rm -rf /"})
         # A positional target must not reach the command's own parser as an option.
         with pytest.raises(ValidationError):
-            runner.run({"kind": "target-read", "target_id": "--code-only"})
+            runner.run({"kind": "target-read", "target_id": "--branch"})
         with pytest.raises(ValidationError):
             runner.run(
                 {"kind": "config-set", "file": _CONFIG_FILE, "key": "WEB_PORT", "value": "1\x002"}

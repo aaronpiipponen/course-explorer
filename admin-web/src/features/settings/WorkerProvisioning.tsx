@@ -1,10 +1,10 @@
 /**
- * The Worker provisioning panel: the explicit worker setup and the read-only preflight.
+ * The Worker provisioning panel: the explicit worker code update and the read-only preflight.
  *
- * The setup posts one branch and one code-only choice and asks for confirmation first. The preflight
- * is an explicit user action that reads the prepared worker and refreshes only when the operator
- * asks, so no request reaches the worker on mount or on a timer, and a setup report and a preflight
- * report are rendered separately from the command each one returned.
+ * The worker code update posts one branch and asks for confirmation first. The preflight is an
+ * explicit user action that reads the prepared worker and refreshes only when the operator asks, so
+ * no request reaches the worker on mount or on a timer, and an update report and a preflight report
+ * are rendered separately from the command each one returned.
  */
 import { useState } from "react";
 import { failureText, handleAdmissionFailure } from "../../api/http";
@@ -14,7 +14,6 @@ import { AutoMarker } from "../../shared/AutoMarker";
 import { ConfirmDialog } from "../../shared/ConfirmDialog";
 import { FailureNotice, Panel, Row, Rows } from "../../shared/Panel";
 import type { SessionAccess } from "../../shared/StagePanel";
-import { Switch } from "../../shared/Switch";
 import { useDemandRead } from "../../shared/useDemandRead";
 import { wording } from "../../shared/wording";
 
@@ -66,7 +65,6 @@ export function WorkerProvisioning({
 }) {
   const detail = wording.settings;
   const [branch, setBranch] = useState("");
-  const [codeOnly, setCodeOnly] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -84,7 +82,7 @@ export function WorkerProvisioning({
     setPending(true);
     setFailure(null);
     try {
-      setSetup(await setupWorker(branch, codeOnly, session.csrfToken));
+      setSetup(await setupWorker(branch, session.csrfToken));
     } catch (error) {
       if (handleAdmissionFailure(error, onRefusal)) {
         return;
@@ -121,17 +119,6 @@ export function WorkerProvisioning({
           />
         </span>
       </div>
-      <div className="cfgrow bordered">
-        <span className="k">{detail.codeOnly}</span>
-        <span className="val">
-          <Switch
-            label={detail.codeOnly}
-            checked={codeOnly}
-            disabled={pending}
-            onChange={setCodeOnly}
-          />
-        </span>
-      </div>
       <div className="acts">
         <button
           className="btn p"
@@ -154,7 +141,7 @@ export function WorkerProvisioning({
       <FailureNotice text={failure} />
       {setup === null ? null : (
         <>
-          <p className="note">{detail.setupReport}</p>
+          <p className="note">{detail.updateReport}</p>
           <ReportRows report={setup} />
         </>
       )}

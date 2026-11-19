@@ -1,29 +1,28 @@
-"""The two self-host setup workflows and the startup lifetime they share.
+"""The two self-host setup workflows and the configured publication path.
 
 ``setup_example`` takes a fresh checkout from absent working files to a site that serves the bundled
 example data without an enrolled dataset. ``setup_real_database`` then creates one named empty
-database, enrolls it as Selected and serves it. Both accept their choices in memory, never prompt,
-and emit fixed coarse step names through the supplied writer. One workflow copy owns absent template
-materialization, generated credentials, the pinned embedding artifact, the preflight, the documented
-build steps and the startup mode. The two backends run either from user units or as owned foreground
-children of this command.
+database, enrolls it as Selected and serves it. ``publish_configured_site`` and
+``unpublish_configured_site`` write or remove the configured instance's site file of the
+machine-wide proxy. Every workflow accepts its choices in memory and emits fixed coarse step names
+through the supplied writer. One workflow copy owns absent template materialization, generated
+credentials, the pinned embedding artifact, the container-host preflight, the Compose image builds
+and the Compose starts. The services run under the Compose restart policy, so the workflow starts
+them and returns. A domain-mode setup or the publish command writes the site file and starts
+or reloads the proxy project, and a local-mode setup starts no proxy.
 """
 
 from __future__ import annotations
 
-import ctypes.util
 import json
 import os
-import pwd
-import re
 import secrets
-import shlex
 import shutil
 import socket
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -36,7 +35,6 @@ from sqlalchemy import inspect
 
 from course_explorer import administration
 from course_explorer import configuration as file_configuration
-from course_explorer.administration import atomic_write_private_text
 from course_explorer.config import (
     AdminWebSettings,
     DatabaseSettings,
@@ -54,6 +52,7 @@ from course_explorer.config import (
     load_raw_database_settings,
     load_shared_storage_settings,
     load_web_settings,
+    load_worker_connection_settings,
 )
 from course_explorer.datasets import (
     DatasetDatabaseName,
@@ -65,25 +64,36 @@ from course_explorer.datasets import (
 from course_explorer.db.session import create_database_engine
 from course_explorer.instance import UNIVERSITIES
 from course_explorer.serving_build import build_serving_artifacts, dataset_settings
-from course_explorer_admin import artifacts, configuration, credentials, mechanics, rebuild, server
-from course_explorer_admin import datasets as dataset_owner
-
-type StartupMode = Literal["user", "foreground"]
-
-# The four user-unit templates the installation copies. Unit names come from the instance key and
-# the optional checkout suffix.
-_UNIT_TEMPLATES = (
-    "course-explorer-web.service.in",
-    "course-explorer-admin-web.service.in",
-    "course-explorer-feedback-sender.service.in",
-    "course-explorer-feedback-sender.timer.in",
+from course_explorer.usage import usage_root
+from course_explorer_admin import (
+    artifacts,
+    compose,
+    configuration,
+    credentials,
+    mechanics,
+    proxy,
+    rebuild,
 )
+from course_explorer_admin import datasets as dataset_owner
+from course_explorer_admin.working_files import copy_example_files, template_pairs
 
 # The three loopback hosts a loopback URL may name.
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
-# A checkout suffix is empty or one or more lowercase hyphen-prefixed segments, such as ``-site``.
-_CHECKOUT_SUFFIX_PATTERN = re.compile(r"(?:-[a-z0-9]+)*")
+
+def _require_public_site_address(app_url: str | None) -> None:
+    """Require the site's HTTPS address outside loopback without an explicit port.
+
+    A domain-mode setup and the publish command both call it, so neither publishes an address the
+    machine-wide proxy cannot serve. The proxy supplies the HTTPS port itself.
+    """
+    if app_url is None:
+        raise ValueError("domain mode needs the site's HTTPS address")
+    parts = urlsplit(app_url)
+    if parts.hostname in _LOOPBACK_HOSTS:
+        raise ValueError("domain mode needs a site address outside loopback")
+    if parts.port is not None:
+        raise ValueError("domain mode needs the site's HTTPS address without a port")
 
 
 class _SelfHostModel(BaseModel):
@@ -95,17 +105,21 @@ class _SelfHostModel(BaseModel):
 class ExampleSetupInput(_SelfHostModel):
     """Everything one example workflow needs, supplied in memory without a prompt.
 
-    ``instance_key`` selects one entry of the finite university map. The four ports are
-    independent listeners, so the workflow requires them to differ. ``app_url`` is the feature
-    site's external root address, and ``admin_origin`` is the administration backend's exact
-    external HTTPS origin. Either null value derives its default from the matching port.
-    ``shared_root`` overrides the configured shared directory. Both credentials are hidden from
-    the model's representation and its serialized form, and validation errors never echo their
-    inputs.
+    ``serve_mode`` decides whether the workflow publishes the site through the machine-wide proxy
+    project or starts no proxy at all. ``instance_key`` selects one entry of the finite university
+    map. The four ports are independent listeners, so the workflow requires them to differ.
+    ``app_url`` is the feature site's external root address, and ``admin_origin`` is the
+    administration backend's exact external HTTPS origin. Either null value derives its default
+    from the matching port. In domain mode ``app_url`` is required, and it is an HTTPS address
+    outside loopback without an explicit port. The shared directory is the configured
+    ``ADMIN_SHARED_ROOT``.
+    Both credentials are hidden from the model's representation and its serialized form, and
+    validation errors never echo their inputs.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
+    serve_mode: Literal["local", "domain"]
     app_url: str | None = None
     admin_origin: str | None = None
     instance_key: str
@@ -113,10 +127,8 @@ class ExampleSetupInput(_SelfHostModel):
     admin_web_port: int
     postgres_port: int
     embedding_port: int
-    shared_root: Path | None = None
     username: str
     password: SecretStr = Field(exclude=True, repr=False)
-    mode: StartupMode
     confirm_download: bool = False
     publication_token: SecretStr | None = Field(default=None, exclude=True, repr=False)
 
@@ -132,16 +144,17 @@ class ExampleSetupInput(_SelfHostModel):
             raise ValueError("the four setup ports must be distinct")
         if self.app_url is not None:
             WebAppSettings.validate_web_app_url(self.app_url)
+        if self.serve_mode == "domain":
+            _require_public_site_address(self.app_url)
         if self.admin_origin is not None:
             AdminWebSettings.validate_admin_web_origin(self.admin_origin)
         return self
 
 
 class RealDatabaseSetupInput(_SelfHostModel):
-    """Everything one real-database workflow needs: the new database name and the startup mode."""
+    """Everything one real-database workflow needs: the name of the new database."""
 
     database_name: DatasetDatabaseName
-    mode: StartupMode
 
 
 class SelfHostReport(_SelfHostModel):
@@ -151,162 +164,21 @@ class SelfHostReport(_SelfHostModel):
     dataset_id: DatasetId | None
 
 
-def _copy_example_files(root: Path) -> bool:
-    """Materialize every absent working template and return whether this call created ``.env``.
+class PublicSiteReport(_SelfHostModel):
+    """One transient publish or unpublish result: the configured site address and its state."""
 
-    A present working path is kept byte for byte. A symlinked or non-regular destination is refused
-    rather than followed. A present ``config/`` directory is an ordinary directory that the missing
-    files join, never one that is replaced. The created environment file is published at mode 0600.
-    """
-    created_environment = False
-    for relative, destination_relative in _template_pairs(root):
-        source = root / relative
-        destination = root / destination_relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if destination.is_symlink() or (destination.exists() and not destination.is_file()):
-            raise ValueError(
-                f"working path {destination_relative} must be a regular non-symlink file"
-            )
-        if destination.exists():
-            continue
-        payload = source.read_bytes()
-        if destination_relative == ".env":
-            atomic_write_private_text(destination, payload.decode("utf-8"), mode=0o600)
-            created_environment = True
-        else:
-            destination.write_bytes(payload)
-    return created_environment
-
-
-def _template_pairs(root: Path) -> tuple[tuple[str, str], ...]:
-    """Return every tracked example template and the working path it belongs at."""
-    config_root = root / "examples" / "config"
-    pairs = [
-        (f"examples/config/{path.name}", f"config/{path.name}")
-        for path in sorted(config_root.iterdir())
-        if path.is_file()
-    ]
-    pairs.extend(
-        (
-            ("examples/.env.example", ".env"),
-            ("examples/docker-compose.yml", "docker-compose.yml"),
-            ("examples/deploy/Caddyfile", "deploy/Caddyfile"),
-        )
-    )
-    pairs.extend((f"examples/deploy/systemd/{name}", f"deploy/{name}") for name in _UNIT_TEMPLATES)
-    return tuple(pairs)
-
-
-def _checkout_is_configured(root: Path) -> bool:
-    """Return whether the checkout carries a prepared working deployment marker.
-
-    A configured marker is the ignored environment file, the working Caddyfile, a rendered working
-    unit template or the default runtime state directory ``data/admin``. The tracked example assets
-    and the tracked fictional fixture tree are not markers. Each marker check tests existence alone
-    and reads no working file.
-    """
-    deploy = root / "deploy"
-    return (
-        (root / ".env").exists()
-        or (deploy / "Caddyfile").exists()
-        or any(deploy.glob("*.service.in"))
-        or (root / "data" / "admin").exists()
-    )
-
-
-class CheckoutRenamed(Exception):
-    """A clean checkout was renamed and its Python environment rebuilt.
-
-    The exception carries the new path and its message states the path and the command to run there.
-    """
-
-    def __init__(self, target: Path) -> None:
-        self.target = target
-        super().__init__(target)
-
-    def __str__(self) -> str:
-        """Return the new path with the command to run from it."""
-        return (
-            f"the checkout is now {self.target}; run the same command again from there: "
-            f"cd {shlex.quote(str(self.target))}"
-        )
-
-
-def prepare_checkout_path(
-    root: Path,
-    instance_key: str,
-    checkout_suffix: str,
-    *,
-    runner: mechanics.ProcessRunner,
-    write: Callable[[str], None],
-) -> None:
-    """Rename a clean checkout to ``course-explorer-<key><suffix>`` and rebuild its environment.
-
-    A checkout whose folder already carries the target name returns unchanged. A linked worktree
-    keeps its checkout path and prints the exact ``git worktree move`` command. A configured
-    checkout writes the exact quoted rename and returns unchanged, so its running deployment keeps
-    its folder. A clean checkout is renamed, its stale ``.venv`` is removed, and one locked
-    environment sync runs in the new folder, after which ``CheckoutRenamed`` carries the new path.
-    An existing target and a malformed suffix raise ``ValueError``.
-    """
-    if _CHECKOUT_SUFFIX_PATTERN.fullmatch(checkout_suffix) is None:
-        raise ValueError("checkout_suffix must be empty or lowercase hyphen-prefixed segments")
-    target = root.parent / f"course-explorer-{instance_key}{checkout_suffix}"
-    if root.name == target.name:
-        return
-    quoted_root = shlex.quote(str(root))
-    quoted_target = shlex.quote(str(target))
-    if (root / ".git").is_file():
-        write(f"git worktree move {quoted_root} {quoted_target}")
-        return
-    if _checkout_is_configured(root):
-        write(f"mv {quoted_root} {quoted_target}")
-        return
-    if target.exists() or target.is_symlink():
-        raise ValueError(f"the checkout target {target} already exists; move or remove it first")
-    environment = root / ".venv"
-    if environment.is_symlink() or (environment.exists() and not environment.is_dir()):
-        raise ValueError(f"{environment} must be a regular directory or absent")
-    write(f"rename the checkout to {target.name}")
-    root.rename(target)
-    environment = target / ".venv"
-    if environment.exists():
-        write("remove the stale Python environment")
-        shutil.rmtree(environment)
-    write("rebuild the Python environment")
-    child_environment = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
-    try:
-        runner.run(
-            ("uv", "sync", "--locked", "--no-managed-python", "--python", sys._base_executable),
-            cwd=target,
-            env=child_environment,
-        )
-    except Exception as exc:
-        raise CheckoutRenamed(target) from exc
-    raise CheckoutRenamed(target)
+    site_address: str
+    published: bool
 
 
 def _require_working_files(root: Path) -> None:
     """Require every prepared working file a deployment keeps beside its tracked examples."""
-    for _, destination_relative in _template_pairs(root):
+    for _, destination_relative in template_pairs(root):
         destination = root / destination_relative
         if destination.is_symlink() or not destination.is_file():
             raise ValueError(
                 f"self-host setup needs the prepared working file {destination_relative}; "
                 "run the example workflow first"
-            )
-
-
-def _require_native_libraries() -> None:
-    """Require the two host native libraries the serving modules load at run time."""
-    for name, label in (
-        ("pq", "libpq"),
-        ("stdc++", "libstdc++"),
-    ):
-        if ctypes.util.find_library(name) is None:
-            raise ValueError(
-                f"the host native library {label} is missing; install the prerequisites on the "
-                "installation page and retry"
             )
 
 
@@ -329,64 +201,47 @@ def _running_services(runner: mechanics.ProcessRunner, root: Path) -> set[str]:
 
 
 def _require_host_prerequisites(
-    root: Path, runner: mechanics.ProcessRunner, write: Callable[[str], None]
+    root: Path,
+    runner: mechanics.ProcessRunner,
+    write: Callable[[str], None],
+    *,
+    serve_mode: Literal["local", "domain"],
 ) -> None:
-    """Preflight the prepared environment, the host tools, the ports and the free disk space.
+    """Preflight the container host, the free ports and the two working roots.
 
-    The environment-preparation step owns dependency installation. This check refuses a host that
-    lacks a prepared interpreter or frontend packages, an interpreter without the Linux
-    shared-memory capability the server caches need, a version command that does not answer, a host
-    native library, or a loopback port held by another process. A database or embedding port already
-    served by this project's own Compose service is allowed.
+    The contract is the container host: Docker with Docker Compose, a daemon that answers, and an
+    account that writes the Docker socket. The two images supply the interpreter, the dependencies,
+    the browser and the native libraries. This check refuses a missing command, a socket the
+    account cannot write, a loopback port held by another process, and a shared directory that is
+    absent or is not writable. A database or embedding port already served by this project's own
+    Compose service is allowed. Domain mode also checks the two public ports, and the machine-wide
+    proxy is their one allowed holder. A public port counts as held when a listener is on the
+    configured bind address, on the wildcard address, or on any address when none is configured,
+    because a wildcard listener blocks a specific bind. That read is the kernel's listen table
+    rather than a bind probe, because this account holds no capability that binds a port below
+    1024.
     """
-    interpreter = root / ".venv" / "bin" / "python"
-    if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
-        raise ValueError(
-            "the checkout has no executable .venv/bin/python; follow installation step two to "
-            "prepare the environment"
-        )
-    try:
-        runner.run(
-            (
-                str(interpreter),
-                "-c",
-                "import os, sys; assert sys.version_info[:2] >= (3, 14); "
-                'descriptor = os.memfd_create("course-explorer-preflight", os.MFD_CLOEXEC); '
-                "os.close(descriptor)",
-            ),
-            cwd=root,
-            timeout=load_local_lifecycle_settings().stop_timeout_seconds,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise ValueError(
-            "the checkout's .venv/bin/python needs Linux CPython 3.14 or newer with "
-            "os.memfd_create; recreate this checkout's environment with installation step two and "
-            "`uv sync --locked --no-managed-python --python PATH_TO_CAPABLE_PYTHON`"
-        ) from exc
-    for frontend in ("web", "admin-web"):
-        if not (root / frontend / "node_modules").is_dir():
-            raise ValueError(
-                f"the {frontend} packages are missing; run "
-                f"`npm --prefix {frontend} ci --engine-strict --no-audit --no-fund`"
-            )
     for argv, label in (
-        (("node", "--version"), "Node 22"),
-        (("npm", "--version"), "npm"),
-        (("uv", "--version"), "uv"),
-        (("curl", "--version"), "curl"),
         (("docker", "--version"), "Docker"),
         (("docker", "compose", "version"), "Docker Compose"),
+        (("docker", "info"), "a running Docker daemon"),
     ):
         try:
             runner.run(argv, cwd=root)
         except (subprocess.CalledProcessError, FileNotFoundError) as exc:
             raise ValueError(f"{label} is not available; install it and retry") from exc
-    _require_native_libraries()
+    if compose.docker_needs_sudo():
+        raise ValueError(
+            f"this account cannot write {compose.DOCKER_SOCKET_PATH}; add it to the "
+            "docker group and start a new login session"
+        )
 
     database = load_raw_database_settings()
     embedding = load_embedding_runtime_settings()
     web = load_web_settings()
     admin = load_admin_web_settings()
+    shared = load_shared_storage_settings()
+    shared_root = shared.shared_root.resolve()
     services = _running_services(runner, root)
     for label, host, port, service in (
         ("feature web", web.web_host, web.web_port, None),
@@ -399,6 +254,24 @@ def _require_host_prerequisites(
                 f"the configured {label} port {port} is used by another process; "
                 "stop that listener and retry"
             )
+    if serve_mode == "domain":
+        listening = proxy.listening_sockets()
+        for label, port in (("feature HTTP", 80), ("feature HTTPS", 443)):
+            held = any(
+                bound_port == port
+                and (
+                    shared.proxy_bind_address is None
+                    or address in {shared.proxy_bind_address, "0.0.0.0", "::"}
+                )
+                for address, bound_port in listening
+            )
+            if held and not proxy.running(runner, shared_root=shared_root):
+                raise ValueError(
+                    f"the configured {label} port {port} is used by another process; "
+                    "stop that listener and retry"
+                )
+    if not shared_root.is_dir() or not os.access(shared_root, os.W_OK):
+        raise ValueError(f"the shared directory {shared_root} must be a writable directory")
     write(
         f"ports: web {web.web_host}:{web.web_port}, "
         f"administration {admin.admin_web_host}:{admin.admin_web_port}, "
@@ -406,6 +279,7 @@ def _require_host_prerequisites(
         f"embedding {embedding.embedding_host}:{embedding.embedding_port}"
     )
     write(f"disk: {shutil.disk_usage(root).free} bytes free at {root}")
+    write(f"disk: {shutil.disk_usage(shared_root).free} bytes free at {shared_root}")
 
 
 def _require_download_space(path: Path, url: str, write: Callable[[str], None]) -> None:
@@ -490,6 +364,11 @@ def _conninfo(
     )
 
 
+def _prepare_site_usage_directory() -> None:
+    """Create the site's usage directory before the site process starts writing records."""
+    usage_root(administration.repository_root()).mkdir(mode=0o700, parents=True, exist_ok=True)
+
+
 def _prepare_feedback_store(*, runner: mechanics.ProcessRunner) -> None:
     """Create the absent feedback role and database, prove the connection, then migrate the chain.
 
@@ -564,7 +443,7 @@ def _prepare_feedback_store(*, runner: mechanics.ProcessRunner) -> None:
     attachments.mkdir(mode=0o700, parents=True, exist_ok=True)
     runner.run(
         (
-            str(administration.repository_root() / ".venv" / "bin" / "python"),
+            sys.executable,
             "-m",
             "alembic",
             "-c",
@@ -582,35 +461,25 @@ def _loopback_url(host: str, port: int) -> str:
     return f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
 
 
-def _prove_shells(*, root: Path) -> None:
-    """Prove both loopback backends answer their built shell at their configured Host.
+def _prove_html(host: str, port: int, host_header: str) -> None:
+    """Prove one running backend answers its HTML shell at its configured Host.
 
-    One short-lived client retries only a connection that is not ready yet, exactly as the serving
-    proof does, and requires status 200 and the built shell's exact bytes from each backend.
+    One short-lived client retries only a connection that is not ready yet and requires status 200
+    with a ``text/html`` content type.
     """
-    web = load_web_settings()
-    admin = load_admin_web_settings()
     lifecycle = load_local_lifecycle_settings()
-    web_shell = (root / "web" / "dist" / "index.html").read_bytes()
-    admin_shell = (root / "admin-web" / "dist" / "index.html").read_bytes()
-    web_host = urlsplit(web.web_app_url).netloc
-    admin_host = urlsplit(admin.admin_web_origin).netloc
 
     def read(client: httpx.Client) -> bool | None:
         try:
-            feature = client.get(
-                f"{_loopback_url(web.web_host, web.web_port)}/",
-                headers={"Accept-Encoding": "identity", "Host": web_host},
-            )
-            console = client.get(
-                f"{_loopback_url(admin.admin_web_host, admin.admin_web_port)}/",
-                headers={"Accept-Encoding": "identity", "Host": admin_host},
+            response = client.get(
+                f"{_loopback_url(host, port)}/",
+                headers={"Accept-Encoding": "identity", "Host": host_header},
             )
         except httpx.ConnectError, httpx.ReadTimeout:
             return None
-        feature.raise_for_status()
-        console.raise_for_status()
-        return feature.content == web_shell and console.content == admin_shell
+        return response.status_code == 200 and response.headers.get("content-type", "").startswith(
+            "text/html"
+        )
 
     with httpx.Client(
         trust_env=False,
@@ -626,190 +495,82 @@ def _prove_shells(*, root: Path) -> None:
         )
 
 
-def _stop_children(children: Sequence[subprocess.Popen[bytes]], timeout: float) -> None:
-    """Terminate and reap only the supplied children within one shared bound."""
-    deadline = time.monotonic() + timeout
-    for child in children:
-        if child.poll() is None:
-            child.terminate()
-    for child in children:
-        if child.poll() is None:
-            try:
-                child.wait(timeout=max(0.0, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
+def prove_web_shell() -> None:
+    """Prove the running site backend answers its HTML shell at its configured Host."""
+    web = load_web_settings()
+    _prove_html(web.web_host, web.web_port, urlsplit(web.web_app_url).netloc)
 
 
-def _serve_foreground(
-    *,
-    root: Path,
-    runner: mechanics.ProcessRunner,
-    prove: Callable[[], None],
-    write: Callable[[str], None],
-) -> None:
-    """Run both checkout launchers as owned foreground children until the operator stops them.
+def prove_shells() -> None:
+    """Prove both running backends answer their HTML shell at their configured Host."""
+    admin = load_admin_web_settings()
+    prove_web_shell()
+    _prove_html(
+        admin.admin_web_host,
+        admin.admin_web_port,
+        urlsplit(admin.admin_web_origin).netloc,
+    )
 
-    A completed proof announces readiness. A child that exits before that stop is a failed setup.
-    Ctrl-C during the post-readiness wait is a normal intentional stop and returns normally. Every
-    path terminates and reaps only these two children within the configured stop timeout.
+
+def publish_configured_site(runner: mechanics.ProcessRunner) -> str:
+    """Publish the configured instance's site through the machine-wide proxy.
+
+    It reads the instance key, the site address, the loopback site target, the optional bind address
+    and the shared directory through their owning loaders, refuses an address the proxy cannot
+    serve, writes the site file, starts the project when it is absent and reloads it. It returns the
+    configured site address.
     """
-    lifecycle = load_local_lifecycle_settings()
-    children: list[subprocess.Popen[bytes]] = []
-    try:
-        children.append(
-            runner.popen(
-                ("/usr/bin/bash", str(root / "scripts" / "run_web.sh")),
-                cwd=root,
-                stdout_path=None,
-                stderr_path=None,
-            )
-        )
-        children.append(
-            runner.popen(
-                ("/usr/bin/bash", str(root / "scripts" / "run_admin_web.sh")),
-                cwd=root,
-                stdout_path=None,
-                stderr_path=None,
-            )
-        )
-        prove()
-        write("the site is ready; press Ctrl-C to stop the two foreground servers")
-        try:
-            while True:
-                for child in children:
-                    if child.poll() is not None:
-                        raise RuntimeError(
-                            "a foreground server exited before the operator stopped it"
-                        )
-                time.sleep(lifecycle.poll_interval_seconds)
-        except KeyboardInterrupt:
-            pass
-    finally:
-        _stop_children(children, lifecycle.stop_timeout_seconds)
-    write("the database and embedding services continue running")
-
-
-def _user_unit_directory() -> Path:
-    """Return the user manager's unit directory."""
-    return Path.home() / ".config" / "systemd" / "user"
-
-
-def _unit_names(instance_key: str, checkout_suffix: str = "") -> tuple[str, str, str]:
-    """Derive the three owned user-unit names from the instance key and optional checkout suffix."""
-    prefix = f"course-explorer-{instance_key}{checkout_suffix}"
-    return (
-        f"{prefix}-web.service",
-        f"{prefix}-admin-web.service",
-        f"{prefix}-feedback-sender.service",
+    web = load_web_settings()
+    shared = load_shared_storage_settings()
+    instance = load_instance_settings()
+    _require_public_site_address(web.web_app_url)
+    proxy.publish(
+        runner,
+        checkout_root=administration.repository_root(),
+        shared_root=shared.shared_root,
+        instance_key=instance.instance_key,
+        site_address=web.web_app_url,
+        host=web.web_host,
+        port=web.web_port,
+        bind_address=shared.proxy_bind_address,
     )
+    return web.web_app_url
 
 
-def _render_unit(
-    template: str, *, root: Path, uv_bin: Path, feedback_service: str | None = None
-) -> str:
-    """Render one unit template's checkout, uv path and paired timer service name."""
-    rendered = template.replace("@CHECKOUT@", str(root)).replace("@UV_BIN@", str(uv_bin))
-    if feedback_service is not None:
-        rendered = rendered.replace("@FEEDBACK_SERVICE@", feedback_service)
-    return rendered
+def unpublish_configured_site(runner: mechanics.ProcessRunner) -> str:
+    """Remove the configured instance's site through the machine-wide proxy.
 
-
-def _install_user_units(
-    root: Path, runner: mechanics.ProcessRunner, checkout_suffix: str = ""
-) -> tuple[str, str, str]:
-    """Render the four owned user units, reusing identical files and refusing any different one."""
-    web_unit, admin_unit, feedback_unit = _unit_names(
-        load_instance_settings().instance_key, checkout_suffix
+    It reads the instance key and the shared directory through their owning loaders, removes only
+    that instance's site file and reloads a running project. It returns the configured site address.
+    """
+    web = load_web_settings()
+    shared = load_shared_storage_settings()
+    instance = load_instance_settings()
+    proxy.unpublish(
+        runner,
+        shared_root=shared.shared_root,
+        instance_key=instance.instance_key,
     )
-    timer_unit = f"{feedback_unit.removesuffix('.service')}.timer"
-    uv_bin = shutil.which("uv")
-    if uv_bin is None:
-        raise ValueError("uv is not available on PATH; install it and retry")
-    directory = _user_unit_directory()
-    directory.mkdir(parents=True, exist_ok=True)
-    mappings = (
-        ("course-explorer-web.service.in", web_unit, None),
-        ("course-explorer-admin-web.service.in", admin_unit, None),
-        ("course-explorer-feedback-sender.service.in", feedback_unit, None),
-        (
-            "course-explorer-feedback-sender.timer.in",
-            timer_unit,
-            feedback_unit,
-        ),
-    )
-    for template_name, unit_name, feedback_service in mappings:
-        template = (root / "deploy" / template_name).read_text(encoding="utf-8")
-        rendered = _render_unit(
-            template,
-            root=root,
-            uv_bin=Path(uv_bin).parent,
-            feedback_service=feedback_service,
-        )
-        destination = directory / unit_name
-        if destination.is_symlink() or (destination.exists() and not destination.is_file()):
-            raise ValueError(f"user unit {unit_name} must be a regular non-symlink file")
-        if destination.exists():
-            if destination.read_text(encoding="utf-8") != rendered:
-                raise ValueError(
-                    f"user unit {unit_name} exists with different contents; remove or restore it "
-                    "before running this workflow"
-                )
-            continue
-        atomic_write_private_text(destination, rendered, mode=0o644)
-    runner.run(
-        (
-            "systemd-analyze",
-            "--user",
-            "verify",
-            *(str(directory / unit) for unit in (web_unit, admin_unit, feedback_unit, timer_unit)),
-        ),
-        cwd=root,
-    )
-    runner.run(("systemctl", "--user", "daemon-reload"), cwd=root)
-    runner.run(("systemctl", "--user", "enable", "--now", web_unit), cwd=root)
-    runner.run(("systemctl", "--user", "enable", "--now", admin_unit), cwd=root)
-    return web_unit, admin_unit, timer_unit
+    return web.web_app_url
 
 
-def _enable_feedback_timer(runner: mechanics.ProcessRunner, root: Path, timer_unit: str) -> None:
-    """Enable the paired sender timer only after explicit publication setup succeeded."""
-    runner.run(("systemctl", "--user", "enable", "--now", timer_unit), cwd=root)
-
-
-def _explain_linger(
-    runner: mechanics.ProcessRunner, root: Path, write: Callable[[str], None]
-) -> None:
-    """Explain the user-manager boot prerequisite when lingering is not enabled."""
-    user = pwd.getpwuid(os.getuid()).pw_name
-    output = (
-        runner.run(("loginctl", "show-user", user, "--property=Linger"), cwd=root)
-        .stdout.decode("utf-8", errors="replace")
-        .strip()
-    )
-    if output != "Linger=yes":
-        write(
-            "the user manager starts these units at boot only with lingering; run "
-            f"`loginctl enable-linger {user}`"
-        )
-
-
-def _show_origins(root: Path, write: Callable[[str], None]) -> None:
-    """Show both configured origins and the explicit proxy prerequisite for an external address."""
+def _show_origins(write: Callable[[str], None], *, serve_mode: Literal["local", "domain"]) -> None:
+    """Show both configured origins and the serve mode's own proxy arrangement."""
     web = load_web_settings()
     admin = load_admin_web_settings()
     write(f"feature origin: {web.web_app_origin}")
     write(f"administration origin: {admin.admin_web_origin}")
-    if urlsplit(web.web_app_origin).hostname not in _LOOPBACK_HOSTS:
+    if serve_mode == "local":
         write(
-            "an external feature address needs HTTPS; use the example deploy/Caddyfile with one "
-            "certificate per domain, then point the proxy at the two loopback backends"
+            "local mode: no public proxy is started; the site and the console answer on their "
+            "loopback ports and any external address belongs to the operator's own proxy."
         )
-        if urlsplit(admin.admin_web_origin).hostname in _LOOPBACK_HOSTS:
-            write(
-                "set the external administration origin with: uv run python scripts/admin.py "
-                "config set config/admin_web.toml ADMIN_WEB_ORIGIN <origin>"
-            )
+    else:
+        write(
+            f"domain mode: the machine-wide proxy publishes the site at {web.web_app_origin}; "
+            "the console stays loopback and is reached through the operator's own private HTTPS "
+            "proxy."
+        )
 
 
 def _require_publication_destination(root: Path) -> None:
@@ -822,7 +583,7 @@ def _require_publication_destination(root: Path) -> None:
     )["FEEDBACK_GITHUB_REPOSITORY"]
     if configured == example:
         raise ValueError(
-            "publication needs a real feedback repository; set it with `uv run python scripts/"
+            "publication needs a real feedback repository; set it with `python scripts/"
             "admin.py config set config/feedback.toml FEEDBACK_GITHUB_REPOSITORY OWNER/REPOSITORY`"
         )
 
@@ -832,8 +593,8 @@ def _apply_instance_choices(options: ExampleSetupInput, root: Path) -> None:
 
     Every save validates one candidate through its owning settings family. Embedding and inference
     start off, and the prerequisites switch follows the selected map entry's source family. The
-    shared directory is resolved from the written or configured setting and created or adopted
-    outside the checkout with its ``models`` and ``locks`` directories.
+    shared directory is the configured ``ADMIN_SHARED_ROOT``, created or adopted outside the
+    checkout with its ``models`` and ``locks`` directories.
     """
     configuration.set_configuration_value(
         "config/web.toml", "INSTANCE_KEY", json.dumps(options.instance_key)
@@ -870,17 +631,30 @@ def _apply_instance_choices(options: ExampleSetupInput, root: Path) -> None:
         "WEB_PREREQUISITES_ENABLED",
         json.dumps(UNIVERSITIES[options.instance_key].source_family == "sisu"),
     )
-    if options.shared_root is not None:
-        configuration.set_configuration_value(
-            "config/database.toml", "ADMIN_SHARED_ROOT", json.dumps(str(options.shared_root))
-        )
     shared = load_shared_storage_settings()
+    configuration.set_configuration_value(
+        "config/database.toml", "ADMIN_SHARED_ROOT", json.dumps(str(shared.shared_root))
+    )
     shared_root = shared.shared_root.resolve()
     if shared_root.is_relative_to(root.resolve()):
         raise ValueError("the shared directory must be outside this checkout")
     shared_root.mkdir(parents=True, exist_ok=True)
-    shared.models_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    shared.locks_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    shared.models_root.resolve().mkdir(mode=0o700, parents=True, exist_ok=True)
+    shared.locks_root.resolve().mkdir(mode=0o700, parents=True, exist_ok=True)
+
+
+def site_services(*, sender: bool) -> list[str]:
+    """Return the site, administration, optional sender and same-machine worker services.
+
+    Every workflow that builds and starts the site group asks this owner, so a same-machine host
+    adds its profile-gated worker service once and in the same order.
+    """
+    services = ["web", "admin"]
+    if sender:
+        services.append("sender")
+    if load_worker_connection_settings().host_kind == "same-machine":
+        services.append("worker")
+    return services
 
 
 def setup_example(
@@ -888,21 +662,23 @@ def setup_example(
     *,
     runner: mechanics.ProcessRunner,
     write: Callable[[str], None],
-    checkout_suffix: str = "",
 ) -> SelfHostReport:
     """Take a fresh checkout to a site that serves the bundled example data.
 
     Absent templates are materialized first. The enrollment and example preconditions are checked
     before any supplied key edit or fresh credential is written. The instance key, ports, origins,
     feature-switch defaults and shared directory are then applied, and every later step reads the
-    edited configuration. The pinned model, both services, the example import, the feedback store,
-    the documented builds and the chosen startup mode follow in that order, and the workflow proves
-    both shells and the bootstrap serving identity before it returns. No dataset is enrolled.
-    A ``checkout_suffix`` adds its segment to the generated user-unit names.
+    edited configuration. The host preflight, the pinned model, both image builds, the Compose
+    starts, the example import, the feedback store and the two serving proofs follow in that order.
+    Publication adds the feedback sender to the build and the start, and a same-machine worker host
+    adds the profile-gated worker. A domain-mode run writes its site file into the shared proxy
+    project, starts that project and reloads it, and a local-mode run writes no site file and
+    starts no proxy. The workflow runs inside the administration image and starts the services
+    under the Compose restart policy, so it returns once the proofs pass. No dataset is enrolled.
     """
     root = administration.repository_root()
     write("copy absent working files")
-    created_environment = _copy_example_files(root)
+    created_environment = copy_example_files(root)
     raw = load_raw_database_settings()
     state_root = root / raw.admin_state_root
     if raw.postgres_db != raw.example_postgres_db:
@@ -924,23 +700,6 @@ def setup_example(
 
     write("apply device settings")
     _apply_instance_choices(options, root)
-    if options.mode == "user":
-        web_unit, admin_unit, _ = _unit_names(options.instance_key, checkout_suffix)
-        configuration.set_configuration_value(
-            "config/admin_web.toml",
-            "ADMIN_SITE_WEB_SERVICE_UNIT",
-            json.dumps(web_unit),
-        )
-        configuration.set_configuration_value(
-            "config/admin_web.toml",
-            "ADMIN_SITE_ADMIN_SERVICE_UNIT",
-            json.dumps(admin_unit),
-        )
-        configuration.set_configuration_value(
-            "config/admin_web.toml",
-            "ADMIN_SITE_WEB_SERVICE_SCOPE",
-            json.dumps("user"),
-        )
     if created_environment:
         for key in ("POSTGRES_PASSWORD", "FEEDBACK_POSTGRES_PASSWORD"):
             configuration.set_configuration_value(
@@ -951,7 +710,7 @@ def setup_example(
         if not created_environment:
             raise ValueError(
                 "an existing environment file keeps its feedback sender credential; set it with "
-                "`uv run python scripts/admin.py config set .env FEEDBACK_GITHUB_TOKEN '\"TOKEN\"'`"
+                "`python scripts/admin.py config set .env FEEDBACK_GITHUB_TOKEN '\"TOKEN\"'`"
             )
         _require_publication_destination(root)
         configuration.set_configuration_value(
@@ -967,9 +726,9 @@ def setup_example(
     if not credential_path.exists():
         credentials.set_admin_password(username=options.username, password=options.password)
 
-    write("preflight the host")
-    _require_host_prerequisites(root, runner, write)
-    _show_origins(root, write)
+    write("preflight the container host")
+    _require_host_prerequisites(root, runner, write, serve_mode=options.serve_mode)
+    _show_origins(write, serve_mode=options.serve_mode)
 
     write("prepare the pinned embedding model")
     _prepare_embedding_artifact(
@@ -984,7 +743,15 @@ def setup_example(
         timeout=None,
     )
     runner.run(
-        (*mechanics.compose_prefix(interpreter=True), "up", "-d", "--wait", "db", "embedding"),
+        (
+            *mechanics.compose_prefix(interpreter=True),
+            "up",
+            "-d",
+            "--wait",
+            "--no-build",
+            "db",
+            "embedding",
+        ),
         cwd=root,
         timeout=timeout,
     )
@@ -997,41 +764,44 @@ def setup_example(
 
     write("migrate and load the example dataset")
     dataset_owner.migrate_configured_database(runner=runner)
-    interpreter = str(root / ".venv" / "bin" / "python")
-    runner.run((interpreter, "scripts/mock_data.py", "load"), cwd=root, timeout=None)
-    runner.run((interpreter, "scripts/mock_data.py", "write-artifacts"), cwd=root, timeout=None)
+    runner.run((sys.executable, "scripts/mock_data.py", "load"), cwd=root, timeout=None)
+    runner.run((sys.executable, "scripts/mock_data.py", "write-artifacts"), cwd=root, timeout=None)
 
     write("prepare the feedback store")
     _prepare_feedback_store(runner=runner)
+    _prepare_site_usage_directory()
 
-    write("build the native libraries and frontends")
-    runner.run(
-        (interpreter, "scripts/build_native.py", "--non-interactive"), cwd=root, timeout=None
+    write("build and start the site and the administration backend")
+    services = site_services(sender=publication)
+    runner.run_interactive(
+        (*mechanics.compose_prefix(interpreter=True), "build", *services),
+        cwd=root,
+        timeout=None,
     )
-    for argv in (
-        ("npm", "--prefix", "web", "run", "build"),
-        ("npm", "--prefix", "web", "run", "solver:build"),
-        ("npm", "--prefix", "admin-web", "run", "build"),
-    ):
-        runner.run(argv, cwd=root, timeout=None)
+    runner.run(
+        (
+            *mechanics.compose_prefix(interpreter=True),
+            "up",
+            "-d",
+            "--wait",
+            "--no-build",
+            *services,
+        ),
+        cwd=root,
+        timeout=timeout,
+    )
 
-    def prove() -> None:
-        _prove_shells(root=root)
-        dataset_owner.prove_serving_database(
-            load_raw_database_settings(),
-            previous_identity=None,
-            port=load_web_settings().web_port,
-        )
+    if options.serve_mode == "domain":
+        write("publish the site through the machine-wide proxy")
+        publish_configured_site(runner)
 
-    write("start and prove the site")
-    if options.mode == "user":
-        _, _, timer_unit = _install_user_units(root, runner, checkout_suffix=checkout_suffix)
-        if publication:
-            _enable_feedback_timer(runner, root, timer_unit)
-        _explain_linger(runner, root, write)
-        prove()
-    else:
-        _serve_foreground(root=root, runner=runner, prove=prove, write=write)
+    write("prove the site and the administration backend")
+    prove_shells()
+    dataset_owner.prove_serving_database(
+        load_raw_database_settings(),
+        previous_identity=None,
+        port=load_web_settings().web_port,
+    )
     return SelfHostReport(app_url=load_web_settings().web_app_url, dataset_id=None)
 
 
@@ -1043,16 +813,14 @@ def setup_real_database(
 ) -> SelfHostReport:
     """Create one named empty database, enroll it as Selected, and serve and prove it.
 
-    Prepared working files, both Compose services and idle stages are required. In user mode the
-    configured owned web unit and its serving identity are read before any mutation, and the same
-    unit is restarted through the shared restart owner. In foreground mode both ports must be free
-    and the operator is told to end the first workflow's pair. A repeat refuses inside the named
-    enrollment owner before another database, migration or server start.
+    Prepared working files, both Compose services and idle stages are required. The configured port
+    and the site's served identity are read before any mutation, and the running site container is
+    re-created through the shared re-create owner after the pointer switch. A repeat refuses inside
+    the named enrollment owner before another database, migration or server start.
     """
     root = administration.repository_root()
     _require_working_files(root)
     web = load_web_settings()
-    admin = load_admin_web_settings()
     if not {"db", "embedding"} <= _running_services(runner, root):
         raise ValueError(
             "the database and embedding services must already be running; run the example "
@@ -1060,44 +828,18 @@ def setup_real_database(
         )
     dataset_owner.require_stages_idle()
 
-    if options.mode == "user":
-        website = server.read_web_service(runner=runner)
-        lifecycle = load_local_lifecycle_settings()
-        with httpx.Client(
-            trust_env=False,
-            timeout=lifecycle.stop_timeout_seconds,
-            follow_redirects=False,
-        ) as client:
-            # A stopped web unit serves nothing to compare, as in a promotion.
-            try:
-                previous_identity = dataset_owner.read_serving_identity(client, website.port)
-            except httpx.ConnectError:
-                previous_identity = None
-        port = website.port
-
-        def start(prove: Callable[[], None]) -> None:
-            rebuild.restart_web(website, runner=runner)
-            prove()
-
-    else:
-        for label, host, candidate in (
-            ("feature web", web.web_host, web.web_port),
-            ("administration", admin.admin_web_host, admin.admin_web_port),
-        ):
-            if not _port_is_free(host, candidate):
-                raise ValueError(
-                    f"the configured {label} port {candidate} is already in use; end the first "
-                    "workflow's foreground pair with Ctrl-C before running this workflow"
-                )
-        write(
-            "end the first workflow's foreground pair with Ctrl-C before this workflow starts "
-            "its own pair"
-        )
-        previous_identity = None
-        port = web.web_port
-
-        def start(prove: Callable[[], None]) -> None:
-            _serve_foreground(root=root, runner=runner, prove=prove, write=write)
+    lifecycle = load_local_lifecycle_settings()
+    port = web.web_port
+    with httpx.Client(
+        trust_env=False,
+        timeout=lifecycle.stop_timeout_seconds,
+        follow_redirects=False,
+    ) as client:
+        # A stopped site container serves nothing to compare, as in a promotion.
+        try:
+            previous_identity = dataset_owner.read_serving_identity(client, port)
+        except httpx.ConnectError:
+            previous_identity = None
 
     write("create the named empty database")
     receipt: DatasetReceipt = dataset_owner.create_empty_selected_dataset(
@@ -1111,20 +853,62 @@ def setup_real_database(
     )
 
     write("start and prove the selected site")
-
-    def prove() -> None:
-        _prove_shells(root=root)
-        dataset_owner.prove_serving_dataset(receipt, previous_identity=previous_identity, port=port)
-
-    start(prove)
+    rebuild.recreate_web(runner=runner)
+    prove_shells()
+    dataset_owner.prove_serving_dataset(receipt, previous_identity=previous_identity, port=port)
     return SelfHostReport(app_url=web.web_app_url, dataset_id=receipt.dataset_id)
+
+
+def _publication_configured(root: Path) -> bool:
+    """Report whether this checkout holds a feedback token beyond the example placeholder."""
+    token = file_configuration.read_local_configuration(root).get("FEEDBACK_GITHUB_TOKEN")
+    placeholder = file_configuration.parse_local_configuration(
+        (root / "examples" / ".env.example").read_text(encoding="utf-8")
+    ).get("FEEDBACK_GITHUB_TOKEN")
+    return token is not None and token != placeholder
+
+
+def up_configured_stack(*, runner: mechanics.ProcessRunner, write: Callable[[str], None]) -> None:
+    """Build and start the configured stack, adding the services this host runs.
+
+    The four core services always start together. A local environment that carries a feedback token
+    beyond the example placeholder adds the sender, and a same-machine worker host adds the
+    profile-gated worker. The build is not bounded, and the start is bounded by the configured
+    database operation timeout.
+    """
+    root = administration.repository_root()
+    services = ["db", "embedding", *site_services(sender=_publication_configured(root))]
+    write(f"start {', '.join(services)}")
+    runner.run_interactive(
+        (*mechanics.compose_prefix(interpreter=True), "build", *services),
+        cwd=root,
+        timeout=None,
+    )
+    runner.run(
+        (
+            *mechanics.compose_prefix(interpreter=True),
+            "up",
+            "-d",
+            "--wait",
+            "--no-build",
+            *services,
+        ),
+        cwd=root,
+        timeout=load_administrative_dataset_settings().database_operation_timeout_seconds,
+    )
 
 
 __all__ = [
     "ExampleSetupInput",
+    "PublicSiteReport",
     "RealDatabaseSetupInput",
     "SelfHostReport",
-    "StartupMode",
+    "prove_shells",
+    "prove_web_shell",
+    "publish_configured_site",
     "setup_example",
     "setup_real_database",
+    "site_services",
+    "unpublish_configured_site",
+    "up_configured_stack",
 ]

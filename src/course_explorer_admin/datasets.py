@@ -881,43 +881,43 @@ def copy_to_selected(
     on_progress: Callable[[PromotionStep], None] | None = None,
     runner: mechanics.ProcessRunner,
 ) -> DatasetReceipt:
-    """Copy one enrolled dataset, build it, switch Selected, and prove the restarted site.
+    """Copy one enrolled dataset, build it, switch Selected, and prove the re-created site.
 
     The confirmation is required before any copy. Under the datasets action lock the previous
-    Selected dataset, its served identity and the checkout's own web unit are read before the
-    copy is made. A stopped web unit answers no feature report, so the promotion records no
-    previous identity and proceeds. The copy is built and verified before the Selected pointer
-    names it, and the site is then restarted and proved to serve the copy's artifact and, when a
+    Selected dataset, its served identity and the configured site port are read before the copy is
+    made. A stopped site container answers no feature report, so the promotion records no previous
+    identity and proceeds. The copy is built and verified before the Selected pointer names it, and
+    the site container is then re-created and proved to serve the copy's artifact and, when a
     previous identity was recorded, a changed identity.
 
     ``on_progress`` receives each coarse step immediately before that step's mutation, and
     ``rollback`` once before the previous pointer is restored. A caller that omits it gets the one
     ordinary final receipt.
 
-    A failed build switches nothing and restarts nothing. A failed restart or proof restores the
-    previous Selected pointer, restarts the site and proves the previous catalogue and feature
-    readiness. The promotion failure is raised again after a successful rollback. A failed
+    A failed build switches nothing and re-creates nothing. A failed re-create or proof restores
+    the previous Selected pointer, re-creates the site and proves the previous catalogue and
+    feature readiness. The promotion failure is raised again after a successful rollback. A failed
     rollback raises an ``ExceptionGroup`` holding both errors. Every failure keeps the created
     dataset, its dump and its completed artifacts for manual deletion.
     """
     if not confirm_restart:
-        raise ValueError("promotion restarts the serving web unit; confirm with --confirm-restart")
+        raise ValueError("promotion re-creates the serving site; confirm with --confirm-restart")
     settings = load_administrative_dataset_settings()
     root = admin_state_root(settings)
     with mechanics.exclusive_action_lock(root, controller_name="datasets"):
         previous = resolve_dataset_role(root, "selected")
-        # The site unit and its served identity belong to this checkout and are read before the
-        # copy, so a promotion cannot switch a unit it does not own or prove an unchanged identity.
-        from course_explorer_admin import rebuild, server
+        # The served identity belongs to this checkout's own site and is read before the copy, so a
+        # promotion cannot prove a site it does not serve.
+        from course_explorer_admin import rebuild
 
-        website = server.read_web_service(runner=runner)
+        port = load_web_settings().web_port
         with httpx.Client(
             trust_env=False,
             timeout=load_local_lifecycle_settings().stop_timeout_seconds,
             follow_redirects=False,
         ) as client:
             try:
-                previous_identity = read_serving_identity(client, website.port)
+                previous_identity = read_serving_identity(client, port)
             except httpx.ConnectError:
                 previous_identity = None
         _report(on_progress, "copy")
@@ -931,15 +931,15 @@ def copy_to_selected(
         _write_pointer(root, "selected", copy.dataset_id)
         try:
             _report(on_progress, "restart")
-            rebuild.restart_web(website, runner=runner)
+            rebuild.recreate_web(runner=runner)
             _report(on_progress, "prove")
-            prove_serving_dataset(copy, previous_identity=previous_identity, port=website.port)
+            prove_serving_dataset(copy, previous_identity=previous_identity, port=port)
         except Exception as error:
             _report(on_progress, "rollback")
             try:
                 _write_pointer(root, "selected", previous.dataset_id)
-                rebuild.restart_web(website, runner=runner)
-                prove_serving_dataset(previous, previous_identity=None, port=website.port)
+                rebuild.recreate_web(runner=runner)
+                prove_serving_dataset(previous, previous_identity=None, port=port)
             except Exception as rollback_error:
                 raise ExceptionGroup(
                     "promotion failed and the previous Selected dataset was not restored",

@@ -76,8 +76,8 @@ export function copyToWorking(
  * Copy one listed source dataset and promote the copy to Selected.
  *
  * The request answers one newline-delimited stream, so each step its owner reports reaches `onStep`
- * before the terminal receipt. The confirmation is sent unchanged and gates the serving restart in
- * the owning service.
+ * before the terminal receipt. The confirmation is sent unchanged and gates the site container
+ * re-create in the owning service.
  */
 export function copyToSelected(
   sourceDatasetId: string,

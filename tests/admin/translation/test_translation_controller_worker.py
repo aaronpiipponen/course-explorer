@@ -120,6 +120,7 @@ def test_gpu_interval_yields_after_retained_translation_checkpoint(
 ) -> None:
     """A completed checkpoint over the loaded-GPU interval yields an unloaded paused state."""
     configure(monkeypatch, tmp_path)
+    monkeypatch.setenv("WORKER_GPU_REBOOT_ENABLED", "true")
     monkeypatch.setenv("WORKER_GPU_REBOOT_INTERVAL_MINUTES", "1")
     session_value = session()
     directory, session_value = seed_directory(tmp_path, session_value)

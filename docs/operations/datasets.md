@@ -2,6 +2,8 @@
 
 A dataset is one complete database of courses, modules, and derived data, where the web server serves Selected and the pipeline stages write Working.
 
+The administration commands on this page run in the administration container, so no host interpreter is needed. `PROJECT` is the instance's Compose project.
+
 ## The two pointers and their receipts
 
 Two pointers under `ADMIN_STATE_ROOT` name the two roles. `selected-dataset.json` names the dataset the site serves. `working-dataset.json` names the dataset the stages use. `ADMIN_STATE_ROOT` is in `config/database.toml`.
@@ -25,7 +27,7 @@ A missing Selected pointer beside dataset or session records fails with setup gu
 ## Enrolling a dataset
 
 ```bash
-uv run python scripts/admin.py setup datasets
+docker exec PROJECT-admin-1 python scripts/admin.py setup datasets
 ```
 
 The explicit command migrates the configured database to the migration head of the checkout, verifies it, writes the initial receipt, and selects it. It starts the server database service when the service is not running. With a dataset already selected it returns the receipt it holds and writes nothing.
@@ -33,7 +35,7 @@ The explicit command migrates the configured database to the migration head of t
 An enrollment interrupted between the initial receipt and the pointer is published from that retained receipt alone when it is the sole enrolled dataset, matches the configured database and leaves no Working pointer or recorded session. Any other retained state fails rather than being enrolled over.
 
 ```bash
-uv run python scripts/admin.py datasets ensure-selected
+docker exec PROJECT-admin-1 python scripts/admin.py datasets ensure-selected
 ```
 
 This deploy command reuses a valid Selected dataset and raises on inconsistent enrollment. On a bootstrap state root it leaves the configured database unenrolled when its name equals `EXAMPLE_POSTGRES_DB`, and otherwise enrolls it through the same explicit owner. It performs no interrupted-enrollment repair.
@@ -51,9 +53,9 @@ A failed create or migration preserves whatever it created for explicit maintena
 A stage start, a worker session, and every dataset verification require the database to be at the single migration head of the executing checkout. A database whose current head differs, or that carries no version, is refused with fixed guidance, and no processing and no automatic migration happens.
 
 ```bash
-uv run python scripts/admin.py migrate selected
-uv run python scripts/admin.py migrate working
-uv run python scripts/admin.py migrate database
+docker exec PROJECT-admin-1 python scripts/admin.py migrate selected
+docker exec PROJECT-admin-1 python scripts/admin.py migrate working
+docker exec PROJECT-admin-1 python scripts/admin.py migrate database
 ```
 
 `migrate selected` and `migrate working` apply the migration head to the named role's database and return a fresh verification. A Working migration takes the checkout reservation and requires all four stages idle with no live recorded process before it applies. A Selected migration takes no checkout reservation and does not read the stage state. `migrate database` applies the same head to the configured database of a bootstrap state root and refuses an enrolled deployment.
@@ -80,7 +82,7 @@ One confined path holds each dataset's retained dump. A return downloads the wor
 ## Copy to Working
 
 ```bash
-uv run python scripts/admin.py datasets copy-to-working SOURCE_DATASET_ID
+docker exec PROJECT-admin-1 python scripts/admin.py datasets copy-to-working SOURCE_DATASET_ID
 ```
 
 Copy to Working creates a new dataset from an enrolled source, verifies the restored copy, writes a copied receipt, and publishes the Working pointer last. The source may be Selected, Working or any retained dataset whose database is present. Every stage must be idle before any copy mutation, and the command holds the checkout reservation before it takes the dataset action lock, so a preparation stage or another Working operation refuses before any copy work.
@@ -94,28 +96,30 @@ The unassigned copy primitive creates the same verified dataset without publishi
 ## Promotion to Selected
 
 ```bash
-uv run python scripts/admin.py datasets copy-to-selected SOURCE_DATASET_ID --confirm-restart
+docker exec PROJECT-admin-1 python scripts/admin.py datasets copy-to-selected SOURCE_DATASET_ID --confirm-restart
 ```
 
-Promotion copies one enrolled source, builds and verifies the copy, publishes it as Selected, restarts the site's web unit and proves the restarted site serves the copy. The source may be Selected, Working or any retained dataset whose database is present. Every running stage is left alone.
+Promotion copies one enrolled source, builds and verifies the copy, publishes it as Selected, re-creates the site container and proves the re-created site serves the copy. The source may be Selected, Working or any retained dataset whose database is present. Every running stage is left alone.
 
 The confirmation is required before any copy. Without `--confirm-restart` the command refuses and mutates nothing. A bootstrap state root refuses with the enrollment guidance.
 
-The command reads the previous Selected dataset, the checkout's own web unit and that unit's current dataset identity before the copy. When the web unit is stopped, the command records no previous identity and proceeds, because a stopped unit serves nothing to compare. It then dumps and restores the copy, builds the copy's serving artifacts for the site's configured embedding mode, and only after that build publishes the Selected pointer. The web unit is the only unit restarted, and its loopback bind is verified. The proof requires a nonempty dataset identity that differs from the previous one, and the served catalogue body to equal the new artifact with that identity appended. With no recorded previous identity, the proof requires the served catalogue body alone.
+The command reads the previous Selected dataset, the configured site port and that site's current dataset identity before the copy. When the site container is stopped, the command records no previous identity and proceeds, because a stopped container serves nothing to compare. It then dumps and restores the copy, builds the copy's serving artifacts for the site's configured embedding mode, and only after that build publishes the Selected pointer. The site container is the only serving process re-created, and its HTML shell is verified. The proof requires a nonempty dataset identity that differs from the previous one, and the served catalogue body to equal the built artifact with that identity appended. With no recorded previous identity, the proof requires the served catalogue body alone.
 
-A failed build switches nothing and restarts nothing. A failed restart or proof restores the previous Selected pointer, restarts the web unit and proves the previous catalogue and feature readiness. The promotion failure is then raised again. When that rollback also fails, the command raises both errors together.
+A failed build switches nothing and re-creates nothing. A failed re-create or proof restores the previous Selected pointer, re-creates the site container and proves the previous catalogue and feature readiness. The promotion failure is then raised again. When that rollback also fails, the command raises both errors together.
 
 The owner reports six coarse steps to an optional observer: `copy`, `build`, `switch`, `restart`, `prove` and, once before a rollback restores the previous pointer, `rollback`. Each step arrives immediately before that step's work, and no step carries a fraction, an elapsed estimate or an accumulated history. The machine command and every other caller supply no observer and print the one final receipt, so the report and the stored formats are the same with or without it.
 
 Every failed attempt keeps its created dataset, dump, receipt and completed artifacts for manual deletion. Promotion performs no rotation, no prune and no automatic deletion, and it neither changes the Working pointer nor requires the stages to be idle.
 
-![Promotion copies one source dataset, builds the copy's serving artifacts, publishes the Selected pointer, restarts the web unit and proves the catalogue and a changed identity. A failed restart or proof restores the previous Selected pointer, restarts the unit and proves the previous catalogue.](/docs/diagrams/dataset-promotion.svg)
+![Promotion copies one source dataset, builds the copy's serving artifacts, publishes the Selected pointer, re-creates the site container and proves the served catalogue against the copy's artifact and a changed dataset identity. A failed re-create or proof restores the previous Selected pointer, re-creates the site and proves the previous catalogue.](/docs/diagrams/dataset-promotion.svg)
 
 A standalone `serving-artifacts` build is the separate setup and maintenance action, and `serving-artifacts --prune` is its separate housekeeping action.
 
 ## The return and the Working role
 
 A return restores the verified dump of the returned worker database into the derived server database, checks the restored database against the return snapshot, writes the returned receipt, publishes it as Working, and rotates older Working ancestors. The Selected pointer is not read for the source and is never changed. [Worker sessions](/docs/operations/worker-sessions.md) describes the session that produces the returned dump.
+
+A same-machine worker returns through the same dump and receipt path. Its worker copy lives in the instance's `db` service, the dump is one mounted file that the return copies from the session directory, and a stage starts and stops no database service of its own.
 
 The names are derived from the session id. `ADMIN_DATASET_DATABASE_PREFIX` derives the server database of a returned dataset, `ADMIN_WORKER_DATABASE_PREFIX` derives the worker database, and both prefixes are in `config/worker.toml`.
 
@@ -140,7 +144,7 @@ Two guards protect other databases. A database name on the fixed protected list 
 ## The dataset listing
 
 ```bash
-uv run python scripts/admin.py datasets list
+docker exec PROJECT-admin-1 python scripts/admin.py datasets list
 ```
 
 The listing discovers every receipt-bearing dataset directory, so replacing Working from another source cannot hide an older manual copy. It prints role datasets even when their resources are missing, and any other dataset when it holds a retained dump, a derived artifact namespace or a present database. With the database probe unavailable it lists every known receipt and marks each database presence unavailable.
@@ -156,13 +160,13 @@ The listing reads local receipts and files first and then probes every known dat
 Manual cleanup deletes one target the operator names, and it leaves the automatic rule of the rotation above alone.
 
 ```bash
-uv run python scripts/admin.py datasets delete DATASET_ID
-uv run python scripts/admin.py datasets delete DATASET_ID --confirm-working
-uv run python scripts/admin.py backups list
-uv run python scripts/admin.py backups delete NAME
+docker exec PROJECT-admin-1 python scripts/admin.py datasets delete DATASET_ID
+docker exec PROJECT-admin-1 python scripts/admin.py datasets delete DATASET_ID --confirm-working
+docker exec PROJECT-admin-1 python scripts/admin.py backups list
+docker exec PROJECT-admin-1 python scripts/admin.py backups delete NAME
 ```
 
-`datasets delete DATASET_ID` drops the named dataset's server database, removes its retained dump and removes its derived artifact namespace across academic years. Every receipt-bearing dataset except Selected is eligible, the initial dataset included. Working additionally requires `--confirm-working` and every stage idle, and it holds the checkout reservation around the idle guard and the resource drop. A successful Working deletion clears only the Working pointer, and a later stage refuses until a new copy to Working. Every other deletion takes no checkout reservation, and neither do Copy to Selected, the reads and the listing.
+`datasets delete DATASET_ID` drops the named dataset's server database, removes its retained dump and removes its derived artifact namespace across academic years. Every receipt-bearing dataset except Selected is eligible, the initial dataset included. Working additionally requires `--confirm-working` and every stage idle, and it holds the checkout reservation around the idle guard and the resource drop. A successful Working deletion clears only the Working pointer, and the next stage start refuses until a dataset is copied to Working. Every other deletion takes no checkout reservation, and neither do Copy to Selected, the reads and the listing.
 
 | Refused target | The rule that refuses it |
 |---|---|
@@ -198,19 +202,19 @@ Files kept under `data/backups` are outside every dataset chain, and rotation de
 
 A failed return leaves both role pointers in place, retains the returned dump, and writes no receipt, so the return can run again over the retained dump. A failed restore leaves the target database in place. A failed migration changes no data and no file, and a rotation that cannot validate its chain refuses before the first deletion.
 
-The worker's own copy is separate from every server dataset. Its cleanup drops the exact worker database only after the returned dataset receipt and the recorded return snapshot agree on their session and database identity.
+The worker's own copy is separate from every server dataset. Its cleanup drops the exact worker database only after the returned dataset receipt and the recorded return snapshot agree on their session and database identity. A same-machine worker's copy lives in the instance's `db` service. A stage requires that service and leaves it under the instance stack's restart policy.
 
 ## Reading a dataset role
 
 The read-only reports and migrations name their role.
 
 ```bash
-uv run python scripts/admin.py summary catalogue --role selected
-uv run python scripts/admin.py summary inference --role working
-uv run python scripts/admin.py coverage teaching-text --role working
-uv run python scripts/admin.py coverage embedding --role selected
-uv run python scripts/admin.py coverage inference --role working
-uv run python scripts/admin.py serving-artifacts
+docker exec PROJECT-admin-1 python scripts/admin.py summary catalogue --role selected
+docker exec PROJECT-admin-1 python scripts/admin.py summary inference --role working
+docker exec PROJECT-admin-1 python scripts/admin.py coverage teaching-text --role working
+docker exec PROJECT-admin-1 python scripts/admin.py coverage embedding --role selected
+docker exec PROJECT-admin-1 python scripts/admin.py coverage inference --role working
+docker exec PROJECT-admin-1 python scripts/admin.py serving-artifacts
 ```
 
 A Selected read resolves the Selected pointer and serves the configured database in bootstrap. A Working read requires the Working pointer and fails with copy guidance when it is absent. The catalogue summary and the coverage reports describe the stored courses, modules, translations, vectors, and inferred prerequisites of the named role.
@@ -219,7 +223,7 @@ A Selected read resolves the Selected pointer and serves the configured database
 
 The four preparation stages write Working, so their rows are not served and need no build or restart. A build over a Working receipt writes that dataset's artifacts without changing the Selected dataset or what the site serves.
 
-A selected-dataset change reaches the site through `datasets copy-to-selected SOURCE_DATASET_ID --confirm-restart`, which builds the copy before publishing it, restarts only the web unit and proves the served catalogue. [Operations](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) states the sequence. After that restart, `serving-artifacts --prune` removes the target database's obsolete builds, the other year families' builds, and owned temporary outputs without building or switching anything, while keeping the active current build, unknown names and other database namespaces. [Serving artifact build](/docs/backend/text-and-vectors/serving-artifact-build.md#the-artifact-family-the-build-directory-and-the-embedding-directory) states which embedding directories it retains in each mode.
+A selected-dataset change reaches the site through `datasets copy-to-selected SOURCE_DATASET_ID --confirm-restart`, which builds the copy before publishing it, re-creates only the site container and proves the served catalogue. [Operations](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) states the sequence. After that restart, `serving-artifacts --prune` removes the target database's obsolete builds, the other year families' builds, and owned temporary outputs without building or switching anything, while keeping the active current build, unknown names and other database namespaces. [Serving artifact build](/docs/backend/text-and-vectors/serving-artifact-build.md#the-artifact-family-the-build-directory-and-the-embedding-directory) states which embedding directories it retains in each mode.
 
 [Operator menu](/docs/operations/operator-menu.md#coverage-and-summaries) lists four reports. Each report asks for Selected or Working first. The `coverage inference` command is machine-only.
 

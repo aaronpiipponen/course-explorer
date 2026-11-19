@@ -48,7 +48,7 @@ This tab shows an ordered list of programmes, each with the official structure o
 
 ### Profiles and language
 
-The profile menu in the top bar is named after the active profile (**My plan** by default). It lists the saved profiles and creates new ones. A profile stores the selected and completed courses, exclusions and graph marks, the ordered programmes with their edits, and the tab options. The open tab belongs to the browser tab instead, so switching a profile never moves it. The FI/EN switch sets the interface wording and the language of official course and module names.
+The profile menu in the top bar is named after the active profile (**My plan** by default). It lists the saved profiles and creates profiles. A profile stores the selected and completed courses, exclusions and graph marks, the ordered programmes with their edits, and the tab options. The open tab belongs to the browser tab instead, so switching a profile never moves it. The FI/EN switch sets the interface wording and the language of official course and module names.
 
 The same menu exports one profile or all saved data as a file and imports those files for transfer between browsers or backup. [Profiles and language](/docs/guides/profiles-and-language.md#exporting-a-profile-or-the-saved-data) describes the file controls and their confirmations.
 
@@ -74,7 +74,7 @@ The limits adjust to server load, using the host's CPU use and the admitted requ
 
 - Official facts come from the configured university's public curriculum source, read through its Sisu Kori API, its Peppi legacy or Peppi PSG public JSON API, or its Peppi guide pages. Machine translations and inferred prerequisites are derived information, marked as such in the interface.
 - Prerequisite inference runs separately from the website, on a model hosted by whoever operates the project. The website only shows the results.
-- One browser `localStorage` store holds the profiles. Profiles stay in the browser that created them.
+- One browser `localStorage` store holds the profiles. Profiles live in the browser that created them.
 - Selection and completion use one canonical course identity in every tab.
 - The application reads the catalogue without changing it, and it starts no ingestion, translation, embedding or inference. A feedback submission is stored in the site's separate feedback application store.
 - The interface does not establish enrolment eligibility, and its analysis is not verified by the university.
@@ -93,41 +93,33 @@ The console reports the serving state, the website, the host, the database and t
 
 Requirements:
 
-- Linux and a CPython 3.14.3 interpreter that exposes `os.memfd_create` and `os.MFD_CLOEXEC`. Not every build of that version does, so check the capability before selecting the interpreter.
-- [uv](https://docs.astral.sh/uv/).
-- Node.js `^22.22.2 || >=24.15.0` with npm.
-- The Chromium cache that a headless guide capture renders through, prepared with `uv run playwright install chromium --only-shell`.
-- Docker with Docker Compose, which the administration command runs through `sudo docker compose`.
-- The `libpq` and `libstdc++` shared libraries, which the compiled native modules load at run time. The native build itself runs in a container.
-- `curl`, which the setup's version check requires.
-- systemd with its user manager, `loginctl` and `systemctl --user`, for the user-unit startup mode.
-- Access to the Python and npm package registries, and to the pinned embedding model download.
-- The GitHub CLI `gh` for a site that publishes feedback, from a release whose `gh issue create` supports `--attach` and `--body-file -`.
+- Docker Engine with the Docker Compose plugin, and an account that can write `/var/run/docker.sock`. The account joins the `docker` group and starts a new login session once.
+- Git.
+- A checkout of this repository. The example workflow writes `INSTANCE_KEY` into `config/web.toml`, the one university instance the site presents, from the tracked university table in `universities.toml` at the repository root, each container and volume derives from that key, and the four ports are chosen values that default to the tracked example files. The key also selects the university's public curriculum source and course-page address. The table holds 36 entries in four source families: 35 name a real university, and the last names the fictional Example University the example configuration presents.
+- Access to the image registries the server images and the pinned database and embedding images build from, and to the model file at the download address that `EMBEDDING_ARTIFACT_URL` names.
 
-1. Prepare the environment from the checkout.
+The site image carries Python, the locked dependencies and the `libpq` and `libstdc++` libraries, and the administration image carries those and the headless browser. Operating a copy needs no host interpreter, Node installation, compiler or native library. Working on the code needs the development toolchain: a CPython 3.14.3 interpreter that exposes `os.memfd_create`, [uv](https://docs.astral.sh/uv/), Node.js `^22.22.2 || >=24.15.0` with npm, and the Chromium cache that `uv run playwright install chromium --only-shell` prepares. [Local checks](/docs/testing/local-checks.md) runs that toolchain.
+
+1. Clone the checkout and enter it.
 
    ```bash
-   python3.14 -c 'import os, sys; assert sys.version_info[:3] == (3, 14, 3); fd = os.memfd_create("course-explorer-preflight", os.MFD_CLOEXEC); os.close(fd); print(sys.executable)'
-   uv sync --locked --no-managed-python --python "$(python3.14 -c 'import sys; print(sys.executable)')"
-   npm --prefix web ci --engine-strict --no-audit --no-fund
-   npm --prefix admin-web ci --engine-strict --no-audit --no-fund
-   .venv/bin/python -c 'import os; fd = os.memfd_create("course-explorer-preflight", os.MFD_CLOEXEC); os.close(fd)'
-   uv run playwright install chromium --only-shell
+   git clone REPOSITORY_ADDRESS course-explorer
+   cd course-explorer
    ```
 
-   `uv run playwright install chromium --only-shell` prepares the shared Chromium cache that a guide capture with the `headless_browser` fetch variant renders through. The example setup runs no guide capture.
-
-2. Run the example setup workflow through the administration command.
+2. Run the example setup through the bootstrap.
 
    ```bash
-   uv run python scripts/admin.py
+   scripts/self-host.sh example
    ```
 
-   Choose **1 Setup/preflight**, then **12 Set up example site**, and answer the prompts. The workflow writes the working configuration, both database passwords and the administration account. It builds and starts the database and the embedding service, migrates and loads the invented example dataset, prepares the feedback application store, builds the native libraries and both frontends, starts the site and the administration console, and proves both. On a checkout with no working file, the first run renames the folder to `course-explorer-<key>`, rebuilds `.venv` there and stops with the command to run again from the renamed path. [Installation](/docs/getting-started/installation.md) lists every prompt and gives the non-interactive form of the same command.
+   The bootstrap builds the administration image, runs the workflow inside it, and leaves the site, the administration backend and the database and embedding services running under the Compose restart policy. The workflow writes the working configuration, both database passwords and the administration account, migrates and loads the invented example dataset, prepares the feedback application store, and proves both backends. [First-run installation reference](/docs/operations/first-run-setup.md#the-example-prompts) lists every prompt, and [the machine input](/docs/operations/first-run-setup.md#the-machine-input) gives the non-interactive form of the same command.
 
 3. Open the address the workflow prints.
 
-The example setup serves invented data. Its courses, modules, prerequisites and structure rules are not university data, and its embedding vectors are bundled with it, so the import runs no embedding stage, and the workflow downloads the pinned model that the embedding service loads. A copy that serves real curriculum data runs the real-database workflow instead, which creates one empty Selected database and builds its serving artifacts on the same prepared checkout. [Self-hosting](/docs/getting-started/self-hosting.md) installs the copy as services behind a reverse proxy.
+The worker is optional. Ingestion and embedding run on the server, and the example site serves without a worker, which adds machine-translated teaching text and inferred prerequisites. [A Windows WSL worker](/docs/getting-started/worker-wsl.md) and [a Linux worker](/docs/getting-started/worker-linux.md) install one.
+
+The example setup serves invented data. Its courses, modules, prerequisites and structure rules are not university data, and its embedding vectors are bundled with it, so the import runs no embedding stage, and the workflow downloads the pinned model that the embedding service loads. A copy that serves real curriculum data runs `scripts/self-host.sh real-database` instead, which creates one empty Selected database and builds its serving artifacts on the same checkout. [Self-hosting](/docs/getting-started/self-hosting.md) describes the services, the reverse proxy and the maintenance commands.
 
 The lint, Python, database, browser application and console checks for a local checkout are in [Local checks](/docs/testing/local-checks.md).
 
@@ -137,7 +129,7 @@ The lint, Python, database, browser application and console checks for a local c
 - [`src/course_explorer_admin/`](/src/course_explorer_admin/): the administration command, with the operator menu, the four preparation stages and their lifecycle.
 - [`src/course_explorer_web/`](/src/course_explorer_web/): the read-only FastAPI application that serves the browser application and its endpoints.
 - [`src/course_explorer_admin_web/`](/src/course_explorer_admin_web/): the separate signed-in administration backend that runs the fixed administration commands for the console.
-- [`scripts/`](/scripts/): the administration command, the example data loader, thin command-line adapters over the read commands, and the launchers of the web server and the administration backend.
+- [`scripts/`](/scripts/): the administration command, the host bootstrap, the worker install, the example data loader, the native build and the thin command-line adapters over the read commands.
 - [`web/`](/web/): the React, TypeScript and Vite browser application.
 - [`admin-web/`](/admin-web/): the React, TypeScript and Vite administration console.
 
@@ -149,4 +141,4 @@ This project is licensed under the MIT License. See [`LICENSE`](/LICENSE).
 
 ## Independent project
 
-This is an independent project. It is not affiliated with, endorsed by, or connected to any university. University curriculum data and other university material are not covered by this project's software license and remain subject to their own terms. The example dataset in `data/mock/` is invented for this project and is not university data.
+This is an independent project. It is not affiliated with, endorsed by, or connected to any university. University curriculum data and other university material are not covered by this project's software license and are subject to their own terms. The example dataset in `data/mock/` is invented for this project and is not university data.

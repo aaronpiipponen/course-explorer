@@ -1,6 +1,6 @@
 # Dashboard
 
-The Dashboard tab reports the state of the serving site, the host, the database and the embedding runtime, and it warns when a hub file needs a web server restart.
+The Dashboard tab reports the state of the serving site, the host, the database and the embedding runtime, and it warns when a hub file needs the site container re-created.
 
 ## The five panels
 
@@ -25,25 +25,25 @@ The panel describes the dataset the site serves.
 
 The **embedding hub**, **outcomes hub** and **web server hubs** rows appear only on a site that serves the embedding features. On a site with them off, the panel shows its dataset rows and the note **Embedding features are off on this site.** instead of the three hub rows, and the read resolves no embedding directory. The hub rows report the file times of the configured embedding directory.
 
-A hub file with no file time shows its path and **unknown** in place of the time. When the site has no Selected pointer and serves its configured database, the dataset rows read **unknown**. When the dataset state tree is a symlink or not a directory, the panel adds **The dataset state is unavailable: data/ or its dataset tree is a symlink or not a directory.** and every dataset row reads **unknown**.
+A hub file with no file time shows its path and **unknown** in place of the time. When the site has no Selected pointer and serves its configured database, the dataset rows read **unknown**. When the dataset state tree is a symlink or not a directory, the panel adds **The dataset state is unavailable: the configured state root or its dataset tree is a symlink or not a directory.** and every dataset row reads **unknown**.
 
-The panel adds **Restart the web server to load the hub files written at {time}.** when an embedding directory hub file was written after the web server started. A site with the embedding features off reports no hub file, so the hint never appears there. The time is the writing time of a newer hub file of the configured embedding directory. The hint names only those two build files: it does not prove that every artifact file belongs to the same build, that the build succeeded or that the study fragments or packed search relation are current. A completed build reaches serving after the full supervisor restart that [Operations](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) states, and `serving-artifacts --prune` runs after that restart succeeds. On a site that serves the embedding features the supervisor maps the shared stores in the opened set and every worker inherits them, and the recommendation handler reads the stored neighbour rows.
+The panel adds **Re-create the site container to load the hub files written at {time}.** when an embedding directory hub file was written after the web server started. A site with the embedding features off reports no hub file, so the hint never appears there. The time is the writing time of a newer hub file of the configured embedding directory. The hint names only those two build files: it does not prove that every artifact file belongs to the same build, that the build succeeded or that the study fragments or packed search relation are current. A completed build reaches serving after the full supervisor restart that [Operations](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) states, and `serving-artifacts --prune` runs after that restart succeeds. On a site that serves the embedding features the supervisor maps the shared stores in the opened set and every worker inherits them, and the recommendation handler reads the stored neighbour rows.
 
 ## Website
 
-The panel describes the site's web service.
+The panel describes the site's container.
 
 | Row | Meaning |
 |---|---|
-| **state** | The state of the service, such as active or inactive. |
-| **bind** | The configured address and port the web server binds. |
+| **state** | The state of the site container, such as running or absent. |
+| **image** | The container image, shown when the Compose listing reports it. |
+| **bind** | The configured address and port the site's web server binds. |
 | **configured processes** | The number of worker processes the settings configure, rather than a measured count. |
-| **entry point** | The script the web service runs. |
-| **checkout** | The branch and the first nine characters of the revision of the checkout the console reads. |
-| **uptime** | How long the web service has run. |
-| **started** | When the web service started, in UTC to the whole minute. |
+| **checkout** | The branch, when the checkout is on one, and the first nine characters of the revision of the checkout the console reads. |
+| **uptime** | How long the site container has run. |
+| **started** | When the site container started, in UTC to the whole minute. |
 
-**uptime** and **started** read **unknown** when the service is not active.
+**uptime** and **started** read **unknown** when the container is not running. The **checkout** row names the checkout the console reads, not the revision of the running container.
 
 ## Host
 

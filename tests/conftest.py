@@ -54,8 +54,9 @@ def _file_free_settings_environment(
     password. The environment-only marker stops the settings layer from reopening any file. A
     database integration test leaves the ``DatabaseSettings`` aliases and the environment-only
     marker untouched, so the database settings owner composes its normal local configuration for the
-    fixture, snapshot, Compose and local subprocess boundaries alike. That credential is consumed
-    only by the owning database operations and is never extracted, inspected or copied. Both kinds
+    fixture, snapshot, Compose and local subprocess boundaries alike. That credential is consumed by
+    the owning database operations and by the one loader read below, which sets the resolved password
+    alone in the test process environment. No test tool opens, prints or copies the file. Both kinds
     keep an already-set process value, and the ordinary kind forces the environment-only marker.
     The ordinary kind injects every absent example alias, and the integration kind injects the
     absent example aliases outside ``DatabaseSettings``.
@@ -89,13 +90,39 @@ def _fresh_native_fact_handle(request: pytest.FixtureRequest) -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def _temporary_repository_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def _local_integration_database_password(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    """Hand the integration selection the owning local database password once.
+
+    The database settings owner composes ``config/*.toml`` and the checkout's ignored environment
+    file. The temporary repository root below rebinds that owner for the test body, so an
+    integration test resolves the real checkout's settings here, before the rebind, and sets only
+    the resolved password in the process environment for the in-process reads that follow. A
+    password already exported (CI) wins. An ordinary test reads no environment file, and no test
+    opens, prints or copies the credential.
+    """
+    if request.node.get_closest_marker("integration") is None:
+        return
+    if "POSTGRES_PASSWORD" in os.environ:
+        return
+    settings = load_raw_database_settings()
+    monkeypatch.setenv("POSTGRES_PASSWORD", settings.postgres_password.get_secret_value())
+
+
+@pytest.fixture(autouse=True)
+def _temporary_repository_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    _local_integration_database_password: None,
+) -> None:
     """Point the repository-root owner at the calling test's temporary repository.
 
-    Every state, usage and serving write resolves under the temporary root, so no test writes the
-    checkout's own state, usage or serving files. The product entries the reads need are linked from
-    the checkout by the shared repository helper, and a write through a linked entry reaches the
-    checkout.
+    The integration password fixture resolves the checkout's own database settings, so it runs
+    before this rebind. Every state, usage and serving write resolves under the temporary root, so no
+    test writes the checkout's own state, usage or serving files. The product entries the reads need
+    are linked from the checkout by the shared repository helper, and a write through a linked entry
+    reaches the checkout.
     """
     bind_repository_root(monkeypatch, tmp_path)
 

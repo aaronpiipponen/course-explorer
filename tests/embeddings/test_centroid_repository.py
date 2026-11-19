@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from course_explorer.config import COURSE_EMBEDDING_DIMENSION
+from course_explorer.constants import COURSE_EMBEDDING_DIMENSION
 from course_explorer.db.models import CourseEmbeddingCentroid
 from course_explorer.db.session import session_scope
 from course_explorer.embeddings.centroid_repository import CourseCentroidRepository

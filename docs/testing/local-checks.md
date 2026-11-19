@@ -12,7 +12,7 @@ The web dependencies are also required by the Python suite. The session fixture 
 ./.venv/bin/python scripts/build_native.py --fixtures
 ```
 
-The web build compiles the pages selected by `config/wiki.json`. Every page it lists and every local image those pages reference must exist in the checkout. The wiki compiler test builds temporary repository trees of its own.
+The web build compiles the pages selected by `config/wiki.json`. Every page it lists and every local image those pages reference must exist in the checkout. The wiki build test builds temporary repository trees of its own.
 
 The PostgreSQL selection needs a configured Compose `db` service that is already running. The session fixture `_database_session` in `tests/conftest.py` connects to that service through the configured database settings and builds nothing. The Compose commands use the wrapper described in [The Compose environment file](/docs/backend/configuration.md#the-compose-environment-file).
 
@@ -38,7 +38,7 @@ uv run pytest
 
 ## PostgreSQL selection
 
-A local integration run consumes the checkout's own database settings: `POSTGRES_HOST`, `POSTGRES_PORT` and `POSTGRES_USER` from `config/database.toml`, and `POSTGRES_PASSWORD` from the ignored environment file. A process environment value under the same key takes precedence. Ordinary tests read the example configuration instead. The connection values are consumed by the owning settings loader and the database client.
+A local integration run consumes the checkout's own database settings: `POSTGRES_HOST`, `POSTGRES_PORT` and `POSTGRES_USER` from `config/database.toml`, and the password that configuration names. The integration selection's password is read once through the owning settings loader before the temporary repository root is bound and set in the test process environment, so a value exported under `POSTGRES_PASSWORD` wins (CI does this). Ordinary tests read the example configuration instead. The connection values are consumed by the owning settings loader and the database client.
 
 The role in the commands below is `course_explorer`, the `POSTGRES_USER` value in `examples/config/database.toml`. Create the disposable database when it is absent. The existence check prints `1` for a database that is present and an empty line otherwise:
 
@@ -113,7 +113,7 @@ npm --prefix admin-web run format:check
 npm --prefix admin-web run build
 ```
 
-`npm --prefix web run test` runs Vitest over `web/src/**/*.test.ts` and then the wiki compiler test with Node's test runner. `npm --prefix admin-web run test` runs Vitest over the console sources. The web build compiles the wiki pages that `config/wiki.json` selects, and the console build compiles the console sources. Run the commands of an app when its own source changes. The rendered checks include the feedback form's publication choice in the web app and the feedback inbox's named local deletion in the console.
+`npm --prefix web run test` runs Vitest over `web/src/**/*.test.ts` and then the two wiki tests, `tools/wiki/build.test.mjs` and `tools/wiki/help-links.test.mjs`, with Node's test runner. `npm --prefix admin-web run test` runs Vitest over the console sources. The web build compiles the wiki pages that `config/wiki.json` selects, and the console build compiles the console sources. Run the commands of an app when its own source changes. The rendered checks include the feedback form's publication choice in the web app and the feedback inbox's named local deletion in the console.
 
 ## Browser journeys
 

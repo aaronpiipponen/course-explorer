@@ -1,7 +1,7 @@
 """Closed text-free controller contracts for remote translation.
 
 This module owns the durable session/state schemas and the strict loaders for one remote
-translation session. The neutral SSH/WSL transport lives in ``course_explorer_admin.transport`` and
+translation session. The neutral SSH transport lives in ``course_explorer_admin.transport`` and
 the shared process/file mechanics live in ``course_explorer_admin.mechanics`` and
 ``course_explorer.administration``. The neutral control intent lives in ``course_explorer_admin.remote``.
 Every DTO is frozen and closed.
@@ -33,7 +33,7 @@ from course_explorer.validation import (
     require_finite_nonnegative,
     require_sha256,
 )
-from course_explorer_admin.remote import (  # noqa: F401 - re-exported neutral control contract
+from course_explorer_admin.remote import (  # noqa: F401, re-exported neutral control contract
     WorkerControl as TranslationControllerControl,
 )
 from course_explorer_admin.remote import (

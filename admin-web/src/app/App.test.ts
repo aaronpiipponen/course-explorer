@@ -44,7 +44,7 @@ const OPERATOR = "synthetic-operator";
 const PASSWORD = "synthetic-console-password";
 const ADMIN_REBUILD_PATH = "/api/settings/rebuild-admin";
 
-const ADMIN_REBUILD_REPORT = { schema_version: 1, steps: ["frontend"] };
+const ADMIN_REBUILD_REPORT = { schema_version: 1, steps: ["image"] };
 
 const ANONYMOUS: SessionReport = {
   authenticated: false,
@@ -67,14 +67,14 @@ const AUTHENTICATED: SessionReport = {
 const DASHBOARD_REPORT: ServerStatusReport = {
   schema_version: 1,
   website: {
-    unit: "synthetic-web.service",
-    state: "active",
-    substate: "running",
-    main_pid: 42,
+    container: {
+      state: "running",
+      health: null,
+      image: "course-explorer-site:local",
+    },
     host: "127.0.0.1",
     port: 8037,
     configured_workers: 2,
-    entry_point: "scripts/run_web.sh",
     started_at: "2026-10-10T04:39:00Z",
     uptime_seconds: 3600,
     checkout_branch: "admin-ui",
@@ -1171,7 +1171,7 @@ describe("signed-in tab session", () => {
     expect(calls.length).toBe(before);
     expect(headingIsHidden(container, wording.dashboard.serving)).toBe(false);
     expect(container.textContent).toContain(
-      DASHBOARD_REPORT.website.entry_point,
+      DASHBOARD_REPORT.website.container.image,
     );
     expect(container.textContent).toContain(wording.dashboard.embeddingHub);
     expect(markerOf(container, wording.dashboard.serving)).not.toContain(

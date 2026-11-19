@@ -65,7 +65,7 @@ from course_explorer_admin.datasets import (
 from course_explorer_admin.snapshots import dump_database, restore_database
 
 if TYPE_CHECKING:
-    from course_explorer_admin.transport import SshWslTransport
+    from course_explorer_admin.transport import WorkerTransport
 
 _STAGE = Literal["translation", "inference"]
 
@@ -412,7 +412,7 @@ def export_worker_database(
 def return_worker_database(
     session: WorkerDatasetSession,
     *,
-    transport: SshWslTransport,
+    transport: WorkerTransport,
     runner: mechanics.ProcessRunner,
 ) -> DatasetReceipt:
     """Export (or reuse) the worker snapshot, download it, and retain it through the sole writer."""

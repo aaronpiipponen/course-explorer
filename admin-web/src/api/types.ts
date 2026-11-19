@@ -23,16 +23,12 @@ export interface ContainerStatus {
   image: string | null;
 }
 
-/** The web server unit's state, listener and checkout identity. */
+/** The running site container, its configured bind and the checkout identity. */
 export interface WebsiteStatus {
-  unit: string;
-  state: string;
-  substate: string;
-  main_pid: number;
+  container: ContainerStatus;
   host: string;
   port: number;
   configured_workers: number;
-  entry_point: string;
   started_at: string | null;
   uptime_seconds: number | null;
   checkout_branch: string;

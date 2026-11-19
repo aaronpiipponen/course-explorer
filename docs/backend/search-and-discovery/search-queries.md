@@ -147,13 +147,13 @@ Every command that resolves a caller identity builds one `CourseResolver` over i
 
 ## Where to change a behavior
 
-- Adding a match method to the package: add the token to `SearchMethod` and `_SEARCH_METHODS` in `src/course_explorer/config.py` for the tier order, dispatch it in `UnifiedCourseSearchService.search`, and register it in `_merge`.
+- Adding a match method to the package: add the token to `SearchMethod` and `_SEARCH_METHODS` in `src/course_explorer/config/search.py` for the tier order, dispatch it in `UnifiedCourseSearchService.search`, and register it in `_merge`.
 - The merged order: `_merge` in `src/course_explorer/search/unified.py`.
 - The semantic statement and its filters: `SemanticSearchRepository.search` in `src/course_explorer/search/repository.py`.
 - Name or code normalization and the string methods: `normalized_text` in `src/course_explorer/search/projection.py`, `official_display_name`, and the three methods of `CourseLookupService` in `src/course_explorer/search/lookup.py`. The browser port is `normalizeLookup`, `narrowCourses` and `narrowModules` in `web/src/shared/course/`.
 - Caller input rules: `run_search_command` in `src/course_explorer/search/commands.py`.
-- The query embedding request policy: the two `SEARCH_EMBEDDING_*` fields of `SearchSettings` in `src/course_explorer/config.py` and the projection `run_search_command` builds from them.
+- The query embedding request policy: the two `SEARCH_EMBEDDING_*` fields of `SearchSettings` in `src/course_explorer/config/search.py` and the projection `run_search_command` builds from them.
 - The optional semantic composition and the effective tier order: `run_search_command` in `src/course_explorer/search/commands.py` and `UnifiedCourseSearchService.search` in `src/course_explorer/search/unified.py`.
-- The native fuzzy-name scorer and the container build that produces it: `native/lookup.cpp` and `scripts/build_native.py`. [Native libraries](/docs/architecture/native-libraries.md) states the three compiled libraries and the host libraries they load.
+- The native fuzzy-name scorer and the container build that produces it: `native/lookup.cpp` and `scripts/build_native.py`. [Native libraries](/docs/architecture/native-libraries.md) states the three compiled libraries and the libraries they load.
 
 The four methods, the tier order, and the two reads over official identity are described in [Search](/docs/backend/search-and-discovery/search.md).

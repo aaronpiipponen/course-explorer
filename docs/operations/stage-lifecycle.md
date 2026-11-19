@@ -85,7 +85,7 @@ Normalization is one transaction. It reads the completed capture, validates it, 
 
 ## Active time and coverage
 
-A stage measures active time only while it is running and its recorded start time is known, so the idle time between two runs does not inflate the measured rate or the projected remaining time.
+A stage measures active time only while it is running and its recorded start time is known, so the idle time between two runs does not inflate the measured rate or the projected remaining time. A backward step of the host clock contributes no elapsed time, so the measured active time never decreases.
 
 Coverage counts the stored rows of the role the report names, so it says what has been written and not what the run is doing. The two facts are independent. A stage returns to idle after a completed run with complete coverage, and it also returns to idle after a partial run with pending rows. The [Full-catalogue inference run](/docs/experiments/inference/full-catalogue-inference-run.md) report records a run that stopped part-way and resumed to a complete cycle. The coverage reports are described in the [Operator menu](/docs/operations/operator-menu.md#coverage-and-summaries).
 
@@ -95,9 +95,10 @@ A remote stage finalizes on the worker and returns the finished copy before it r
 
 ## The periodic reboot
 
-The worker restarts after a configured amount of model run time, set by `WORKER_GPU_REBOOT_INTERVAL_MINUTES` in `config/worker.toml`. The interval is a worker-side setting, and the example sets 120 minutes.
-
-The clock accumulates only while a local model is loaded on the worker, and it samples at a completed unit of work and at every recorded failed generation attempt, so a run with repeated failed attempts reaches the restart as well. The worker then reports a paused status with the restart due, the administration command releases its owned worker resources, restarts the worker once, and resumes the same session with its pending work. A pause that arrives first issues no restart. [Inference scheduling and disposition](/docs/backend/inference/inference-scheduling.md#the-periodic-reboot) describes the timing rule for the inference stage.
+The worker restarts after a configured amount of model run time while `WORKER_GPU_REBOOT_ENABLED` in
+`config/worker.toml` is on, and `WORKER_GPU_REBOOT_INTERVAL_MINUTES` in the same file sets the
+interval. [Worker sessions](/docs/operations/worker-sessions.md#the-periodic-reboot) states the
+configured values, the clock, the samples, the restart proof and the resumed session.
 
 ## Failures and recovery
 

@@ -1,20 +1,17 @@
-"""One owned, least-privilege worker runtime for translation, rerank, and generation.
+"""One owned, least-privilege worker runtime for translation, rerank and generation.
 
-This module owns the single recurring model-process launcher shared by the translation
-worker and the inference worker. It has three parts: pure configured builders that turn
-validated settings into the exact loopback ``llama-server`` argv, one :class:`OwnedWorkerRuntime`
-that starts and stops exactly one child through one ``runtime.json`` identity record, and
-one :class:`WorkerInferenceRuntime` that exposes the product
+The module turns validated settings into the exact loopback ``llama-server`` argv, starts and stops
+exactly one child through one ``runtime.json`` identity record, and exposes the product
 ``activate``/``stop``/``start_rerank``/``stop_rerank``/``request_scope`` protocol over that owner.
-
-Every fresh launch reuses the authoritative prepared-runtime checks (checkout revision, executable
-readiness, and the pinned artifact SHA-256), so a fresh spawn verifies the artifact hash, while a
-live same-spec reuse performs no further spawn, hash, or health loop. It downloads, builds, and
-installs only through the explicit provisioning path, derives ownership from its own boot and argv
-record, and signals only a process it proves it owns. An exited current child (including an unreaped
-zombie) is not live and clears the handle on successful stop. Model children launch with a closed
-environment allowlist so no ambient credential crosses into them, and the module reads
-``/proc/<pid>/cmdline`` for identity.
+Every fresh launch reuses the prepared-runtime checks for the checkout revision, executable
+readiness and the pinned artifact SHA-256, while a live same-spec reuse spawns nothing and performs
+no hash or health loop. Provisioning runs only through the explicit path, ownership comes from the
+boot and argv record, and only a process the runtime proves it owns receives a signal. An exited
+current child, including an unreaped zombie, is not live, and a successful stop clears the handle.
+Model children launch with a closed environment allowlist that carries the configured backend's
+device variable (``HIP_VISIBLE_DEVICES`` for ROCm and ``CUDA_VISIBLE_DEVICES`` for CUDA, with the
+ROCDXG detection flag only for a ROCm worker inside WSL), so no ambient credential crosses into
+them, and identity is read from ``/proc/<pid>/cmdline``.
 """
 
 from __future__ import annotations
@@ -39,6 +36,7 @@ from course_explorer.config import (
     InferenceRerankSettings,
     InferenceSettings,
     TranslationSettings,
+    WorkerGpuSettings,
 )
 from course_explorer_admin import mechanics
 from course_explorer_admin.provisioning_worker import require_prepared_runtime
@@ -59,20 +57,43 @@ class WorkerRuntimeSpec:
     artifact_sha256: str
     host: str
     port: int
+    gpu_backend: str
+    gpu_target: str
+    environment: tuple[tuple[str, str], ...]
 
 
-def _runtime_binary(revision: str) -> str:
-    """Return the one convention-owned llama-server binary for a runtime revision."""
-    return str(mechanics.runtime_checkout_directory(revision) / "build" / "bin" / "llama-server")
+def _runtime_binary(revision: str, gpu_backend: str, gpu_target: str) -> str:
+    """Return the one convention-owned llama-server binary for a runtime revision, backend and
+    target."""
+    return str(mechanics.runtime_executable(revision, gpu_backend, gpu_target))
 
 
-def translation_runtime_spec(settings: TranslationSettings, root: Path) -> WorkerRuntimeSpec:
+def gpu_child_environment(gpu: WorkerGpuSettings, host_kind: str) -> tuple[tuple[str, str], ...]:
+    """Return the configured GPU variables for one model child.
+
+    A ROCm child selects its card through ``HIP_VISIBLE_DEVICES`` and needs the ROCDXG device
+    flag only inside WSL. A CUDA child selects its card through ``CUDA_VISIBLE_DEVICES``. A
+    same-machine CUDA worker's override exposes the configured card alone to its container, so the
+    card the child sees is ordinal zero rather than the host index.
+    """
+    if gpu.gpu_backend == "rocm":
+        variables = [("HIP_VISIBLE_DEVICES", str(gpu.gpu_device_index))]
+        if host_kind == "wsl":
+            variables.append(("HSA_ENABLE_DXG_DETECTION", "1"))
+        return tuple(variables)
+    index = "0" if host_kind == "same-machine" else str(gpu.gpu_device_index)
+    return (("CUDA_VISIBLE_DEVICES", index),)
+
+
+def translation_runtime_spec(
+    settings: TranslationSettings, root: Path, *, gpu: WorkerGpuSettings, host_kind: str
+) -> WorkerRuntimeSpec:
     """Return the configured translation runtime launch."""
     artifact = root / settings.translation_artifact_path
     return WorkerRuntimeSpec(
         mode="translation",
         argv=(
-            _runtime_binary(settings.translation_runtime_revision),
+            _runtime_binary(settings.translation_runtime_revision, gpu.gpu_backend, gpu.gpu_target),
             "--model",
             str(artifact),
             "--alias",
@@ -96,17 +117,22 @@ def translation_runtime_spec(settings: TranslationSettings, root: Path) -> Worke
         artifact_sha256=settings.translation_artifact_sha256,
         host=settings.translation_host,
         port=settings.translation_port,
+        gpu_backend=gpu.gpu_backend,
+        gpu_target=gpu.gpu_target,
+        environment=gpu_child_environment(gpu, host_kind),
     )
 
 
-def rerank_runtime_spec(settings: InferenceRerankSettings, root: Path) -> WorkerRuntimeSpec:
+def rerank_runtime_spec(
+    settings: InferenceRerankSettings, root: Path, *, gpu: WorkerGpuSettings, host_kind: str
+) -> WorkerRuntimeSpec:
     """Return the cross-encoder loopback launch contract."""
     artifact = root / settings.inference_rerank_artifact_path
     batch_size = str(settings.inference_rerank_batch_size)
     return WorkerRuntimeSpec(
         mode="rerank",
         argv=(
-            _runtime_binary(settings.inference_runtime_revision),
+            _runtime_binary(settings.inference_runtime_revision, gpu.gpu_backend, gpu.gpu_target),
             "--model",
             str(artifact),
             "--alias",
@@ -139,16 +165,24 @@ def rerank_runtime_spec(settings: InferenceRerankSettings, root: Path) -> Worker
         artifact_sha256=settings.inference_rerank_artifact_sha256,
         host=settings.inference_rerank_host,
         port=settings.inference_rerank_port,
+        gpu_backend=gpu.gpu_backend,
+        gpu_target=gpu.gpu_target,
+        environment=gpu_child_environment(gpu, host_kind),
     )
 
 
 def generation_runtime_spec(
-    settings: InferenceSettings, variant: InferenceLocalVariantSettings, root: Path
+    settings: InferenceSettings,
+    variant: InferenceLocalVariantSettings,
+    root: Path,
+    *,
+    gpu: WorkerGpuSettings,
+    host_kind: str,
 ) -> WorkerRuntimeSpec:
     """Return the generation launch for one selected ordered local fit key."""
-    artifact = root / settings.inference_primary_artifact_path
+    artifact = root / variant.artifact_path
     argv = [
-        _runtime_binary(settings.inference_runtime_revision),
+        _runtime_binary(settings.inference_runtime_revision, gpu.gpu_backend, gpu.gpu_target),
         "--model",
         str(artifact),
         "--alias",
@@ -201,9 +235,12 @@ def generation_runtime_spec(
         argv=tuple(argv),
         revision=settings.inference_runtime_revision,
         artifact=artifact,
-        artifact_sha256=settings.inference_primary_artifact_sha256,
+        artifact_sha256=variant.artifact_sha256,
         host=settings.inference_host,
         port=variant.port,
+        gpu_backend=gpu.gpu_backend,
+        gpu_target=gpu.gpu_target,
+        environment=gpu_child_environment(gpu, host_kind),
     )
 
 
@@ -259,13 +296,14 @@ class OwnedWorkerRuntime:
     def _remove_record(self) -> None:
         self._record_path().unlink(missing_ok=True)
 
-    def _child_environment(self) -> dict[str, str]:
-        """Return the closed model-child environment: HOME, PATH, optional lib path, and HSA flag."""
+    def _child_environment(self, spec: WorkerRuntimeSpec) -> dict[str, str]:
+        """Return the closed model-child environment: HOME, PATH, the spec's GPU variables, and an
+        optional lib path."""
         home = os.environ.get("HOME")
         path = os.environ.get("PATH")
         if not home or not path:
             raise ValueError("worker runtime launch requires HOME and PATH in the environment")
-        environment = {"HOME": home, "PATH": path, "HSA_ENABLE_DXG_DETECTION": "1"}
+        environment = {"HOME": home, "PATH": path, **dict(spec.environment)}
         library_path = os.environ.get("LD_LIBRARY_PATH")
         if library_path:
             environment["LD_LIBRARY_PATH"] = library_path
@@ -299,6 +337,8 @@ class OwnedWorkerRuntime:
             artifact=spec.artifact,
             artifact_sha256=spec.artifact_sha256,
             timeout=timeout,
+            gpu_backend=spec.gpu_backend,
+            gpu_target=spec.gpu_target,
         )
         listeners = self._runner.run(
             ("ss", "-H", "-ltn", f"sport = :{spec.port}"), cwd=self._root
@@ -310,7 +350,7 @@ class OwnedWorkerRuntime:
         process = self._runner.popen(
             spec.argv,
             cwd=self._root,
-            env=self._child_environment(),
+            env=self._child_environment(spec),
             stdout_path=self._directory / _LOG_NAME,
             stderr_path=self._directory / _LOG_NAME,
             start_new_session=True,
@@ -439,6 +479,8 @@ class WorkerInferenceRuntime:
         directory: Path,
         settings: InferenceSettings,
         rerank_settings: InferenceRerankSettings,
+        gpu: WorkerGpuSettings,
+        host_kind: str,
         health_attempts: int,
         interval: float,
         stop_timeout_seconds: float,
@@ -448,6 +490,8 @@ class WorkerInferenceRuntime:
         self._root = root
         self._settings = settings
         self._rerank_settings = rerank_settings
+        self._gpu = gpu
+        self._host_kind = host_kind
         self._health_attempts = health_attempts
         self._interval = interval
         self._stop_timeout_seconds = stop_timeout_seconds
@@ -486,7 +530,11 @@ class WorkerInferenceRuntime:
         """Load the configured local generation key, reusing the live same key."""
         if variant not in self._settings.inference_local_variants:
             raise ValueError("inference variant is not configured")
-        self._ensure(generation_runtime_spec(self._settings, variant, self._root))
+        self._ensure(
+            generation_runtime_spec(
+                self._settings, variant, self._root, gpu=self._gpu, host_kind=self._host_kind
+            )
+        )
         self._active_variant = variant
 
     def active_variant(self) -> InferenceLocalVariantSettings | None:
@@ -503,7 +551,11 @@ class WorkerInferenceRuntime:
 
     def start_rerank(self) -> None:
         """Load the cross-encoder key, reusing the live same key."""
-        self._ensure(rerank_runtime_spec(self._rerank_settings, self._root))
+        self._ensure(
+            rerank_runtime_spec(
+                self._rerank_settings, self._root, gpu=self._gpu, host_kind=self._host_kind
+            )
+        )
         self._active_variant = None
 
     def stop_rerank(self) -> None:

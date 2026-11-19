@@ -17,7 +17,7 @@
   <text x="184" y="90" text-anchor="middle" font-size="16" fill="#ececf2">Done</text>
   <text x="184" y="112" text-anchor="middle" font-size="14" fill="#a3a4b8">Complete without output</text>
 
-  <rect x="656" y="64" width="240" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
+  <rect x="646" y="64" width="260" height="64" rx="8" fill="#2e3045" stroke="#4a4c6b" stroke-width="1.5"/>
   <text x="776" y="90" text-anchor="middle" font-size="16" fill="#ececf2">Failed</text>
   <text x="776" y="112" text-anchor="middle" font-size="14" fill="#a3a4b8">Skipped, cycle incomplete</text>
 
@@ -41,11 +41,11 @@
             stroke-width="1.5" marker-end="url(#arrow)"/>
   <text x="532" y="288" font-size="14" fill="#a3a4b8">clear</text>
 
-  <line x1="304" y1="80" x2="656" y2="80" stroke="#a3a4b8" stroke-width="1.5"
+  <line x1="304" y1="80" x2="646" y2="80" stroke="#a3a4b8" stroke-width="1.5"
         marker-end="url(#arrow)"/>
   <text x="480" y="72" text-anchor="middle" font-size="14" fill="#a3a4b8">set failed</text>
 
-  <line x1="656" y1="112" x2="304" y2="112" stroke="#a3a4b8" stroke-width="1.5"
+  <line x1="646" y1="112" x2="304" y2="112" stroke="#a3a4b8" stroke-width="1.5"
         marker-end="url(#arrow)"/>
   <text x="480" y="132" text-anchor="middle" font-size="14" fill="#a3a4b8">set done</text>
 </svg>

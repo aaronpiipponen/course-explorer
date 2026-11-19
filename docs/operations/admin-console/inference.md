@@ -33,7 +33,7 @@ The run starts the inference stage on the worker. [Worker sessions](/docs/operat
 
 ## When no dataset is selected
 
-The report panels read only while the site has a Selected dataset. A site with no Selected dataset shows **No dataset is selected on this site.** in place of their rows and issues no summary read. A site whose dataset state is unavailable shows **The dataset state is unavailable: data/ or its dataset tree is a symlink or not a directory.** in the four summary panels and issues no summary read.
+The report panels read only while the site has a Selected dataset. A site with no Selected dataset shows **No dataset is selected on this site.** in place of their rows and issues no summary read. A site whose dataset state is unavailable shows **The dataset state is unavailable: the configured state root or its dataset tree is a symlink or not a directory.** in the four summary panels and issues no summary read.
 
 When the summary read runs, the backend resolves Working first and Selected when Working is absent, and the Coverage panel names the role it read. A Selected fallback shows a **Selected dataset** strip with a **No Working dataset** hint.
 

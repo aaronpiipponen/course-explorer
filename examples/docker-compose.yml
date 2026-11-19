@@ -1,6 +1,10 @@
-# Example Compose stack for the database and embedding services.
+# Example Compose stack for the database, the embedding service and the three server processes.
 # Stable identity for the example containers and their database volume. The instance key supplies
 # the project name through the generated Compose environment bridge.
+#
+# The `admin` service mounts the account's whole `.ssh` directory read-only, with every key and
+# known-host entry in it. That mount gives the console the account's device-local SSH
+# authentication for the configured worker, and the directory never enters an image.
 name: ${COURSE_EXPLORER_PROJECT_NAME:?COURSE_EXPLORER_PROJECT_NAME is required}
 
 services:
@@ -20,7 +24,8 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
+      # Probes the configured database over TCP, the path the host and the other services use.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -50,6 +55,8 @@ services:
         source: ${EMBEDDING_ARTIFACT_PATH:?EMBEDDING_ARTIFACT_PATH is required}
         target: /models/embedding.gguf
         read_only: true
+        bind:
+          create_host_path: false
     cap_drop:
       - ALL
     security_opt:
@@ -61,6 +68,256 @@ services:
       timeout: 5s
       retries: 30
       start_period: 30s
+
+  # The feature site backend. The host network namespace makes its loopback bind the host's
+  # loopback, so it reaches the database port and the embedding service as configured.
+  web:
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+      target: site
+    network_mode: host
+    # The site process's 4 GiB memory and memory-plus-swap ceiling.
+    mem_limit: 4294967296
+    memswap_limit: 4294967296
+    user: "${COURSE_EXPLORER_UID:?COURSE_EXPLORER_UID is required}:${COURSE_EXPLORER_GID:?COURSE_EXPLORER_GID is required}"
+    # The two database passwords the site process reads, from the generated Compose environment.
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      FEEDBACK_POSTGRES_PASSWORD: ${FEEDBACK_POSTGRES_PASSWORD:?FEEDBACK_POSTGRES_PASSWORD is required}
+    # The site reads the dataset pointer, receipt and serving artifacts under the configured state
+    # root, and it writes the usage record and the feedback attachments.
+    volumes:
+      - type: bind
+        source: ./config
+        target: /app/config
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./${ADMIN_STATE_ROOT:?ADMIN_STATE_ROOT is required}
+        target: /app/${ADMIN_STATE_ROOT:?ADMIN_STATE_ROOT is required}
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./data/usage
+        target: /app/data/usage
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./data/attachments
+        target: /app/data/attachments
+        bind:
+          create_host_path: false
+    depends_on:
+      db:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    restart: unless-stopped
+
+  # The administration backend. It reaches the host's Docker through the mounted socket and its
+  # group, and the checkout and the shared directory are mounted at the Docker host's own paths so
+  # a Compose command issued here names the same containers, volumes and build contexts.
+  admin:
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+      target: admin
+    network_mode: host
+    user: "${COURSE_EXPLORER_UID:?COURSE_EXPLORER_UID is required}:${COURSE_EXPLORER_GID:?COURSE_EXPLORER_GID is required}"
+    group_add:
+      - "${COURSE_EXPLORER_DOCKER_GID:?COURSE_EXPLORER_DOCKER_GID is required}"
+    environment:
+      HOME: /home/course
+      PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
+      ADMIN_SHARED_ROOT: ${ADMIN_SHARED_ROOT:?ADMIN_SHARED_ROOT is required}
+      COURSE_EXPLORER_HOST_ROOT: ${COURSE_EXPLORER_HOST_ROOT:?COURSE_EXPLORER_HOST_ROOT is required}
+      COURSE_EXPLORER_SSH_DIR: ${COURSE_EXPLORER_SSH_DIR:?COURSE_EXPLORER_SSH_DIR is required}
+      COURSE_EXPLORER_HOST_HOME: ${COURSE_EXPLORER_HOST_HOME:?COURSE_EXPLORER_HOST_HOME is required}
+      # The checkout's `.git` is a mount owned by the operator and the image's `/app` is owned by
+      # root, so git refuses `/app` as a foreign repository without this declaration.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /app
+    volumes:
+      - type: bind
+        source: ${COURSE_EXPLORER_HOST_ROOT:?COURSE_EXPLORER_HOST_ROOT is required}
+        target: ${COURSE_EXPLORER_HOST_ROOT:?COURSE_EXPLORER_HOST_ROOT is required}
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ADMIN_SHARED_ROOT:?ADMIN_SHARED_ROOT is required}
+        target: ${ADMIN_SHARED_ROOT:?ADMIN_SHARED_ROOT is required}
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config
+        target: /app/config
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./data
+        target: /app/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.git
+        target: /app/.git
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${COURSE_EXPLORER_SSH_DIR:?COURSE_EXPLORER_SSH_DIR is required}
+        target: /home/course/.ssh
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
+    depends_on:
+      db:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    restart: unless-stopped
+
+  # The same-machine worker. It runs the worker-side stage helpers from this host's read-only
+  # checkout and on the host's data and shared directories, with the host's GPU devices and runtime
+  # tree, and it holds the same full Docker control the worker account already has through its
+  # `docker` group. The `worker` profile keeps it out of a remote-worker instance's stack, and the
+  # generated `docker-compose.worker.yml` override adds the host's device and vendor-library facts.
+  # The site service keeps its own four working-path mounts.
+  worker:
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+      target: worker
+    profiles: ["worker"]
+    network_mode: host
+    user: "${COURSE_EXPLORER_UID:?COURSE_EXPLORER_UID is required}:${COURSE_EXPLORER_GID:?COURSE_EXPLORER_GID is required}"
+    group_add:
+      - "${COURSE_EXPLORER_DOCKER_GID:?COURSE_EXPLORER_DOCKER_GID is required}"
+    environment:
+      HOME: ${COURSE_EXPLORER_HOST_HOME:?COURSE_EXPLORER_HOST_HOME is required}
+      COURSE_EXPLORER_HOST_ROOT: ${COURSE_EXPLORER_HOST_ROOT:?COURSE_EXPLORER_HOST_ROOT is required}
+      PYTHONPATH: /app/src
+      UV_PROJECT_ENVIRONMENT: /app/.venv
+      UV_CACHE_DIR: /tmp/uv-cache
+    volumes:
+      - type: bind
+        source: ${COURSE_EXPLORER_HOST_ROOT:?COURSE_EXPLORER_HOST_ROOT is required}
+        target: ${COURSE_EXPLORER_HOST_ROOT:?COURSE_EXPLORER_HOST_ROOT is required}
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config
+        target: /app/config
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./data
+        target: /app/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./models
+        target: /app/models
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ADMIN_SHARED_ROOT:?ADMIN_SHARED_ROOT is required}
+        target: ${ADMIN_SHARED_ROOT:?ADMIN_SHARED_ROOT is required}
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${COURSE_EXPLORER_HOST_HOME:?COURSE_EXPLORER_HOST_HOME is required}/.local/src
+        target: ${COURSE_EXPLORER_HOST_HOME:?COURSE_EXPLORER_HOST_HOME is required}/.local/src
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
+    depends_on:
+      db:
+        condition: service_healthy
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    restart: unless-stopped
+
+  # One bounded feedback publication attempt every 60 seconds, in the administration image. The
+  # service is started only for a site whose operator set up publication, and its three read-only
+  # working-path mounts hold the feedback store and its attachments.
+  sender:
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+      target: admin
+    network_mode: host
+    user: "${COURSE_EXPLORER_UID:?COURSE_EXPLORER_UID is required}:${COURSE_EXPLORER_GID:?COURSE_EXPLORER_GID is required}"
+    volumes:
+      - type: bind
+        source: ./config
+        target: /app/config
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./data
+        target: /app/data
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOME: /home/course
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["while true; do python -m course_explorer.feedback.sender; sleep 60; done"]
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    restart: unless-stopped
 
 volumes:
   postgres_data:

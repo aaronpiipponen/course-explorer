@@ -24,7 +24,7 @@ The four counts are per field and mapped target language in `TranslationSelectio
 
 `request_json_with_retries` in `src/course_explorer/http_retry.py` owns the attempt loop with `max_attempts=settings.translation_max_attempts`, `retry_backoff_seconds=settings.translation_retry_backoff_seconds`, `retry_contract_errors=True`, and the `before_request` and `request_scope` callbacks of the worker. An `httpx.TransportError`, a 429 or 5xx status, and a response that fails the runtime contract are retryable, the delay before the retry that follows attempt N is the configured backoff times `2 ** (N - 1)`, and every other status is terminal. A refusal before the first request raises `RequestNotStarted` before any I/O, and a refusal during a backoff raises the terminal request error instead of sleeping again.
 
-`TranslationSettings.provenance_model` in `src/course_explorer/config.py` composes the persisted model identity from the model repository, the pinned revision, the artifact quantization, and the artifact SHA-256.
+`TranslationSettings.provenance_model` in `src/course_explorer/config/translation.py` composes the persisted model identity from the model repository, the pinned revision, the artifact quantization, and the artifact SHA-256.
 
 ## The resumable worker and its evidence
 

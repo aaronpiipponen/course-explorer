@@ -79,7 +79,10 @@ export function deleteBackup(
   });
 }
 
-/** Rebuild the site's frontend, containers, web server and its verified bind. */
+/**
+ * Build the site image, re-create the database and embedding containers, re-create the site
+ * container and prove its loopback bind.
+ */
 export function rebuildSite(
   csrfToken: string,
   signal?: AbortSignal,
@@ -108,15 +111,14 @@ export function rebuildAdminPanel(
   });
 }
 
-/** Set up or update the worker over one origin branch. */
+/** Update the worker code over one origin branch. */
 export function setupWorker(
   branch: string,
-  codeOnly: boolean,
   csrfToken: string,
   signal?: AbortSignal,
 ): Promise<ProvisioningReport> {
   return runCommand<ProvisioningReport>("/api/settings/worker/setup", {
-    body: { branch, code_only: codeOnly },
+    body: { branch },
     csrfToken,
     signal,
   });

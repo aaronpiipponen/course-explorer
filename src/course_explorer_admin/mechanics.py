@@ -139,9 +139,9 @@ def compose_prefix(*, non_interactive: bool = False, interpreter: bool = False) 
     """Return the exact Compose bridge prefix shared by both hosts.
 
     Every local and remote caller generates its own temporary environment-file bridge through
-    ``course_explorer_admin.compose``. With ``non_interactive=True`` the bridge runs ``sudo -n``,
-    which a passwordless host accepts and an interactive prompt cannot be answered from a fixed
-    administrative command. Every forwarded Compose argument follows the trailing ``--``.
+    ``course_explorer_admin.compose``. ``non_interactive=True`` marks the bridge non-interactive,
+    so a fixed administrative command never waits at a ``sudo`` prompt. Every forwarded Compose
+    argument follows the trailing ``--``.
 
     ``interpreter=True`` runs the bridge in the calling process's interpreter, which holds the
     package and its dependencies. The rule for choosing the form: a command that runs on this host
@@ -354,9 +354,9 @@ class SubprocessRunner:
                 stderr_handle.close()
 
 
-# A bytes-returning Compose execution callback: local stages bind a subprocess runner, the remote
-# translation stage binds its SSH/WSL helper. It adapts the real bytes-versus-CompletedProcess
-# seams without a second transport.
+# A bytes-returning Compose execution callback. A local stage binds a subprocess runner and a
+# remote stage binds its SSH helper, so both return captured stdout bytes rather than a
+# completed process.
 type ComposeCommand = Callable[[Sequence[str]], bytes]
 
 
@@ -380,9 +380,20 @@ def current_revision(runner: ProcessRunner, root: Path) -> str:
     return runner.run(("git", "rev-parse", "HEAD"), cwd=root).stdout.decode().strip()
 
 
-def runtime_checkout_directory(revision: str) -> Path:
-    """Return the one convention-owned local llama.cpp checkout directory for a runtime revision."""
-    return Path.home() / ".local" / "src" / f"llama.cpp-{revision}"
+def runtime_checkout_directory(revision: str, gpu_backend: str, gpu_target: str) -> Path:
+    """Return the one convention-owned local llama.cpp checkout directory for a runtime revision,
+    GPU backend and build target."""
+    return Path.home() / ".local" / "src" / f"llama.cpp-{revision}-{gpu_backend}-{gpu_target}"
+
+
+def runtime_executable(revision: str, gpu_backend: str, gpu_target: str) -> Path:
+    """Return the one convention-owned llama-server executable of a runtime checkout."""
+    return (
+        runtime_checkout_directory(revision, gpu_backend, gpu_target)
+        / "build"
+        / "bin"
+        / "llama-server"
+    )
 
 
 def running_compose_services(run: ComposeCommand, *, interpreter: bool = False) -> set[str]:
@@ -471,8 +482,9 @@ def active_seconds(
     """Add the in-flight interval only for a live running process with a recorded start time.
 
     Offline time between checkpoints does not inflate throughput or ETA, and the durable base
-    applies to every non-running lifecycle.
+    applies to every non-running lifecycle. A host clock that steps backward contributes no elapsed
+    time, so the accumulated active time never decreases and a session stays runnable.
     """
     if running and running_since is not None:
-        return seconds + (now - running_since).total_seconds()
+        return seconds + max(0.0, (now - running_since).total_seconds())
     return seconds

@@ -33,7 +33,9 @@ def test_run_spec_derives_identity_from_settings_execution_and_versions() -> Non
     execution = execution_profile(settings)
     spec = run_spec(settings, execution=execution)
 
-    assert spec.model_identity == settings.primary_model_identity
+    assert spec.model_identity == settings.local_model_identity(
+        settings.inference_local_variants[0]
+    )
     assert spec.runtime_identity == settings.local_runtime_identity(
         settings.inference_local_variants[0]
     )
@@ -45,7 +47,9 @@ def test_run_spec_derives_identity_from_settings_execution_and_versions() -> Non
     identity = run_identity_sha256(spec)
 
     # A changed model/runtime, version field, or route changes run identity.
-    other_model = run_spec(inference_settings(INFERENCE_PRIMARY_MODEL_REPOSITORY="Qwen/Other"))
+    variants = [variant.model_dump() for variant in settings.inference_local_variants]
+    variants[0]["model_repository"] = "Qwen/Other"
+    other_model = run_spec(inference_settings(INFERENCE_LOCAL_VARIANTS=variants))
     assert run_identity_sha256(other_model) != identity
     assert run_identity_sha256(spec.model_copy(update={"pipeline_version": "v2"})) != identity
     route_changed = spec.model_copy(update={"configuration": {"route": "other-executor"}})

@@ -90,7 +90,7 @@ and it raises `ValueError` when `ceiling <= floor`.
 
 ## Settings
 
-`SearchSettings` in `src/course_explorer/config.py` holds the comparison policy, read from `config/search.toml`. [Comparison](/docs/backend/search-and-discovery/comparison.md#languages-and-fields) lists the keys and example values of the three weights, and [Comparison](/docs/backend/search-and-discovery/comparison.md#overlap-calibration-and-the-verdict) lists the six threshold keys and example values.
+`SearchSettings` in `src/course_explorer/config/search.py` holds the comparison policy, read from `config/search.toml`. [Comparison](/docs/backend/search-and-discovery/comparison.md#languages-and-fields) lists the keys and example values of the three weights, and [Comparison](/docs/backend/search-and-discovery/comparison.md#overlap-calibration-and-the-verdict) lists the six threshold keys and example values.
 
 `SearchSettings.validate_comparison_threshold_order` refuses a floor at or above the ceiling, a partial threshold at or above the heavy threshold, and a loose threshold at or above the same-area threshold.
 

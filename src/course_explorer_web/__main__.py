@@ -2,25 +2,16 @@
 
 The supervisor resolves the one settings bundle, opens the serving artifact set and both catalogue
 response forms, opens the search embedding client when the site serves the embedding features, and
-builds the lookup projection and shared cache regions before it creates signal handlers, listeners
-or threads. The site's embedding switch is read once there and the resolved embedding configuration
-is what the artifact opening and the settings bundle use. A site that serves the embedding features
-thus opens the hub pair of its family's embedding directory, the shared stores and the packed search
-row once. A site with them off needs the catalogue and the study fragments alone.
-It then forks every worker from that inherited state. The supervisor owns every listening socket
-for its whole life: the configured listener and one ephemeral loopback listener per worker. A worker
-exit starts a forked replacement on the same descriptor and the inherited projection, so the port
-never changes and the other workers keep serving. The router keeps its subprocess lifetime. When one
-role exits the configured number of times inside the configured window, the supervisor stops every
-child and returns nonzero for systemd's ``Restart=on-failure``. SIGTERM and SIGINT stop every child
-and return zero without a replacement. No request is replayed, a replacement router starts with
-fresh admission state, and only the exited process's in-flight requests fail.
-
-The configured listener accepts connections from the moment it binds, so a client that connects
-during startup waits in the kernel backlog. The router starts only after every initial worker
-reports completed startup through a one-byte pipe owned by that worker's own fork. A worker
-replacement gets a fresh pipe and its predecessor's readiness never releases the barrier. A full
-restart of the unit closes the configured port before the replacement process binds it again.
+builds the lookup projection and shared cache regions before it creates listeners or threads. It
+then forks every worker from that inherited state and owns every listening socket for its whole
+life: the configured listener and one ephemeral loopback listener per worker. A worker exit starts
+a forked replacement on the same descriptor, so the port never changes and the other workers keep
+serving, and no request is replayed. The router keeps its subprocess lifetime and starts only
+after every initial worker reports completed startup through its own one-byte pipe. A role that
+exits the configured number of times inside the configured window stops every child and returns
+nonzero for the container restart policy, while SIGTERM and SIGINT stop every child and return
+zero. The configured listener queues connections from the moment it binds, so a client that
+connects during startup waits in the kernel backlog.
 """
 
 from __future__ import annotations

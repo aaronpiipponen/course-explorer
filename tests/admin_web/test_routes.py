@@ -267,8 +267,8 @@ _ROUTES: dict[str, tuple[str, str, dict[str, object] | None, tuple[str, ...], tu
     "settings-worker-setup": (
         "POST",
         "/api/settings/worker/setup",
-        {"branch": WORKER_BRANCH, "code_only": True},
-        ("setup", "worker", f"--branch={WORKER_BRANCH}", "--code-only"),
+        {"branch": WORKER_BRANCH},
+        ("setup", "worker", f"--branch={WORKER_BRANCH}"),
         (WORKER_BRANCH,),
     ),
     "settings-worker-preflight": (

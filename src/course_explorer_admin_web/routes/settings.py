@@ -63,7 +63,7 @@ class BackupDeleteRequest(BackupDeleteInput):
 
 
 class WorkerSetupRequest(WorkerSetupInput):
-    """One requested worker setup or update over its branch and code-only choice."""
+    """One requested worker code update over its branch."""
 
 
 @router.get("/api/settings/config/files")
@@ -120,13 +120,14 @@ def rebuild(request: Request, response: Response, body: EmptyRequest) -> Command
 
 @router.post("/api/settings/rebuild-admin")
 def rebuild_admin(request: Request, body: EmptyRequest) -> JSONResponse:
-    """Build the administration frontend and, on success, queue its own unit restart.
+    """Build the administration image and, on success, start its detached container re-create.
 
-    The build command runs synchronously and its ordinary outcome is the response. The restart
-    command is admitted as a background task only when the build succeeded, so the final response body
-    is sent before the restart request is made and a failed or cancelled send runs no restart. A queue
-    failure follows the runner's ordinary safe outcome and log entry and cannot change the sent build
-    response. Both commands are explicit actions and ignore the automatic-read marker.
+    The build command runs synchronously and its ordinary outcome is the response. The re-create
+    command is admitted as a background task only when the build succeeded, so the final response
+    body is sent before the re-create request is made and a failed or cancelled send starts no
+    re-create. A re-create failure follows the runner's ordinary safe outcome and log entry and
+    cannot change the sent build response. Both commands are explicit actions and ignore the
+    automatic-read marker.
     """
     result = request.app.state.commands.run(AdminRebuildCommand(kind="rebuild-admin"))
     task = (
@@ -141,10 +142,10 @@ def rebuild_admin(request: Request, body: EmptyRequest) -> JSONResponse:
 
 @router.post("/api/settings/worker/setup")
 def worker_setup(request: Request, response: Response, body: WorkerSetupRequest) -> CommandResult:
-    """Run the fixed worker setup or update once."""
+    """Run the fixed worker code update once."""
     response.headers.update(NO_STORE_HEADERS)
     return request.app.state.commands.run(
-        WorkerSetupCommand(kind="worker-setup", branch=body.branch, code_only=body.code_only)
+        WorkerSetupCommand(kind="worker-setup", branch=body.branch)
     )
 
 

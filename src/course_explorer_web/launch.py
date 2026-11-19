@@ -68,8 +68,8 @@ def main() -> NoReturn:
                 value = value.get_secret_value()
             environment[alias] = environment_value(value)
     environment[SETTINGS_SOURCE_MARKER] = ENVIRONMENT_ONLY_SETTINGS_SOURCE
-    # glibc reads MALLOC_ARENA_MAX at process start, and the router and forked workers inherit this
-    # supervisor environment, so the setting enters here rather than in the unit file.
+    # glibc reads MALLOC_ARENA_MAX at process start, so this process sets it in the environment of
+    # the supervisor it execs, and the front router and the forked worker processes inherit it.
     environment["MALLOC_ARENA_MAX"] = str(web_settings.web_malloc_arena_max)
     os.execve(
         sys.executable,

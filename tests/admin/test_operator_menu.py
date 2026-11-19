@@ -25,6 +25,11 @@ from course_explorer_admin.logs import LogReadReport, LogSessionEntry, LogSessio
 from course_explorer_admin.rebuild import RebuildReport
 from tests.support import REPO_ROOT
 
+_REBUILD_QUESTION = (
+    "Rebuild the site image, re-create the database and embedding containers, re-create the site "
+    "container and prove its bind?"
+)
+
 
 class _Sentinel:
     """One JSON-renderable owner result standing in for a real DTO."""
@@ -86,32 +91,33 @@ class _ScriptedRead:
         ("password-setup", ["1", "10", "synthetic-operator", "0", "0"], "main"),
         (
             "example-setup",
+            ["36", "", "", "", "", "1", "", "", "synthetic-operator", "1", "0"],
+            "main",
+        ),
+        (
+            "example-setup-cancel",
+            ["36", "", "", "", "", "1", "", "", "synthetic-operator", "0"],
+            "main",
+        ),
+        (
+            "example-setup-domain",
             [
-                "1",
-                "12",
                 "36",
                 "",
                 "",
                 "",
                 "",
-                "",
-                "",
+                "2",
+                "https://course-explorer.test/",
                 "",
                 "synthetic-operator",
-                "2",
                 "1",
-                "0",
-                "0",
                 "0",
             ],
             "main",
         ),
-        (
-            "example-setup-cancel",
-            ["1", "12", "36", "", "", "", "", "", "", "", "synthetic-operator", "0", "0", "0"],
-            "main",
-        ),
-        ("real-database-setup", ["1", "13", "", "1", "0", "0"], "main"),
+        ("example-setup-domain-cancel", ["36", "", "", "", "", "2", ""], "main"),
+        ("real-database-setup", [""], "main"),
         (
             "configuration-save",
             ["1", "8", "config/web.toml", "WEB_PORT", "18026", "1", "0", "0"],
@@ -276,8 +282,8 @@ def test_operator_menu_routes_explicit_choices_and_uses_server_setup_branch(
     monkeypatch.setattr(
         commands,
         "run_administrative_setup",
-        lambda kind, branch="main", code_only=False: (
-            setup_calls.append({"kind": kind, "branch": branch, "code_only": code_only}) or sentinel
+        lambda kind, branch="main": (
+            setup_calls.append({"kind": kind, "branch": branch}) or sentinel
         ),
     )
     monkeypatch.setattr(
@@ -414,17 +420,82 @@ def test_operator_menu_routes_explicit_choices_and_uses_server_setup_branch(
     monkeypatch.setattr(
         commands,
         "run_administrative_real_database_setup",
-        lambda options: real_setup_calls.append(options) or sentinel,
+        lambda options, **kwargs: real_setup_calls.append(options) or sentinel,
     )
     hidden_answers = ["synthetic-password", "synthetic-password"]
     monkeypatch.setattr(commands.getpass, "getpass", lambda prompt: hidden_answers.pop(0))
-    if scenario in {"example-setup", "example-setup-cancel"}:
+    example_scenarios = {
+        "example-setup",
+        "example-setup-cancel",
+        "example-setup-domain",
+        "example-setup-domain-cancel",
+    }
+    if scenario in example_scenarios:
         # The terminal default comes from the tracked example file, which the shared repository
         # fixture does not link into its temporary root.
         monkeypatch.setattr(commands.administration, "repository_root", lambda: REPO_ROOT)
 
     reader = _ScriptedRead(answers)
     writes: list[str] = []
+
+    if scenario in example_scenarios:
+        # The example workflow is the one exported entry, called directly by the self-host script's
+        # command.
+        result = commands.run_example_setup_interactive(read=reader, write=writes.append)
+        assert real_setup_calls == []
+        assert tool_calls == [] and report_calls == [] and setup_calls == []
+        if scenario == "example-setup-cancel":
+            # The username cancel runs no workflow and prints no report.
+            assert result is None
+            assert example_setup_calls == []
+            assert sentinel.model_dump_json() not in writes
+            return
+        if scenario == "example-setup-domain-cancel":
+            # A blank site address refuses before any workflow runs.
+            assert result is None
+            assert example_setup_calls == []
+            assert "domain mode needs the site's HTTPS address; nothing was written" in writes
+            return
+        assert result is sentinel
+        assert len(example_setup_calls) == 1
+        options = example_setup_calls[0]
+        assert isinstance(options, commands.ExampleSetupInput)
+        assert options.instance_key == "example"
+        assert options.web_port == 8037
+        assert options.admin_web_port == 8039
+        assert options.postgres_port == 5433
+        assert options.embedding_port == 8081
+        assert options.admin_origin is None
+        assert options.username == "synthetic-operator"
+        assert options.confirm_download is True
+        assert options.publication_token is None
+        assert options.password.get_secret_value() == "synthetic-password"
+        if scenario == "example-setup-domain":
+            assert options.serve_mode == "domain"
+            assert options.app_url == "https://course-explorer.test/"
+        else:
+            assert options.serve_mode == "local"
+            assert options.app_url is None
+        assert not any("synthetic-password" in line for line in writes)
+        assert not any(prompt.startswith("Password") for prompt in reader.prompts)
+        # The entry returns its report and leaves the printing to its command.
+        assert sentinel.model_dump_json() not in writes
+        return
+
+    if scenario == "real-database-setup":
+        # The real-database workflow is the one exported entry, called directly by the self-host
+        # script's command.
+        result = commands.run_real_database_setup_interactive(read=reader, write=writes.append)
+        assert result is sentinel
+        assert len(real_setup_calls) == 1
+        options = real_setup_calls[0]
+        assert isinstance(options, commands.RealDatabaseSetupInput)
+        assert options.database_name == "course_explorer_real"
+        assert example_setup_calls == []
+        assert tool_calls == [] and report_calls == [] and setup_calls == []
+        assert sentinel.model_dump_json() not in writes
+        return
+
     supplied_calls: list[tuple[str, str, str]] = []
 
     def supplied_command(stage, action):
@@ -533,11 +604,9 @@ def test_operator_menu_routes_explicit_choices_and_uses_server_setup_branch(
     if scenario == "rebuild-app":
         # The app rebuild entry asks for confirmation first and runs the site rebuild once.
         assert len(rebuild_calls) == 1
-        assert "Rebuild this site's frontend, containers and web server?" in writes
+        assert _REBUILD_QUESTION in writes
         assert rebuild_report.model_dump_json() in writes
-        assert writes.index(
-            "Rebuild this site's frontend, containers and web server?"
-        ) < writes.index(rebuild_report.model_dump_json())
+        assert writes.index(_REBUILD_QUESTION) < writes.index(rebuild_report.model_dump_json())
         assert admin_maintenance_calls == []
         assert server_status_calls == [] and log_session_listings == [] and log_reads == []
         assert embedding_log_reads == [] and tool_calls == [] and setup_calls == []
@@ -636,7 +705,7 @@ def test_operator_menu_routes_explicit_choices_and_uses_server_setup_branch(
             "worker-setup-nonmain-default": "prerequisite-inference",
             "worker-setup-explicit-branch": "other-origin-branch",
         }[scenario]
-        assert setup_calls == [{"kind": "worker", "branch": expected_branch, "code_only": False}]
+        assert setup_calls == [{"kind": "worker", "branch": expected_branch}]
         assert len(checkout_calls) == 1
         branch_prompts = [prompt for prompt in reader.prompts if prompt.startswith("Origin branch")]
         if scenario == "worker-setup-main":
@@ -657,51 +726,6 @@ def test_operator_menu_routes_explicit_choices_and_uses_server_setup_branch(
         assert sentinel.model_dump_json() in writes
         assert tool_calls == [] and report_calls == [] and setup_calls == []
         assert configuration_writes == [] and disposition_reads == [] and disposition_sets == []
-        return
-
-    if scenario == "example-setup":
-        # Choice 12 asks the instance and device choices, reads both password entries hidden, and
-        # delegates once.
-        assert len(example_setup_calls) == 1
-        options = example_setup_calls[0]
-        assert isinstance(options, commands.ExampleSetupInput)
-        assert options.app_url is None
-        assert options.admin_origin is None
-        assert options.instance_key == "example"
-        assert options.web_port == 8037
-        assert options.admin_web_port == 8039
-        assert options.postgres_port == 5433
-        assert options.embedding_port == 8081
-        assert options.shared_root is None
-        assert options.username == "synthetic-operator"
-        assert options.mode == "foreground"
-        assert options.confirm_download is True
-        assert options.publication_token is None
-        assert options.password.get_secret_value() == "synthetic-password"
-        assert not any("synthetic-password" in line for line in writes)
-        assert not any(prompt.startswith("Password") for prompt in reader.prompts)
-        assert sentinel.model_dump_json() in writes
-        assert real_setup_calls == []
-        assert tool_calls == [] and report_calls == [] and setup_calls == []
-        return
-
-    if scenario == "example-setup-cancel":
-        # Cancelling the startup choice runs neither self-host workflow and posts no action.
-        assert example_setup_calls == [] and real_setup_calls == []
-        assert sentinel.model_dump_json() not in writes
-        assert tool_calls == [] and report_calls == [] and setup_calls == []
-        return
-
-    if scenario == "real-database-setup":
-        # Choice 13 keeps the terminal default name and delegates the chosen startup mode once.
-        assert len(real_setup_calls) == 1
-        options = real_setup_calls[0]
-        assert isinstance(options, commands.RealDatabaseSetupInput)
-        assert options.database_name == "course_explorer_real"
-        assert options.mode == "user"
-        assert sentinel.model_dump_json() in writes
-        assert example_setup_calls == []
-        assert tool_calls == [] and report_calls == [] and setup_calls == []
         return
 
     # One nothing/done/failed disposition choice: the entry is present, the canonical identity is
@@ -824,7 +848,7 @@ def test_operator_menu_failure_and_eof_preserve_running_work(
     monkeypatch.setattr(
         commands,
         "run_administrative_setup",
-        lambda kind, branch="main", code_only=False: setup_calls.append({"kind": kind}) or sentinel,
+        lambda kind, branch="main": setup_calls.append({"kind": kind}) or sentinel,
     )
     monkeypatch.setattr(commands, "read_inference_target_disposition", lambda target: sentinel)
     monkeypatch.setattr(
@@ -1169,7 +1193,7 @@ def test_operator_menu_failure_and_eof_preserve_running_work(
             )
             == 0
         )
-        assert "Rebuild this site's frontend, containers and web server?" in writes
+        assert _REBUILD_QUESTION in writes
     elif scenario == "rebuild-interrupt":
         # An interrupt at the confirmation prompt returns 130 and runs nothing.
         rebuild_answers = ["1", "9"]

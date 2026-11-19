@@ -1,11 +1,16 @@
-"""Edit one validated key of a subsystem file or environment file.
+"""Edit validated keys of a subsystem file or environment file.
 
 This module lists the configuration files, reads every key of one file as that file holds it, and
-replaces or appends one key with one validated candidate. A write renders only the chosen key's text,
-preserves every other byte, comment and line ending of the file, validates the whole candidate
-through the settings owner's own families with the local values read freshly from their file, and
-publishes the file atomically. The read report is the one operator output, and the write
-acknowledgment carries the file and the key alone.
+replaces or appends one key with one validated candidate. It also replaces and removes an
+interdependent set of subsystem-file keys in one candidate, so a set the settings owner validates
+together is written once, and it validates that candidate without writing it. A write renders only
+the changed keys' text, preserves every other byte, comment and line ending of the file, validates
+the whole candidate through the settings owner's own families with the local values read freshly
+from their file, and publishes a subsystem file atomically. An environment file that is a
+single-file bind mount can be neither replaced nor renamed over, so it is rewritten through its
+inode with owner-only mode 0600. That rewrite takes no lock, and a crash during it can leave a
+truncated file. The read report is the one operator output, and the write acknowledgment carries the
+file and the key alone.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Mapping, Sequence
 from io import StringIO
 from pathlib import Path
 from typing import Literal
@@ -27,11 +33,8 @@ from tomlkit.toml_document import TOMLDocument
 
 from course_explorer import administration
 from course_explorer.administration import atomic_write_private_text
-from course_explorer.config import (
-    CONFIGURATION_SETTINGS_FAMILIES,
-    ConfiguredSettings,
-    _settings_aliases,
-)
+from course_explorer.config import CONFIGURATION_SETTINGS_FAMILIES, ConfiguredSettings
+from course_explorer.config.base import _settings_aliases
 from course_explorer.configuration import (
     PUBLIC_CONFIG_FILES,
     clear_configuration_caches,
@@ -328,22 +331,29 @@ def _owning_families(
 def _validate_candidate(
     *,
     file: str,
-    key: str,
+    keys: Sequence[str],
     documents: dict[str, dict[str, object]],
     local: dict[str, str | None],
     settings_families: tuple[type[ConfiguredSettings], ...],
 ) -> None:
     """Validate one candidate configuration, or refuse an unowned key.
 
-    Only the families that own the edited key are built, so a candidate outside their aliases needs
-    no unrelated value. A key of the environment file that no family owns carries its string and file
-    grammar alone, and a key of a subsystem file that no family owns fails instead of claiming a
-    validation.
+    Only the families that own the changed keys are built, so a candidate outside their aliases
+    needs no unrelated value. A key of the environment file that no family owns carries its string
+    and file grammar alone, and a key of a subsystem file that no family owns fails instead of
+    claiming a validation.
     """
-    families = _owning_families(key, settings_families)
+    families: list[type[ConfiguredSettings]] = []
+    for key in keys:
+        owned = _owning_families(key, settings_families)
+        if not owned:
+            if file != _ENVIRONMENT_FILE:
+                raise ValueError("configuration key is not owned by a settings family")
+            continue
+        for family in owned:
+            if family not in families:
+                families.append(family)
     if not families:
-        if file != _ENVIRONMENT_FILE:
-            raise ValueError("configuration key is not owned by a settings family")
         return
     with configuration_candidate(documents=documents, local=local):
         for family in families:
@@ -429,12 +439,99 @@ def set_configuration_value(
         documents = read_configuration_documents(root, replacements={listed: rendered})
     _validate_candidate(
         file=listed,
-        key=key,
+        keys=(key,),
         documents=documents,
         local=candidate_local,
         settings_families=settings_families,
     )
     mode = 0o600 if listed == _ENVIRONMENT_FILE else path.stat().st_mode & 0o777
-    atomic_write_private_text(path, rendered, mode=mode)
+    if listed == _ENVIRONMENT_FILE and path.stat().st_dev != path.parent.stat().st_dev:
+        # A single-file bind mount from another device can be neither replaced nor renamed over.
+        # The mounted file is rewritten through its own inode, a same-device file takes the atomic
+        # write, and an os.replace over a mount point fails loudly.
+        administration.rewrite_private_text_in_place(path, rendered, mode=mode)
+    else:
+        atomic_write_private_text(path, rendered, mode=mode)
     clear_configuration_caches()
     return ConfigurationWriteReport(file=listed, key=key)
+
+
+def validate_configuration_values(
+    file: str,
+    changes: Mapping[str, JsonValue | None],
+    *,
+    settings_families: tuple[type[ConfiguredSettings], ...] = (),
+) -> None:
+    """Validate several keys of one subsystem file as one candidate without writing it.
+
+    A ``None`` value is a removal, and a removal of an absent key is accepted, so the same call
+    describes the save that follows it. A refused candidate raises and writes no file.
+    """
+    _render_configuration_values(file, changes, settings_families=settings_families)
+
+
+def apply_configuration_values(
+    file: str,
+    changes: Mapping[str, JsonValue | None],
+    *,
+    settings_families: tuple[type[ConfiguredSettings], ...] = (),
+) -> None:
+    """Save several keys of one subsystem file in one validated candidate.
+
+    A ``None`` value removes that assignment, and a removal of an absent key leaves it absent, so
+    the same call runs again on the file it wrote. Any other value replaces the key, and that key
+    must be present. The interdependent set of keys reaches validation together. A refused candidate
+    writes no file, and one successful call publishes the file once. The environment file is not
+    editable here, because its values are edited one key at a time.
+    """
+    path, rendered = _render_configuration_values(
+        file, changes, settings_families=settings_families
+    )
+    atomic_write_private_text(path, rendered, mode=path.stat().st_mode & 0o777)
+    clear_configuration_caches()
+
+
+def _render_configuration_values(
+    file: str,
+    changes: Mapping[str, JsonValue | None],
+    *,
+    settings_families: tuple[type[ConfiguredSettings], ...] = (),
+) -> tuple[Path, str]:
+    """Return one subsystem file's path and its validated candidate text."""
+    listed = _require_listed_file(file)
+    if listed == _ENVIRONMENT_FILE:
+        raise ValueError("configuration values apply to a subsystem file alone")
+    root = administration.repository_root()
+    path = _confined_path(root, listed)
+    _require_regular_file(path)
+    _require_source_files(root)
+    payload = _read_text(path)
+    document = _read_toml_document(payload)
+    values = document.unwrap()
+    for key, value in changes.items():
+        if value is None:
+            if key in values:
+                del document[key]
+            continue
+        if key not in values:
+            raise ValueError(f"configuration key is not present in {listed}")
+        _require_retained_type(values[key], value)
+        document[key] = _toml_item(value)
+    rendered = tomlkit.dumps(document)
+    # The changed aliases leave the local mapping, so a local value cannot hide an invalid
+    # subsystem-file candidate or stand in for the file's text.
+    normalized = {key.lower() for key in changes}
+    candidate_local = {
+        name: entry
+        for name, entry in read_candidate_local_configuration(root).items()
+        if name.lower() not in normalized
+    }
+    documents = read_configuration_documents(root, replacements={listed: rendered})
+    _validate_candidate(
+        file=listed,
+        keys=tuple(changes),
+        documents=documents,
+        local=candidate_local,
+        settings_families=settings_families,
+    )
+    return path, rendered

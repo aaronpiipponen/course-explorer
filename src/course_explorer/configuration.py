@@ -249,7 +249,7 @@ def candidate_settings_sources(
     snapshot = _candidate_configuration()
     if snapshot is None:
         return None
-    from course_explorer.config import _settings_aliases
+    from course_explorer.config.base import _settings_aliases
 
     def public_values() -> dict[str, object]:
         return _project_configuration(snapshot.public, _settings_aliases(settings_cls))

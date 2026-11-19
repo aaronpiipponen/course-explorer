@@ -74,8 +74,8 @@ def _bind_log_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     for stage, relative in _STAGE_ROOTS.items():
         monkeypatch.setenv(f"{stage.upper()}_CONTROLLER_STATE_ROOT", relative)
     monkeypatch.setenv("ADMIN_STATE_ROOT", _ADMIN_STATE_ROOT)
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT", str(tmp_path / _WORKER_ROOT))
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_STOP_TIMEOUT_SECONDS", _STOP_TIMEOUT_SECONDS)
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", str(tmp_path / _WORKER_ROOT))
+    monkeypatch.setenv("WORKER_STOP_TIMEOUT_SECONDS", _STOP_TIMEOUT_SECONDS)
     monkeypatch.setattr(administration, "repository_root", lambda: tmp_path)
     return tmp_path
 
@@ -352,7 +352,7 @@ def test_fixed_log_read_uses_only_its_selected_source(
             stage_root.mkdir(mode=0o700, parents=True)
             (stage_root / "current").symlink_to(redirected.parent)
     transport = _LocalWorkerLogTransport(unavailable=case == "worker-runner-unavailable")
-    monkeypatch.setattr(logs, "_transport", lambda _runner, _connection: transport)
+    monkeypatch.setattr(logs, "build_worker_transport", lambda _runner, _connection: transport)
     before = _tree_state(root)
 
     def read() -> logs.LogReadReport:

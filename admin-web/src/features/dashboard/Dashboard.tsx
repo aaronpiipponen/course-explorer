@@ -139,8 +139,14 @@ function WebsitePanel({
         <Rows>
           <Row
             label={wording.row.state}
-            value={stateText(report.website.state)}
+            value={stateText(report.website.container.state)}
           />
+          {report.website.container.image === null ? null : (
+            <Row
+              label={detail.image}
+              value={<code>{report.website.container.image}</code>}
+            />
+          )}
           <Row
             label={detail.bind}
             value={
@@ -152,10 +158,6 @@ function WebsitePanel({
           <Row
             label={detail.configuredProcesses}
             value={count(report.website.configured_workers)}
-          />
-          <Row
-            label={detail.entryPoint}
-            value={<code>{report.website.entry_point}</code>}
           />
           <Row
             label={detail.checkout}

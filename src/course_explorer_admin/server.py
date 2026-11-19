@@ -1,15 +1,13 @@
-"""The one server-only status report behind the operator's Dashboard read.
+"""The server-only status report behind the operator's Dashboard read.
 
-This module owns the read-only server status report: the measured systemd state of this checkout's
-web unit, the Compose services of the configured database and embedding runtimes, the database's own
-size, connection count and migration head, the host's uptime, CPU usage, memory and disk facts, the
-selected-dataset metadata the serving database resolves through, and the two embedding hub file
-times of the artifact family's configured embedding directory on a site that serves the embedding
-features. Every member states which kind of fact it is: measured, configured, a checkout identity, a
-serving receipt, or a file time.
-
-The report reads the local host and this checkout's own state. A running container whose database
-read fails fails the whole report, and an absent service is reported as absent.
+The report reads the local host and this checkout's own state. It covers the running site container
+with its Compose state and measured start instant, the Compose services of the configured database
+and embedding runtimes, the database size, connection count and migration head, the host's uptime,
+CPU usage, memory and disk facts, the selected-dataset metadata the serving database resolves
+through, and the two embedding hub file times of the configured embedding directory on a site that
+serves the embedding features. Every member states whether it is measured, configured, a checkout
+identity, a serving receipt or a file time. A running container whose database read fails fails the
+whole report, and an absent service is reported as absent.
 """
 
 from __future__ import annotations
@@ -18,7 +16,7 @@ import json
 import shutil
 import stat
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -35,7 +33,6 @@ from course_explorer.config import (
     EmbeddingRuntimeSettings,
     embedding_configuration_for_site,
     load_administrative_dataset_settings,
-    load_administrative_site_settings,
     load_database_settings,
     load_embedding_runtime_settings,
     load_raw_database_settings,
@@ -52,22 +49,8 @@ from course_explorer.serving_artifacts import (
     serving_key,
 )
 from course_explorer_admin import mechanics
+from course_explorer_admin.compose import docker_prefix
 from course_explorer_admin.datasets import admin_state_path, admin_state_root
-
-# The one requested systemd property set. Only these properties are read, so no environment,
-# credential or unit file text reaches the report.
-_SITE_PROPERTIES = (
-    "LoadState",
-    "ActiveState",
-    "SubState",
-    "MainPID",
-    "ActiveEnterTimestampMonotonic",
-    "WorkingDirectory",
-    "ExecStart",
-)
-
-# The one web entry point this checkout's web unit runs, relative to the checkout root.
-_WEB_ENTRY_POINT = "scripts/run_web.sh"
 
 # The two embedding hub files of a serving artifact build, in report order.
 _HUB_FILES: tuple[tuple[Literal["catalogue", "outcomes"], str], ...] = (
@@ -75,7 +58,8 @@ _HUB_FILES: tuple[tuple[Literal["catalogue", "outcomes"], str], ...] = (
     ("outcomes", HUB_OUTCOMES_FILE),
 )
 
-# The two selected Compose services of the server-only report.
+# The three selected Compose services of the server-only report.
+_WEB_SERVICE = "web"
 _DATABASE_SERVICE = "db"
 _EMBEDDING_SERVICE = "embedding"
 
@@ -110,24 +94,20 @@ class ContainerStatus(_ServerModel):
 
 
 class WebsiteStatus(_ServerModel):
-    """This checkout's web unit: its measured systemd state, its configured bind and its checkout.
+    """The running site container, its configured bind and the checkout identity.
 
-    ``state``, ``substate``, ``main_pid``, ``started_at`` and ``uptime_seconds`` are measured from
-    the unit, and a unit that is not active reports no start time and no uptime. ``host``, ``port``
-    and ``configured_workers`` are the configured serving values, and not a measured worker count.
-    ``entry_point`` is the checkout-relative script the unit runs. ``checkout_branch`` and
-    ``checkout_revision`` are the identity of the checkout this report reads, never a claim about
-    the revision of the running process.
+    ``container`` is the Compose listing entry of the site service, whose state is the listing's own
+    word or ``absent``. ``started_at`` and ``uptime_seconds`` are measured from the container's own
+    start instant, and a container that is not running reports neither. ``host``, ``port`` and
+    ``configured_workers`` are the configured serving values, and not a measured worker count.
+    ``checkout_branch`` and ``checkout_revision`` are the identity of the checkout this report
+    reads, never a claim about the revision of the running container.
     """
 
-    unit: str
-    state: str
-    substate: str
-    main_pid: int
+    container: ContainerStatus
     host: str
     port: int
     configured_workers: int
-    entry_point: str
     started_at: datetime | None
     uptime_seconds: float | None
     checkout_branch: str
@@ -248,106 +228,6 @@ class ServerStatusReport(_ServerModel):
     hubs: tuple[HubStatus, ...]
 
 
-def _unit_properties(
-    runner: mechanics.ProcessRunner,
-    unit: str,
-    *,
-    root: Path,
-    scope: Literal["user", "system"] = "user",
-) -> dict[str, str]:
-    """Read the requested properties of one systemd unit from its manager."""
-    manager = ("--user",) if scope == "user" else ()
-    argv = (
-        "systemctl",
-        *manager,
-        "show",
-        unit,
-        "--no-pager",
-        *(argument for name in _SITE_PROPERTIES for argument in ("-p", name)),
-    )
-    output = runner.run(argv, cwd=root).stdout.decode("utf-8")
-    properties: dict[str, str] = {}
-    for line in output.splitlines():
-        name, separator, value = line.partition("=")
-        if separator:
-            properties[name] = value
-    missing = [name for name in _SITE_PROPERTIES if name not in properties]
-    if missing:
-        raise ValueError("the site unit must report every requested systemd property")
-    return properties
-
-
-def read_owned_site_unit(
-    runner: mechanics.ProcessRunner,
-    unit: str,
-    *,
-    root: Path,
-    entry_point: str,
-    scope: Literal["user", "system"] = "user",
-) -> dict[str, str]:
-    """Read one loaded systemd unit of this checkout and refuse a unit of another site.
-
-    The unit must be loaded, must run from this checkout, and its command line must carry the exact
-    ``<checkout>/<entry_point>`` token. Every owner that reports or mutates a site unit shares this
-    one check, so no owner reads or restarts another application's unit. The scope selects the
-    manager that owns the unit.
-    """
-    properties = _unit_properties(runner, unit, root=root, scope=scope)
-    if properties["LoadState"] != "loaded":
-        raise ValueError("the configured site unit must be loaded")
-    if Path(properties["WorkingDirectory"]) != root:
-        raise ValueError("the configured site unit must run from this checkout")
-    if str(root / entry_point) not in properties["ExecStart"].split():
-        raise ValueError("the configured site unit must execute this checkout's entry point")
-    return properties
-
-
-def read_web_service(*, runner: mechanics.ProcessRunner) -> WebsiteStatus:
-    """Read this checkout's web unit and refuse a unit that belongs to another site.
-
-    The unit must be loaded, must run from this checkout, and its command line must carry the exact
-    ``<checkout>/scripts/run_web.sh`` token. The unit's configured manager scope selects the
-    systemd manager the read addresses. A status read and the rebuild precondition share this one
-    check, so neither reports nor restarts another application's or the administration service.
-    """
-    root = administration.repository_root()
-    settings = load_administrative_site_settings()
-    properties = read_owned_site_unit(
-        runner,
-        settings.web_service_unit,
-        root=root,
-        entry_point=_WEB_ENTRY_POINT,
-        scope=settings.web_service_scope,
-    )
-
-    started_at: datetime | None = None
-    uptime_seconds: float | None = None
-    if properties["ActiveState"] == "active":
-        entered_microseconds = int(properties["ActiveEnterTimestampMonotonic"])
-        uptime_seconds = time.monotonic() - entered_microseconds / 1_000_000
-        started_at = utc_now() - timedelta(seconds=uptime_seconds)
-
-    web = load_web_settings()
-    return WebsiteStatus(
-        unit=settings.web_service_unit,
-        state=properties["ActiveState"],
-        substate=properties["SubState"],
-        main_pid=int(properties["MainPID"]),
-        host=web.web_host,
-        port=web.web_port,
-        configured_workers=web.web_workers,
-        entry_point=_WEB_ENTRY_POINT,
-        started_at=started_at,
-        uptime_seconds=uptime_seconds,
-        checkout_branch=runner.run(("git", "branch", "--show-current"), cwd=root)
-        .stdout.decode()
-        .strip(),
-        checkout_revision=runner.run(("git", "rev-parse", "HEAD"), cwd=root)
-        .stdout.decode()
-        .strip(),
-    )
-
-
 def _required_text(entry: dict[str, object], key: str) -> str:
     value = entry.get(key)
     if not isinstance(value, str) or not value:
@@ -394,6 +274,50 @@ def _container_status(services: dict[str, dict[str, object]], service: str) -> C
     )
 
 
+def read_website_status(
+    services: dict[str, dict[str, object]], *, runner: mechanics.ProcessRunner, root: Path
+) -> WebsiteStatus:
+    """Read the site container, its measured start instant and this checkout's identity.
+
+    The Compose listing supplies the container's state, health and image. A running container
+    supplies its own RFC 3339 start instant through one inspect read, and the uptime is the elapsed
+    time from that instant. An absent or non-running container reports no start instant and no
+    uptime and reads no container metadata.
+    """
+    container = _container_status(services, _WEB_SERVICE)
+    entry = services.get(_WEB_SERVICE)
+    started_at: datetime | None = None
+    uptime_seconds: float | None = None
+    if entry is not None and container.state == "running":
+        output = runner.run(
+            (
+                *docker_prefix(non_interactive=True),
+                "inspect",
+                "--format",
+                "{{.State.StartedAt}}",
+                _required_text(entry, "ID"),
+            ),
+            cwd=root,
+        ).stdout
+        started_at = datetime.fromisoformat(output.decode("ascii").strip())
+        uptime_seconds = (utc_now() - started_at).total_seconds()
+    web = load_web_settings()
+    return WebsiteStatus(
+        container=container,
+        host=web.web_host,
+        port=web.web_port,
+        configured_workers=web.web_workers,
+        started_at=started_at,
+        uptime_seconds=uptime_seconds,
+        checkout_branch=runner.run(("git", "branch", "--show-current"), cwd=root)
+        .stdout.decode()
+        .strip(),
+        checkout_revision=runner.run(("git", "rev-parse", "HEAD"), cwd=root)
+        .stdout.decode()
+        .strip(),
+    )
+
+
 def _expected_schema_revision(root: Path) -> str:
     """Return this checkout's single Alembic head."""
     heads = ScriptDirectory.from_config(AlembicConfig(str(root / "alembic.ini"))).get_heads()
@@ -411,9 +335,7 @@ def _container_shared_memory_bytes(
     identifier = _required_text(entry, "ID")
     output = runner.run(
         (
-            "sudo",
-            "-n",
-            "docker",
+            *docker_prefix(non_interactive=True),
             "inspect",
             "--format",
             "{{.HostConfig.ShmSize}}",
@@ -674,8 +596,8 @@ def _read_hubs(
 def read_server_status(*, runner: mechanics.ProcessRunner) -> ServerStatusReport:
     """Read one server-only status report. It writes nothing and contacts no worker."""
     root = administration.repository_root()
-    website = read_web_service(runner=runner)
     services = _compose_services(runner, root=root)
+    website = read_website_status(services, runner=runner, root=root)
     administration_settings = load_administrative_dataset_settings()
     state_available = dataset_state_refusal(admin_state_path(administration_settings)) is None
     settings = _served_database_settings(state_available=state_available)

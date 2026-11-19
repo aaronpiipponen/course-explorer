@@ -195,11 +195,9 @@ The product sets `WEB_MALLOC_ARENA_MAX = 2` in `config/web.toml`. It is a valida
 WEB_MALLOC_ARENA_MAX = 2
 ```
 
-The launcher rebuilds the supervisor environment from `HOME`, `PATH`, `LANG` and the validated settings, so a value set only in the service unit would not reach the router or the workers. The launcher passes the setting itself, because glibc reads it at process start and the router and the forked workers inherit the supervisor environment.
+The launcher rebuilds the supervisor environment from `HOME`, `PATH`, `LANG` and the validated settings, so a value set only in the site container's environment would not reach the router or the workers. The launcher passes the setting itself, because glibc reads it at process start and the router and the forked workers inherit the supervisor environment.
 
 ```python
-# glibc reads MALLOC_ARENA_MAX at process start, and the router and forked workers inherit this
-# supervisor environment, so the setting enters here rather than in the unit file.
 environment["MALLOC_ARENA_MAX"] = str(web_settings.web_malloc_arena_max)
 ```
 
@@ -223,7 +221,7 @@ The hypothesis that failed is that a per-worker cache without a byte bound holds
 ## Limitations
 
 - The A/B test measured concurrency 8 across four workers, about two requests in flight per worker. It does not exercise the per-worker thread count that produced the 425 MB heap, so its no-cost result applies to that load.
-- The diagnosis ran on a copy of the build outside the serving unit, with one request at a time or direct requests to one worker. Its rates are not whole-service rates.
+- The diagnosis ran on a copy of the build outside the serving process tree, with one request at a time or direct requests to one worker. Its rates are not whole-service rates.
 - The 2.76 to 3.0 GB estimate is arithmetic over per-worker terms, not a simultaneous measurement of the four workers.
 - `tracemalloc` sees Python allocations only, so a native allocation that grew would not appear in it.
 - No capacity run tested the capped stack, so the capacity effect of the setting is untested.

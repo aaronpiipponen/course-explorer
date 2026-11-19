@@ -8,7 +8,10 @@ pause and a foreground finalize hook for stop. The whole worker database is retu
 published as Working through the dataset owner, then dropped only after the server receipt exists.
 Stage DTO logic lives in the two policy/status seams, and every transport construction goes through
 ``_transport``. Each adapter takes the checkout reservation on this machine and the worker
-reservation on the worker.
+reservation on the worker. A same-machine worker first starts the instance's own worker service, then
+reuses the canonical session directory and the instance's database service instead of creating a
+copy or owning a database service. The module also owns the administration backend's
+startup resume, which relaunches the same-machine stage a host reboot interrupted.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
+from course_explorer import administration
 from course_explorer.administration import (
     administrative_json,
     atomic_write_private_text,
@@ -33,6 +37,7 @@ from course_explorer.config import (
     load_inference_controller_settings,
     load_instance_settings,
     load_translation_controller_settings,
+    load_worker_connection_settings,
     load_worker_gpu_reboot_settings,
 )
 from course_explorer_admin import machine_locks, mechanics, reboot, remote
@@ -48,10 +53,12 @@ from course_explorer_admin.lifecycle import (
     InferenceProgress,
     LifecycleContext,
     LifecycleStatus,
+    StageName,
     StageOptions,
     TranslationOptions,
     TranslationProgress,
     WorkerResources,
+    read_lifecycle_state,
     run_lifecycle_command,
     stage_state_root,
 )
@@ -74,11 +81,13 @@ from course_explorer_admin.translation.controller import (
     translation_configuration_sha256,
 )
 from course_explorer_admin.transport import (
-    SshWslTransport,
     WorkerAvailabilityError,
     WorkerConnectionLost,
     WorkerRecovery,
     WorkerRecoveryCancelled,
+    WorkerTransport,
+    build_worker_transport,
+    require_same_machine_container,
 )
 
 _STAGE = Literal["translation", "inference"]
@@ -108,10 +117,14 @@ def _session_database(session_id: str) -> str:
 
 def _worker_environment(extra: dict[str, str] | None = None) -> dict[str, str]:
     """Return the environment overrides every worker helper needs to resolve one session."""
+    reboot_settings = load_worker_gpu_reboot_settings()
     overrides = {
         "ADMIN_STATE_ROOT": str(_admin_settings().admin_state_root),
+        "WORKER_GPU_REBOOT_ENABLED": (
+            "true" if reboot_settings.worker_gpu_reboot_enabled else "false"
+        ),
         "WORKER_GPU_REBOOT_INTERVAL_MINUTES": str(
-            load_worker_gpu_reboot_settings().worker_gpu_reboot_interval_minutes
+            reboot_settings.worker_gpu_reboot_interval_minutes
         ),
     }
     if extra:
@@ -126,13 +139,35 @@ def _session_environment(session_id: str) -> dict[str, str]:
 
 def _transport(
     runner: mechanics.ProcessRunner, connection: WorkerConnectionSettings
-) -> SshWslTransport:
-    """Construct the one SSH/WSL transport."""
-    return SshWslTransport(runner, connection)
+) -> WorkerTransport:
+    """Construct the one worker transport the configured host kind selects."""
+    return build_worker_transport(runner, connection)
+
+
+def _ensure_same_machine_worker(
+    runner: mechanics.ProcessRunner,
+    connection: WorkerConnectionSettings,
+    *,
+    timeout: float,
+) -> None:
+    """Start the instance's worker container before the first same-machine transport call.
+
+    The container-entry guard runs first, so a host process refuses before it issues any Compose
+    command. The service is instance-owned and profile-gated, so a remote-worker host runs no Compose
+    command here and the stage records no ownership of it.
+    """
+    require_same_machine_container(connection)
+    if connection.host_kind != "same-machine":
+        return
+    mechanics.ensure_prepared_services(
+        lambda argv: runner.run(argv, cwd=administration.repository_root(), timeout=timeout).stdout,
+        ("worker",),
+        interpreter=True,
+    )
 
 
 def _remote_helper(
-    transport: SshWslTransport,
+    transport: WorkerTransport,
     connection: WorkerConnectionSettings,
     argv: tuple[str, ...],
     *,
@@ -149,7 +184,7 @@ def _remote_helper(
 
 
 def _worker_helper(
-    transport: SshWslTransport,
+    transport: WorkerTransport,
     connection: WorkerConnectionSettings,
     worker_module: str,
     argv: tuple[str, ...],
@@ -192,7 +227,7 @@ def _validate_status(status: WorkerControllerStatus, session: WorkerDatasetSessi
 
 def _ensure_keepalive(
     context: LifecycleContext,
-    transport: SshWslTransport,
+    transport: WorkerTransport,
     connection: WorkerConnectionSettings,
     resources: WorkerResources,
     *,
@@ -200,14 +235,17 @@ def _ensure_keepalive(
     health_attempts: int,
     sleep: Callable[[float], None],
 ) -> WorkerResources:
-    """Reuse or restart the one detached WSL keepalive owned by this session.
+    """Reuse or restart the one detached keepalive a WSL worker owns for this session.
 
-    A live exact handle is a local no-op. A recorded but dead/previous-boot handle is cleared and
-    its exact named remote orphan is terminated through the idempotent owner before one
-    local replacement is started and recorded. Readiness re-observes the recorded handle, so a
-    keepalive that dies during the wait is restarted. The health attempt count bounds successful
-    not-ready reads.
+    A native Linux worker owns no keepalive, so its recorded worker resources pass through
+    unchanged. For a WSL worker, a live exact handle is a local no-op. A recorded but
+    dead/previous-boot handle is cleared and its exact named remote orphan is terminated through
+    the idempotent owner before one local replacement is started and recorded. Readiness
+    re-observes the recorded handle, so a keepalive that dies during the wait is restarted. The
+    health attempt count bounds successful not-ready reads.
     """
+    if not transport.keepalive_required:
+        return context.read_state().worker or resources
     session_id = context.session.session_id
 
     def observe(candidate: WorkerResources) -> bool:
@@ -269,7 +307,7 @@ def _ensure_keepalive(
 
 
 def _stop_owned_worker_database(
-    transport: SshWslTransport,
+    transport: WorkerTransport,
     connection: WorkerConnectionSettings,
     resources: WorkerResources,
     *,
@@ -277,6 +315,8 @@ def _stop_owned_worker_database(
     recovery: WorkerRecovery,
 ) -> None:
     """Stop and remove the worker ``db`` service only when this session started or attempted it."""
+    if not transport.owns_worker_database_service:
+        return
     if not (resources.worker_database_started or resources.worker_database_start_attempted):
         return
 
@@ -313,7 +353,7 @@ def _stop_owned_worker_database(
 
 def _ensure_worker_database(
     context: LifecycleContext,
-    transport: SshWslTransport,
+    transport: WorkerTransport,
     connection: WorkerConnectionSettings,
     resources: WorkerResources,
     *,
@@ -333,6 +373,10 @@ def _ensure_worker_database(
         )
 
     running = recovery.call(lambda: mechanics.running_compose_services(run))
+    if not transport.owns_worker_database_service:
+        if "db" not in running:
+            raise ValueError("the instance db service is not running")
+        return resources
     owned = resources.worker_database_started or resources.worker_database_start_attempted
     if "db" in running:
         if not owned:
@@ -353,7 +397,7 @@ def _ensure_worker_database(
 
 def _release_worker_resources(
     context: LifecycleContext,
-    transport: SshWslTransport,
+    transport: WorkerTransport,
     connection: WorkerConnectionSettings,
     resources: WorkerResources,
     *,
@@ -369,6 +413,8 @@ def _release_worker_resources(
         timeout=_admin_settings().database_operation_timeout_seconds,
         recovery=recovery,
     )
+    if not transport.keepalive_required:
+        return resources
     pid = resources.keepalive_pid
     if pid is not None and resources.keepalive_boot_id == mechanics.current_boot_id():
         transport.stop_keepalive(session_id, pid, sleep=sleep)
@@ -388,7 +434,7 @@ def _release_worker_resources(
 
 def _create_remote_session_directory(
     context: LifecycleContext,
-    transport: SshWslTransport,
+    transport: WorkerTransport,
     connection: WorkerConnectionSettings,
     resources: WorkerResources,
     *,
@@ -396,6 +442,13 @@ def _create_remote_session_directory(
     recovery: WorkerRecovery,
 ) -> WorkerResources:
     """Create the exact remote session directory once, or verify the recorded one."""
+    if transport.shares_worker_filesystem:
+        # The server's canonical session directory and the worker path are one mounted directory,
+        # which the capture creates. This branch verifies the directory and records no created bit,
+        # because only the non-sharing branch reads that bit.
+        script = f"set -euo pipefail; test -d {shlex.quote(str(remote_directory))}"
+        recovery.call(lambda: _remote_helper(transport, connection, ("bash", "-c", script)))
+        return resources
     if resources.remote_session_created:
         script = f"set -euo pipefail; test -d {shlex.quote(str(remote_directory))}"
         recovery.call(lambda: _remote_helper(transport, connection, ("bash", "-c", script)))
@@ -415,18 +468,14 @@ def _create_remote_session_directory(
 
 
 def _check_worker_dependencies(
-    transport: SshWslTransport, connection: WorkerConnectionSettings
+    transport: WorkerTransport, connection: WorkerConnectionSettings
 ) -> None:
     """Validate the already-provisioned worker environment. Never installs or syncs."""
-    _remote_helper(
-        transport,
-        connection,
-        ("uv", "sync", "--locked", "--check", "--offline", "--no-python-downloads"),
-    )
+    _remote_helper(transport, connection, transport.dependency_check_arguments())
 
 
 def _launch_worker_run(
-    transport: SshWslTransport,
+    transport: WorkerTransport,
     connection: WorkerConnectionSettings,
     worker_module: str,
     session: WorkerDatasetSession,
@@ -522,6 +571,7 @@ class RemoteStage:
         owner = machine_locks.configured_owner(self.name, session_id)
         try:
             connection = self.connection()
+            _ensure_same_machine_worker(runner, connection, timeout=connection.stop_timeout_seconds)
             transport = _transport(runner, connection)
             payload = _worker_helper(
                 transport,
@@ -582,14 +632,15 @@ class RemoteStage:
 
     def _read_status(
         self,
-        transport: SshWslTransport,
+        transport: WorkerTransport,
+        connection: WorkerConnectionSettings,
         session: WorkerDatasetSession,
     ) -> WorkerControllerStatus:
         status = _parse_status(
             self.status_type,
             _worker_helper(
                 transport,
-                self.connection(),
+                connection,
                 self.worker_module,
                 ("status", session.session_id),
                 env=_session_environment(session.session_id),
@@ -600,7 +651,7 @@ class RemoteStage:
 
     def _status_callable(
         self,
-        transport: SshWslTransport,
+        transport: WorkerTransport,
         connection: WorkerConnectionSettings,
         session: WorkerDatasetSession,
         subcommand: str,
@@ -677,7 +728,7 @@ class RemoteStage:
     def _bring_up(
         self,
         context: LifecycleContext,
-        transport: SshWslTransport,
+        transport: WorkerTransport,
         connection: WorkerConnectionSettings,
         session: WorkerDatasetSession,
         *,
@@ -688,6 +739,9 @@ class RemoteStage:
         state = context.read_state()
         resources = state.worker or WorkerResources()
         timeout = _admin_settings().database_operation_timeout_seconds
+        _ensure_same_machine_worker(
+            context.runner, connection, timeout=connection.stop_timeout_seconds
+        )
         resources = _ensure_keepalive(
             context,
             transport,
@@ -751,7 +805,7 @@ class RemoteStage:
     def _launch(
         self,
         context: LifecycleContext,
-        transport: SshWslTransport,
+        transport: WorkerTransport,
         connection: WorkerConnectionSettings,
         session: WorkerDatasetSession,
         *,
@@ -759,7 +813,7 @@ class RemoteStage:
     ) -> None:
         """Resume a retained worker session if needed and launch its detached run."""
         context.failure_step = "status"
-        status = recovery.call(lambda: self._read_status(transport, session))
+        status = recovery.call(lambda: self._read_status(transport, connection, session))
         lifecycle = status.lifecycle
         if lifecycle in {"starting", "running", "completed"}:
             return
@@ -770,7 +824,7 @@ class RemoteStage:
         armed = recovery.call(
             self._mutation_with_reconcile(
                 self._status_callable(transport, connection, session, "resume"),
-                lambda: self._read_status(transport, session),
+                lambda: self._read_status(transport, connection, session),
                 _RESUME_ACCEPTED,
             )
         )
@@ -793,7 +847,7 @@ class RemoteStage:
     def _await_launch_acknowledgment(
         self,
         context: LifecycleContext,
-        transport: SshWslTransport,
+        transport: WorkerTransport,
         connection: WorkerConnectionSettings,
         session: WorkerDatasetSession,
         recovery: WorkerRecovery,
@@ -807,7 +861,7 @@ class RemoteStage:
                 raise WorkerConnectionLost(recovery.last_returncode) from None
             # The whole acknowledgment is the launch step: an unproved launch records
             # stage `launch`.
-            status = recovery.call(lambda: self._read_status(transport, session))
+            status = recovery.call(lambda: self._read_status(transport, connection, session))
             if status.lifecycle in {"starting", "running", "completed"}:
                 return
             if status.lifecycle == "failed":
@@ -817,7 +871,7 @@ class RemoteStage:
     def _release_resources(
         self,
         context: LifecycleContext,
-        transport: SshWslTransport,
+        transport: WorkerTransport,
         connection: WorkerConnectionSettings,
         *,
         recovery: WorkerRecovery,
@@ -834,8 +888,8 @@ class RemoteStage:
         """Capture, bring the worker up, launch its run and mirror progress until terminal."""
         context.failure_step = "transport"
         # One transport per detached run so its retained keepalive handle is the one released.
-        transport = _transport(context.runner, self.connection())
         connection = self.connection()
+        transport = _transport(context.runner, connection)
         context.failure_step = "capture"
         self._checkpoint_preparation(context, "snapshot")
         session = self._capture(context)
@@ -866,7 +920,7 @@ class RemoteStage:
                     health_attempts=self.startup_attempts,
                     sleep=time.sleep,
                 )
-                status = iteration.call(lambda: self._read_status(transport, session))
+                status = iteration.call(lambda: self._read_status(transport, connection, session))
                 context.checkpoint(self._progress(status))
                 lifecycle = status.lifecycle
                 if lifecycle == "completed":
@@ -885,7 +939,7 @@ class RemoteStage:
                 if lifecycle == "paused" and status.reboot_due:
                     self._release_resources(context, transport, connection, recovery=iteration)
                     context.failure_step = "reboot"
-                    rebooted = reboot.reboot_windows_worker(
+                    rebooted = reboot.reboot_worker(
                         transport, connection, run_allowed=context.admit, recovery=iteration
                     )
                     if not rebooted or not context.admit():
@@ -910,19 +964,19 @@ class RemoteStage:
             return
         resources = state.worker
         context.failure_step = "transport"
-        transport = _transport(context.runner, self.connection())
         connection = self.connection()
+        transport = _transport(context.runner, connection)
         # No run-admission callback: a requested pause must finish unloading, not cancel itself.
         recovery = WorkerRecovery(connection)
         context.failure_step = "status"
         if resources.worker_prepared:
             session = self._load_session(context.session.session_id)[0]
-            status = recovery.call(lambda: self._read_status(transport, session))
+            status = recovery.call(lambda: self._read_status(transport, connection, session))
             if status.lifecycle in {"starting", "running"}:
                 acknowledged = recovery.call(
                     self._mutation_with_reconcile(
                         self._status_callable(transport, connection, session, "pause"),
-                        lambda: self._read_status(transport, session),
+                        lambda: self._read_status(transport, connection, session),
                         _PAUSE_ACCEPTED,
                     )
                 )
@@ -930,7 +984,7 @@ class RemoteStage:
                 acknowledged = recovery.call(
                     self._mutation_with_reconcile(
                         self._status_callable(transport, connection, session, "stop"),
-                        lambda: self._read_status(transport, session),
+                        lambda: self._read_status(transport, connection, session),
                         _STOP_ACCEPTED,
                     )
                 )
@@ -973,6 +1027,9 @@ class RemoteStage:
             context.failure_step = "local_cleanup"
             self._unlink_local_scratch(context)
             return
+        _ensure_same_machine_worker(
+            context.runner, connection, timeout=connection.stop_timeout_seconds
+        )
         transport = _transport(context.runner, connection)
         session = self._load_session(session_id)[0]
         timeout = _admin_settings().database_operation_timeout_seconds
@@ -990,12 +1047,12 @@ class RemoteStage:
             context, transport, connection, resources, timeout=timeout, recovery=recovery
         )
         context.failure_step = "worker_finalize"
-        status = recovery.call(lambda: self._read_status(transport, session))
+        status = recovery.call(lambda: self._read_status(transport, connection, session))
         if status.lifecycle in {"prepared", "starting", "running", "paused", "interrupted"}:
             status = recovery.call(
                 self._mutation_with_reconcile(
                     self._status_callable(transport, connection, session, "stop"),
-                    lambda: self._read_status(transport, session),
+                    lambda: self._read_status(transport, connection, session),
                     _STOP_ACCEPTED,
                 )
             )
@@ -1005,7 +1062,7 @@ class RemoteStage:
                     self._status_callable(
                         transport, connection, session, "finalize", timeout=timeout
                     ),
-                    lambda: self._read_status(transport, session),
+                    lambda: self._read_status(transport, connection, session),
                     _FINALIZE_ACCEPTED,
                 )
             )
@@ -1037,7 +1094,7 @@ class RemoteStage:
                     self._status_callable(
                         transport, connection, session, "cleanup", timeout=timeout
                     ),
-                    lambda: self._read_status(transport, session),
+                    lambda: self._read_status(transport, connection, session),
                     _CLEANUP_ACCEPTED,
                 )
             )
@@ -1152,3 +1209,42 @@ def run_inference_lifecycle_command(
         session_id_factory=session_id_factory,
         sleep=sleep,
     )
+
+
+def resume_reboot_interrupted_stages(
+    *,
+    runner: mechanics.ProcessRunner,
+    clock: Callable[[], datetime] = utc_now,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[str, ...]:
+    """Resume the remote stages a same-machine host reboot interrupted.
+
+    Only a same-machine worker is considered, because a remote worker's restart is issued by the
+    session that waits for it. A stage is resumed only when its current state is a ``starting`` or
+    ``running`` run whose recorded process belongs to an earlier boot and the operator's requested
+    action is ``run``. A pending pause or stop, a fresh state, a same-boot process and a remote
+    worker are not resumed. The resume action takes the stage's reservations and launches its
+    detached child. The returned names are the resumed stages in stage order.
+    """
+    connection = load_worker_connection_settings()
+    if connection.host_kind != "same-machine":
+        return ()
+    boot_id = mechanics.current_boot_id()
+    resumed: list[str] = []
+    stages: tuple[tuple[StageName, Callable[..., LifecycleStatus]], ...] = (
+        ("translation", run_translation_lifecycle_command),
+        ("inference", run_inference_lifecycle_command),
+    )
+    for name, command in stages:
+        state = read_lifecycle_state(stage_state_root(name))
+        if state is None:
+            continue
+        if state.lifecycle not in {"starting", "running"}:
+            continue
+        if state.requested_action != "run":
+            continue
+        if state.process is None or state.process.boot_id == boot_id:
+            continue
+        command("resume", runner=runner, clock=clock, sleep=sleep)
+        resumed.append(name)
+    return tuple(resumed)

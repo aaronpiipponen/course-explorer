@@ -113,15 +113,16 @@
         marker-end="url(#arrow)"/>
   <text x="496" y="430" text-anchor="middle" font-size="14" fill="#a3a4b8">session refused</text>
 
-  <polyline points="416,472 520,472 520,536 576,536" fill="none" stroke="#a3a4b8"
+  <polyline points="416,472 504,472 504,536 576,536" fill="none" stroke="#a3a4b8"
             stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="430" y="492" font-size="14" fill="#a3a4b8">login</text>
+  <text x="424" y="464" font-size="14" fill="#a3a4b8">login</text>
 
-  <polyline points="416,552 540,552 540,632 576,632" fill="none" stroke="#a3a4b8"
+  <polyline points="416,552 548,552 548,632 576,632" fill="none" stroke="#a3a4b8"
             stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="440" y="540" font-size="14" fill="#a3a4b8">no match</text>
+  <text x="424" y="572" font-size="14" fill="#a3a4b8">no match</text>
 
-  <polyline points="96,552 64,552 64,648 96,648" fill="none" stroke="#a98ae0"
+  <polyline points="96,456 64,456 64,648 96,648" fill="none" stroke="#a98ae0"
             stroke-width="1.5" marker-end="url(#arrow-accent)"/>
-  <text x="72" y="604" font-size="14" fill="#a3a4b8">GET, HEAD or OPTIONS</text>
+  <text x="44" y="552" text-anchor="middle" font-size="14" fill="#a3a4b8"
+        transform="rotate(-90 44 552)">GET, HEAD or OPTIONS</text>
 </svg>

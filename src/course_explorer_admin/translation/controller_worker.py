@@ -28,6 +28,7 @@ from course_explorer.config import (
     load_translation_controller_settings,
     load_translation_settings,
     load_worker_gpu_reboot_settings,
+    load_worker_gpu_settings,
 )
 from course_explorer.curriculum_repository import CurriculumRepository
 from course_explorer.db.session import create_database_engine, create_session_factory
@@ -351,6 +352,7 @@ class TranslationWorkerStage:
         settings = self.connection()
         worker_root = settings.worker_project_root
         translation_settings = load_translation_settings()
+        gpu = load_worker_gpu_settings()
         session_settings = load_raw_database_settings().model_copy(
             update={"postgres_db": session.database_name}
         )
@@ -429,7 +431,9 @@ class TranslationWorkerStage:
             # A pending pause/stop that arrived before this invocation starts no model at all.
             if state.desired_count > 0 and gate():
                 tracker["runtime_pid"] = owner.start(
-                    translation_runtime_spec(translation_settings, worker_root),
+                    translation_runtime_spec(
+                        translation_settings, worker_root, gpu=gpu, host_kind=settings.host_kind
+                    ),
                     attempts=settings.translation_controller_health_attempts,
                     interval=settings.poll_interval_seconds,
                     timeout=settings.stop_timeout_seconds,

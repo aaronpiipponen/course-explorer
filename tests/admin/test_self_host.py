@@ -1,16 +1,18 @@
 """Contracts for the two self-host setup workflows and the absent-template copy.
 
 Each test drives the workflow owner. The process runner, the HTTP reads, the pinned artifact check,
-the native-library check, the artifact builder, the unit-directory, table-name and feedback-store
-helpers, the migration and verification helpers and the readiness sleep are substituted. Template
+the container-host preflight, the artifact builder, the table-name and feedback-store helpers, the
+migration and verification helpers are substituted where the test does not exercise them. Template
 copy, the exact-file edits and credential creation run as product code.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
+import socket
 import subprocess
-import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -38,7 +40,7 @@ from course_explorer.serving_artifacts import (
     serving_artifact_root,
     serving_key,
 )
-from course_explorer_admin import compose, self_host
+from course_explorer_admin import compose, mechanics, self_host, working_files
 from course_explorer_admin import configuration as editor
 from course_explorer_admin import datasets as dataset_owner
 from course_explorer_admin.self_host import (
@@ -47,7 +49,10 @@ from course_explorer_admin.self_host import (
     setup_example,
     setup_real_database,
 )
-from tests.config._support import set_administrative_controller_environment
+from tests.config._support import (
+    WORKER_CONNECTION_KEYS,
+    set_administrative_controller_environment,
+)
 from tests.datasets._support import sample_verification
 from tests.support import REPO_ROOT, write_example_config_tree
 
@@ -93,55 +98,12 @@ def _prepare_environment(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
     configuration.clear_configuration_caches()
 
 
-def _prepare_host_files(root: Path) -> None:
-    """Create the prepared interpreter and frontend packages a host preflight requires."""
-    interpreter = root / ".venv" / "bin" / "python"
-    interpreter.parent.mkdir(parents=True, exist_ok=True)
-    interpreter.write_text("#!/usr/bin/env python\n", encoding="utf-8")
-    interpreter.chmod(0o700)
-    for frontend in ("web", "admin-web"):
-        (root / frontend / "node_modules").mkdir(parents=True, exist_ok=True)
-
-
-def _write_shells(root: Path) -> tuple[bytes, bytes]:
-    """Write both built shells and return their bytes."""
-    web = b"<!doctype html><title>feature</title>\n"
-    admin = b"<!doctype html><title>console</title>\n"
-    (root / "web" / "dist").mkdir(parents=True, exist_ok=True)
-    (root / "admin-web" / "dist").mkdir(parents=True, exist_ok=True)
-    (root / "web" / "dist" / "index.html").write_bytes(web)
-    (root / "admin-web" / "dist" / "index.html").write_bytes(admin)
-    return web, admin
-
-
 def _write_catalogue(root: Path, settings, payload: bytes) -> None:
     """Write one fixed catalogue artifact for the supplied database settings."""
     family = serving_artifact_root(root / settings.admin_state_root, serving_key(settings))
     current = family / "current"
     current.mkdir(parents=True, exist_ok=True)
     (current / CATALOGUE_FILE).write_bytes(payload)
-
-
-class _Child:
-    """One owned foreground child recorded by the scripted runner."""
-
-    def __init__(self) -> None:
-        self.terminated = False
-        self.killed = False
-        self.waited = False
-
-    def poll(self) -> int | None:
-        return 0 if self.waited else None
-
-    def terminate(self) -> None:
-        self.terminated = True
-
-    def kill(self) -> None:
-        self.killed = True
-
-    def wait(self, timeout: float | None = None) -> int:
-        self.waited = True
-        return 0
 
 
 class _Runner:
@@ -154,7 +116,6 @@ class _Runner:
         self.services = set(services)
         self.created: set[str] = set()
         self.dropped: set[str] = set()
-        self.children: list[_Child] = []
 
     def run(self, argv, *, cwd=None, env=None, stdin_path=None, stdout_path=None, timeout=None):
         command = tuple(argv)
@@ -172,12 +133,8 @@ class _Runner:
             self.created.add(command[-1])
         elif "dropdb" in command:
             self.dropped.add(command[-1])
-        elif command[:1] == ("node",):
-            output = b"v22.0.0\n"
-        elif command[:2] == ("docker", "compose") or command[-1:] == ("version",):
+        elif command[-1:] == ("version",):
             output = b"1.0.0\n"
-        elif command[:1] == ("loginctl",):
-            output = b"Linger=yes\n"
         return subprocess.CompletedProcess(list(command), 0, stdout=output, stderr=b"")
 
     def run_interactive(self, argv, *, cwd=None, env=None, timeout=None):
@@ -185,71 +142,33 @@ class _Runner:
         self.interactive_calls.append(command)
         self.run(command, cwd=cwd, env=env, timeout=timeout)
 
-    def popen(
-        self,
-        argv,
-        *,
-        cwd=None,
-        env=None,
-        stdin_path=None,
-        stdout_path=None,
-        stderr_path=None,
-        start_new_session=False,
-        inherit_environment=True,
-    ):
-        self.calls.append(tuple(argv))
-        child = _Child()
-        self.children.append(child)
-        return child
-
-
-class _IncapableInterpreterRunner(_Runner):
-    """Answer the interpreter capability probe with the failure of an incapable interpreter."""
-
-    def run(
-        self,
-        argv,
-        *,
-        cwd=None,
-        env=None,
-        stdin_path=None,
-        stdout_path=None,
-        timeout=None,
-    ):
-        command = tuple(argv)
-        if len(command) > 2 and command[1] == "-c":
-            self.calls.append(command)
-            raise subprocess.CalledProcessError(1, command, output=b"", stderr=b"")
-        return super().run(
-            command,
-            cwd=cwd,
-            env=env,
-            stdin_path=stdin_path,
-            stdout_path=stdout_path,
-            timeout=timeout,
-        )
-
 
 def _bind_http(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    web_shell: bytes,
-    admin_shell: bytes,
     artifact: list[bytes],
     identities: list[str],
     events: list[str],
     web_port: int = _WEB_PORT,
     admin_port: int = _ADMIN_PORT,
+    site_running: Callable[[], bool] | None = None,
 ) -> None:
-    """Route both workflow proofs through one fixed HTTP boundary and record each read."""
+    """Route both workflow proofs through one fixed HTTP boundary and record each read.
+
+    ``site_running`` models a stopped site container: while it answers false, the feature read
+    refuses the connection exactly as one that serves nothing does.
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
         events.append("http")
+        html = {"content-type": "text/html; charset=utf-8"}
         if request.url.path == "/" and request.url.port == web_port:
-            return httpx.Response(200, content=web_shell)
+            return httpx.Response(200, headers=html, text="<!doctype html><title>feature</title>")
         if request.url.path == "/" and request.url.port == admin_port:
-            return httpx.Response(200, content=admin_shell)
+            return httpx.Response(200, headers=html, text="<!doctype html><title>console</title>")
         if request.url.path == "/api/features":
+            if site_running is not None and not site_running():
+                raise httpx.ConnectError("the site container is not running")
             identity = identities[0]
             events.append(f"identity:{identity}")
             return httpx.Response(
@@ -273,98 +192,6 @@ def _bind_http(
     monkeypatch.setattr(httpx, "Client", factory)
 
 
-def test_example_setup_renames_a_clean_checkout(tmp_path: Path) -> None:
-    """A clean checkout takes its instance folder name and rebuilds its environment."""
-    root = _checkout(tmp_path, "clean")
-    (root / ".venv" / "bin").mkdir(parents=True)
-    (root / ".venv" / "bin" / "python").write_text("stale\n", encoding="utf-8")
-    target = tmp_path / "course-explorer-example-proof"
-    runner = _Runner()
-    writes: list[str] = []
-
-    # The tracked fictional fixture tree is part of the clone and holds no runtime state.
-    assert (root / "data" / "mock" / "courses.json").is_file()
-    with pytest.raises(self_host.CheckoutRenamed) as renamed:
-        self_host.prepare_checkout_path(
-            root, "example", "-proof", runner=runner, write=writes.append
-        )
-
-    assert renamed.value.target == target
-    assert str(target) in str(renamed.value)
-    assert not root.exists()
-    assert (target / "data" / "mock" / "courses.json").is_file()
-    assert not (target / ".venv").exists()
-    assert writes == [
-        "rename the checkout to course-explorer-example-proof",
-        "remove the stale Python environment",
-        "rebuild the Python environment",
-    ]
-    command, cwd, env = runner.runs[-1]
-    assert command == (
-        "uv",
-        "sync",
-        "--locked",
-        "--no-managed-python",
-        "--python",
-        sys._base_executable,
-    )
-    assert cwd == target
-    assert env is not None and "VIRTUAL_ENV" not in env
-
-
-def test_example_setup_refuses_to_rename_a_configured_checkout(tmp_path: Path) -> None:
-    """A configured checkout keeps its folder and prints the exact rename instead."""
-    root = _checkout(tmp_path, "configured")
-    (root / ".env").write_text("synthetic\n", encoding="utf-8")
-    target = tmp_path / "course-explorer-example-proof"
-    runner = _Runner()
-    writes: list[str] = []
-
-    assert (
-        self_host.prepare_checkout_path(
-            root, "example", "-proof", runner=runner, write=writes.append
-        )
-        is None
-    )
-
-    assert root.is_dir()
-    assert not target.exists()
-    assert writes == [f"mv {root} {target}"]
-    assert runner.runs == []
-
-    # The runtime state directory below data/ is a marker. The tracked fixture tree is not.
-    state = _checkout(tmp_path, "runtime-state")
-    (state / "data" / "admin").mkdir(parents=True)
-    state_target = tmp_path / "course-explorer-example-state"
-    state_writes: list[str] = []
-    assert (
-        self_host.prepare_checkout_path(
-            state, "example", "-state", runner=_Runner(), write=state_writes.append
-        )
-        is None
-    )
-    assert state.is_dir()
-    assert not state_target.exists()
-    assert state_writes == [f"mv {state} {state_target}"]
-
-    # A linked worktree keeps its checkout path and prints the Git move command instead.
-    worktree = _checkout(tmp_path, "linked")
-    (worktree / ".git").write_text("gitdir: /elsewhere/.git/worktrees/linked\n", encoding="utf-8")
-    linked_target = tmp_path / "course-explorer-example-linked"
-    linked_runner = _Runner()
-    linked_writes: list[str] = []
-    assert (
-        self_host.prepare_checkout_path(
-            worktree, "example", "-linked", runner=linked_runner, write=linked_writes.append
-        )
-        is None
-    )
-    assert worktree.is_dir()
-    assert not linked_target.exists()
-    assert linked_writes == [f"git worktree move {worktree} {linked_target}"]
-    assert linked_runner.runs == []
-
-
 def test_example_files_are_copied_only_when_absent(tmp_path: Path) -> None:
     """Absent templates are created, present working files keep their bytes, and links refuse."""
     first = _checkout(tmp_path, "first")
@@ -373,14 +200,13 @@ def test_example_files_are_copied_only_when_absent(tmp_path: Path) -> None:
         "config/web.toml": b"# present web settings\n",
         ".env": b"CUSTOM_SECRET=kept\n",
         "docker-compose.yml": b"name: kept\n",
-        "deploy/Caddyfile": b"# present proxy\n",
     }
     for relative, payload in present.items():
         path = first / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
 
-    assert self_host._copy_example_files(first) is False
+    assert working_files.copy_example_files(first) is False
     for relative, payload in present.items():
         assert (first / relative).read_bytes() == payload
     assert (first / "config" / "database.toml").read_bytes() == (
@@ -388,13 +214,9 @@ def test_example_files_are_copied_only_when_absent(tmp_path: Path) -> None:
     ).read_bytes()
     assert (first / "config" / "wiki.json").is_file()
     assert (first / "config" / "feedback-form.json").is_file()
-    for unit in self_host._UNIT_TEMPLATES:
-        assert (first / "deploy" / unit).read_bytes() == (
-            first / "examples" / "deploy" / "systemd" / unit
-        ).read_bytes()
 
     second = _checkout(tmp_path, "second")
-    assert self_host._copy_example_files(second) is True
+    assert working_files.copy_example_files(second) is True
     environment = second / ".env"
     assert environment.read_bytes() == (second / "examples" / ".env.example").read_bytes()
     assert environment.stat().st_mode & 0o777 == 0o600
@@ -405,65 +227,159 @@ def test_example_files_are_copied_only_when_absent(tmp_path: Path) -> None:
     target.write_text("outside\n", encoding="utf-8")
     (third / "config" / "curriculum.toml").symlink_to(target)
     with pytest.raises(ValueError):
-        self_host._copy_example_files(third)
+        working_files.copy_example_files(third)
     assert target.read_text(encoding="utf-8") == "outside\n"
 
 
-def test_example_workflow_refuses_an_incapable_interpreter_before_any_download(
+def test_example_workflow_refuses_a_host_the_preflight_rejects(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A checkout whose interpreter lacks the shared-memory call stops before any host step."""
-    root = _checkout(tmp_path, "incapable")
+    """An account that cannot write the Docker socket stops before any build or download, a domain
+    address with a port is refused, and a domain-mode run refuses a public port a listener holds on
+    the configured bind address or the wildcard address while a listener on another address
+    passes."""
+    root = _checkout(tmp_path, "socket")
     _prepare_environment(monkeypatch, root)
-    _prepare_host_files(root)
-    runner = _IncapableInterpreterRunner()
+    runner = _Runner()
 
-    with pytest.raises(ValueError, match="os.memfd_create"):
+    with pytest.raises(ValueError, match="without a port"):
+        ExampleSetupInput(
+            serve_mode="domain",
+            app_url="https://course-explorer.test:443/",
+            instance_key="example",
+            web_port=_WEB_PORT,
+            admin_web_port=_ADMIN_PORT,
+            postgres_port=15433,
+            embedding_port=18081,
+            username="synthetic-operator",
+            password=SecretStr("synthetic-password"),
+        )
+
+    monkeypatch.setattr(compose, "docker_needs_sudo", lambda: True)
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(tmp_path / "shared-socket"))
+    configuration.clear_configuration_caches()
+
+    with pytest.raises(ValueError, match="docker group"):
         setup_example(
             ExampleSetupInput(
+                serve_mode="local",
                 instance_key="example",
                 web_port=_WEB_PORT,
                 admin_web_port=_ADMIN_PORT,
                 postgres_port=15433,
                 embedding_port=18081,
-                shared_root=tmp_path / "shared-incapable",
                 username="synthetic-operator",
                 password=SecretStr("synthetic-password"),
-                mode="foreground",
             ),
             runner=runner,
             write=lambda _message: None,
         )
 
-    # The capability probe is the workflow's only command, so no download, build or container
-    # command ran.
-    interpreter = str(root / ".venv" / "bin" / "python")
-    assert [(command[0], command[1]) for command in runner.calls] == [(interpreter, "-c")]
+    # Only the three container-host checks ran, so no build, download or Compose command ran.
+    socket_calls = list(runner.calls)
+    assert [command[:2] for command in socket_calls] == [
+        ("docker", "--version"),
+        ("docker", "compose"),
+        ("docker", "info"),
+    ]
+    assert not any("build" in command or "up" in command for command in socket_calls)
+
+    # A domain-mode run refuses a public port held by a process other than the proxy.
+    monkeypatch.setattr(compose, "docker_needs_sudo", lambda: False)
+    monkeypatch.setattr(
+        self_host.proxy, "listening_sockets", lambda: frozenset({("192.0.2.10", 80)})
+    )
+    monkeypatch.setattr(self_host.proxy, "running", lambda runner, *, shared_root: False)
+
+    def run_domain() -> None:
+        setup_example(
+            ExampleSetupInput(
+                serve_mode="domain",
+                app_url="https://course-explorer.test/",
+                instance_key="example",
+                web_port=_WEB_PORT,
+                admin_web_port=_ADMIN_PORT,
+                postgres_port=15433,
+                embedding_port=18081,
+                username="synthetic-operator",
+                password=SecretStr("synthetic-password"),
+            ),
+            runner=runner,
+            write=lambda _message: None,
+        )
+
+    with pytest.raises(ValueError, match="feature HTTP port 80 is used by another process"):
+        run_domain()
+
+    # A listener outside the configured bind address passes the port check, while a wildcard
+    # listener on the same port blocks the specific bind.
+    (tmp_path / "shared-socket").mkdir(exist_ok=True)
+    monkeypatch.setenv("PROXY_BIND_ADDRESS", "192.0.2.10")
+    configuration.clear_configuration_caches()
+    monkeypatch.setattr(
+        self_host.proxy, "listening_sockets", lambda: frozenset({("192.0.2.20", 443)})
+    )
+    with pytest.raises(ValueError, match="the pinned embedding model is absent"):
+        run_domain()
+    monkeypatch.setattr(self_host.proxy, "listening_sockets", lambda: frozenset({("0.0.0.0", 443)}))
+    with pytest.raises(ValueError, match="feature HTTPS port 443 is used by another process"):
+        run_domain()
+
+    assert runner.interactive_calls == []
+    assert not any("build" in command or "up" in command for command in runner.calls)
 
 
-@pytest.mark.parametrize("mode", ["foreground", "user"])
+@pytest.mark.parametrize(
+    ("serve_mode", "app_url", "publication", "proxy_bind_address"),
+    [
+        ("local", f"http://localhost:{_WEB_PORT}/", False, None),
+        ("domain", "https://course-explorer.test/", False, None),
+        ("domain", "https://course-explorer.test/", True, None),
+        ("domain", "https://course-explorer.test/", False, "192.0.2.10"),
+    ],
+)
 def test_example_workflow_reaches_bootstrap_serving(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    serve_mode: str,
+    app_url: str,
+    publication: bool,
+    proxy_bind_address: str | None,
 ) -> None:
-    """The same example workflow reaches both shells and bootstrap serving in either mode."""
-    root = _checkout(tmp_path, f"checkout-{mode}")
+    """The example workflow builds both image sets, starts the services publication needs, publishes
+    a domain-mode site through the machine-wide proxy with its configured bind address, and proves
+    both shells."""
+    root = _checkout(tmp_path, "checkout-bootstrap")
     _prepare_environment(monkeypatch, root)
     _clear_written_port_overrides(monkeypatch)
-    _prepare_host_files(root)
-    web_shell, admin_shell = _write_shells(root)
+    if proxy_bind_address is not None:
+        monkeypatch.setenv("PROXY_BIND_ADDRESS", proxy_bind_address)
+    socket_path = tmp_path / "docker.sock"
+    socket_path.touch()
+    monkeypatch.setattr(compose, "DOCKER_SOCKET_PATH", socket_path)
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(tmp_path / "shared-bootstrap"))
+    configuration.clear_configuration_caches()
+    if publication:
+        # A non-example destination lets the publication branch run; no token is real and no
+        # repository write happens.
+        (root / "config").mkdir()
+        feedback = (REPO_ROOT / "examples" / "config" / "feedback.toml").read_text(encoding="utf-8")
+        (root / "config" / "feedback.toml").write_text(
+            feedback.replace(
+                'FEEDBACK_GITHUB_REPOSITORY = "example-owner/example-repository"',
+                'FEEDBACK_GITHUB_REPOSITORY = "OWNER/REPOSITORY"',
+            ),
+            encoding="utf-8",
+        )
     runner = _Runner()
     events: list[str] = []
     artifact = [b'{"courses":[]}']
     identities = ["bootstrap"]
     _bind_http(
         monkeypatch,
-        web_shell=web_shell,
-        admin_shell=admin_shell,
         artifact=artifact,
         identities=identities,
         events=events,
-        web_port=_WEB_PORT,
-        admin_port=_ADMIN_PORT,
     )
 
     artifact_paths: list[Path] = []
@@ -473,10 +389,10 @@ def test_example_workflow_reaches_bootstrap_serving(
         return True
 
     monkeypatch.setattr(self_host.artifacts, "artifact_present", artifact_present)
-    monkeypatch.setattr(self_host, "_require_native_libraries", lambda: None)
     monkeypatch.setattr(self_host, "_existing_table_names", lambda settings: ())
-    unit_directory = tmp_path / "user-units"
-    monkeypatch.setattr(self_host, "_user_unit_directory", lambda: unit_directory)
+    monkeypatch.setattr(
+        self_host, "_require_host_prerequisites", lambda root, runner, write, *, serve_mode: None
+    )
 
     def prepare_feedback(*, runner) -> None:
         events.append("feedback")
@@ -503,30 +419,25 @@ def test_example_workflow_reaches_bootstrap_serving(
 
     runner.run = run
 
-    def stop_after_readiness(_seconds: float) -> None:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(self_host.time, "sleep", stop_after_readiness)
-
     report = setup_example(
         ExampleSetupInput(
-            app_url=f"http://localhost:{_WEB_PORT}/",
+            serve_mode=serve_mode,
+            app_url=app_url,
             instance_key="example",
             web_port=_WEB_PORT,
             admin_web_port=_ADMIN_PORT,
             postgres_port=15433,
             embedding_port=18081,
-            shared_root=tmp_path / "shared-bootstrap",
             username="synthetic-operator",
             password=SecretStr("synthetic-password"),
-            mode=mode,
             confirm_download=False,
+            publication_token=SecretStr("synthetic-token") if publication else None,
         ),
         runner=runner,
         write=events.append,
     )
 
-    assert report.app_url == f"http://localhost:{_WEB_PORT}/"
+    assert report.app_url == app_url
     assert report.dataset_id is None
     assert read_dataset_role(root / "data" / "admin", "selected") is None
     assert "identity:bootstrap" in events
@@ -541,72 +452,153 @@ def test_example_workflow_reaches_bootstrap_serving(
         == 15433
     )
     assert editor.read_configuration_file("config/search.toml").values["EMBEDDING_PORT"] == 18081
-    assert sorted(path.name for path in (tmp_path / "shared-bootstrap").iterdir()) == [
-        "locks",
-        "models",
-    ]
+    assert sorted(path.name for path in (tmp_path / "shared-bootstrap").iterdir()) == (
+        ["locks", "models", "proxy"] if serve_mode == "domain" else ["locks", "models"]
+    )
     assert artifact_paths == [tmp_path / "shared-bootstrap" / "models" / "bge-m3-q8_0.gguf"]
 
     commands = runner.calls
-    interpreter = str(root / ".venv" / "bin" / "python")
-    probe_index = next(
-        index for index, command in enumerate(commands) if command[:2] == (interpreter, "-c")
+    bridge = mechanics.compose_prefix(interpreter=True)
+    steps = [command[len(bridge) :] for command in commands if command[: len(bridge)] == bridge]
+    build_services = ["web", "admin", *(["sender"] if publication else [])]
+    tail = ["sender"] if publication else []
+    assert steps == [
+        ("build", "db", "embedding"),
+        ("up", "-d", "--wait", "--no-build", "db", "embedding"),
+        ("build", *build_services),
+        ("up", "-d", "--wait", "--no-build", "web", "admin", *tail),
+    ]
+    assert runner.interactive_calls == [
+        (*bridge, "build", "db", "embedding"),
+        (*bridge, "build", *build_services),
+    ]
+    proxy_root = tmp_path / "shared-bootstrap" / "proxy"
+    proxy_prefix = (
+        *compose.docker_prefix(non_interactive=True),
+        "compose",
+        "--file",
+        str(proxy_root / "docker-compose.yml"),
     )
-    model_index = next(
+    proxy_steps = [
+        command[len(proxy_prefix) :]
+        for command in commands
+        if command[: len(proxy_prefix)] == proxy_prefix
+    ]
+    # No image build names the proxy in either mode.
+    assert not any("build" in command and "proxy" in command for command in commands)
+    if serve_mode == "domain":
+        templates = REPO_ROOT / "examples" / "deploy" / "proxy"
+        assert (proxy_root / "Caddyfile").read_bytes() == (templates / "Caddyfile").read_bytes()
+        assert (proxy_root / "docker-compose.yml").read_bytes() == (
+            templates / "docker-compose.yml"
+        ).read_bytes()
+        bind_line = f"\tbind {proxy_bind_address}\n" if proxy_bind_address is not None else ""
+        assert (proxy_root / "sites" / "example.caddy").read_text(encoding="utf-8") == (
+            "# Public site for the configured domain, forwarded to this instance's loopback "
+            "site port.\n"
+            "https://course-explorer.test {\n"
+            f"{bind_line}"
+            f"\treverse_proxy 127.0.0.1:{_WEB_PORT}\n"
+            "}\n"
+        )
+        assert proxy_steps == [
+            ("up", "-d", "--wait", "proxy"),
+            (
+                "exec",
+                "-T",
+                "proxy",
+                "caddy",
+                "reload",
+                "--config",
+                "/etc/caddy/Caddyfile",
+                "--adapter",
+                "caddyfile",
+                "--address",
+                "unix//tmp/caddy-admin.sock",
+            ),
+        ]
+    else:
+        assert not proxy_root.exists()
+        assert proxy_steps == []
+    load = next(
         index
         for index, command in enumerate(commands)
         if command[-2:] == ("scripts/mock_data.py", "load")
     )
-    build_index = next(
+    artifacts = next(
         index
         for index, command in enumerate(commands)
-        if command[-3:] == ("build", "db", "embedding")
+        if command[-2:] == ("scripts/mock_data.py", "write-artifacts")
     )
-    assert probe_index < model_index
-    assert probe_index < build_index
-    assert any(command[-2:] == ("scripts/mock_data.py", "load") for command in commands)
-    assert any(command[-2:] == ("scripts/mock_data.py", "write-artifacts") for command in commands)
-    assert any("scripts/build_native.py" in command for command in commands)
-    assert ("npm", "--prefix", "web", "run", "build") in commands
-    assert ("npm", "--prefix", "web", "run", "solver:build") in commands
-    assert ("npm", "--prefix", "admin-web", "run", "build") in commands
-    assert commands.index(("npm", "--prefix", "web", "run", "build")) < commands.index(
-        ("npm", "--prefix", "admin-web", "run", "build")
+    embedding_start = commands.index(
+        (*bridge, "up", "-d", "--wait", "--no-build", "db", "embedding")
     )
+    site_build = next(
+        index
+        for index, command in enumerate(commands)
+        if command[len(bridge) :] == ("build", *build_services)
+    )
+    # The example import runs after both services start and before the site image build.
+    assert embedding_start < load < artifacts
+    assert artifacts < site_build
+    # No host build runs and no unit is installed.
+    assert not any(command[0] in {"npm", "systemctl", "loginctl"} for command in commands)
+    assert not any("build_native.py" in command for command in commands)
     assert events.index("migrate") < events.index("artifact")
     assert events.index("artifact") < events.index("feedback")
     assert events.index("feedback") < events.index("http")
 
-    if mode == "user":
-        assert sorted(path.name for path in unit_directory.iterdir()) == sorted(
-            (
-                "course-explorer-example-web.service",
-                "course-explorer-example-admin-web.service",
-                "course-explorer-example-feedback-sender.service",
-                "course-explorer-example-feedback-sender.timer",
-            )
-        )
-        timer = (unit_directory / "course-explorer-example-feedback-sender.timer").read_text(
-            encoding="utf-8"
-        )
-        assert "Unit=course-explorer-example-feedback-sender.service" in timer
-        assert "@FEEDBACK_SERVICE@" not in timer
-        enabled = [
-            command for command in commands if command[:3] == ("systemctl", "--user", "enable")
-        ]
-        site = editor.read_configuration_file("config/admin_web.toml").values
-        assert site["ADMIN_SITE_WEB_SERVICE_UNIT"] == ("course-explorer-example-web.service")
-        assert site["ADMIN_SITE_ADMIN_SERVICE_UNIT"] == (
-            "course-explorer-example-admin-web.service"
-        )
-        assert site["ADMIN_SITE_WEB_SERVICE_SCOPE"] == "user"
-        assert [command[-1] for command in enabled] == [
-            "course-explorer-example-web.service",
-            "course-explorer-example-admin-web.service",
-        ]
-    else:
-        assert len(runner.children) == 2
-        assert all(child.terminated and child.waited for child in runner.children)
+
+def test_example_workflow_builds_and_starts_the_same_machine_worker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The example workflow builds and starts the profile-gated worker on a same-machine host.
+
+    The worker joins the site group in the build and the start, so the first-run path starts the
+    same services that the configured stack starts on that host.
+    """
+    root = _checkout(tmp_path, "checkout-same-machine")
+    _prepare_environment(monkeypatch, root)
+    _clear_written_port_overrides(monkeypatch)
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(tmp_path / "shared-worker"))
+    working_files.copy_example_files(root)
+    (root / "config" / "worker.toml").write_text(
+        'WORKER_HOST_KIND = "same-machine"\n'
+        'WORKER_PROJECT_ROOT = "/app"\n'
+        "WORKER_SSH_CONNECT_TIMEOUT_SECONDS = 10\n",
+        encoding="utf-8",
+    )
+    # The ordinary-test fixture injects the example worker aliases into the process environment,
+    # and a process value wins over the subsystem file, so the file is the only source here.
+    for alias in WORKER_CONNECTION_KEYS:
+        monkeypatch.delenv(alias, raising=False)
+    configuration.clear_configuration_caches()
+    runner, events = _stub_example_host(monkeypatch, root)
+
+    report = setup_example(
+        ExampleSetupInput(
+            serve_mode="local",
+            instance_key="example",
+            web_port=_WEB_PORT,
+            admin_web_port=_ADMIN_PORT,
+            postgres_port=15433,
+            embedding_port=18081,
+            username="synthetic-operator",
+            password=SecretStr("synthetic-password"),
+        ),
+        runner=runner,
+        write=events.append,
+    )
+
+    assert report.app_url == f"http://localhost:{_WEB_PORT}/"
+    bridge = mechanics.compose_prefix(interpreter=True)
+    steps = [command[len(bridge) :] for command in runner.calls if command[: len(bridge)] == bridge]
+    assert steps == [
+        ("build", "db", "embedding"),
+        ("up", "-d", "--wait", "--no-build", "db", "embedding"),
+        ("build", "web", "admin", "worker"),
+        ("up", "-d", "--wait", "--no-build", "web", "admin", "worker"),
+    ]
 
 
 def _stub_example_host(
@@ -615,19 +607,14 @@ def _stub_example_host(
     *,
     web_port: int = _WEB_PORT,
     admin_port: int = _ADMIN_PORT,
-    unit_directory: Path,
 ) -> tuple[_Runner, list[str]]:
     """Bind one example workflow's external boundaries to a temporary checkout."""
-    _prepare_host_files(root)
-    web_shell, admin_shell = _write_shells(root)
     runner = _Runner()
     events: list[str] = []
     artifact = [b'{"courses":[]}']
     identities = ["bootstrap"]
     _bind_http(
         monkeypatch,
-        web_shell=web_shell,
-        admin_shell=admin_shell,
         artifact=artifact,
         identities=identities,
         events=events,
@@ -635,10 +622,10 @@ def _stub_example_host(
         admin_port=admin_port,
     )
     monkeypatch.setattr(self_host.artifacts, "artifact_present", lambda path, digest: True)
-    monkeypatch.setattr(self_host, "_require_native_libraries", lambda: None)
     monkeypatch.setattr(self_host, "_existing_table_names", lambda settings: ())
-    monkeypatch.setattr(self_host, "_port_is_free", lambda host, port: True)
-    monkeypatch.setattr(self_host, "_user_unit_directory", lambda: unit_directory)
+    monkeypatch.setattr(
+        self_host, "_require_host_prerequisites", lambda root, runner, write, *, serve_mode: None
+    )
     monkeypatch.setattr(self_host, "_prepare_feedback_store", lambda *, runner: None)
     monkeypatch.setattr(
         dataset_owner,
@@ -660,16 +647,32 @@ def _stub_example_host(
 def test_setup_instances_use_independent_resources(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Two setups prepare their own settings, unit namespaces and Compose project names."""
+    """Two setups prepare their own settings and Compose project names."""
+    socket_path = tmp_path / "docker.sock"
+    socket_path.touch()
+    monkeypatch.setattr(compose, "DOCKER_SOCKET_PATH", socket_path)
+    monkeypatch.setenv(compose.HOST_ROOT_ALIAS, str(tmp_path / "host-checkout"))
+    monkeypatch.setenv(compose.SSH_DIRECTORY_ALIAS, str(tmp_path / "host-ssh"))
+    assert compose.host_checkout_root() == tmp_path / "host-checkout"
+    assert compose.host_ssh_directory() == tmp_path / "host-ssh"
+    monkeypatch.delenv(compose.HOST_ROOT_ALIAS)
+    monkeypatch.delenv(compose.SSH_DIRECTORY_ALIAS)
     instances = (
-        ("example", _WEB_PORT, _ADMIN_PORT, 15433, 18081, ""),
-        ("diak", 18077, 18079, 15473, 18121, "-guide"),
+        ("example", _WEB_PORT, _ADMIN_PORT, 15433, 18081),
+        ("diak", 18077, 18079, 15473, 18121),
     )
+    # The self-host script runs the workflow inside the setup container, whose account home is
+    # `/home/course`, and names the Docker host's home through its own alias.
+    host_home = tmp_path / "host-home"
+    monkeypatch.setenv("HOME", "/home/course")
+    monkeypatch.setenv("COURSE_EXPLORER_HOST_HOME", str(host_home))
     projections: dict[str, dict[str, str]] = {}
-    for key, web_port, admin_port, postgres_port, embedding_port, suffix in instances:
+    for key, web_port, admin_port, postgres_port, embedding_port in instances:
         root = _checkout(tmp_path, f"instance-{key}")
         _prepare_environment(monkeypatch, root)
         _clear_written_port_overrides(monkeypatch)
+        monkeypatch.setenv("ADMIN_SHARED_ROOT", f"~/.local/share/course-explorer-{key}")
+        configuration.clear_configuration_caches()
         # A Peppi PSG entry maps the periods its source lists, so its checkout carries the last
         # listed year in CURRENT_ACADEMIC_YEAR before the setup writes the instance key.
         psg_block = UNIVERSITIES[key].peppi_psg
@@ -683,51 +686,35 @@ def test_setup_instances_use_independent_resources(
                 ),
                 encoding="utf-8",
             )
-        unit_directory = tmp_path / f"units-{key}"
         runner, events = _stub_example_host(
             monkeypatch,
             root,
             web_port=web_port,
             admin_port=admin_port,
-            unit_directory=unit_directory,
         )
         report = setup_example(
             ExampleSetupInput(
+                serve_mode="local",
                 instance_key=key,
                 web_port=web_port,
                 admin_web_port=admin_port,
                 postgres_port=postgres_port,
                 embedding_port=embedding_port,
-                shared_root=tmp_path / f"shared-{key}",
                 username="synthetic-operator",
                 password=SecretStr("synthetic-password"),
-                mode="user",
             ),
             runner=runner,
             write=events.append,
-            checkout_suffix=suffix,
         )
 
         assert report.app_url == f"http://localhost:{web_port}/"
-        web_service = f"course-explorer-{key}{suffix}-web.service"
-        admin_service = f"course-explorer-{key}{suffix}-admin-web.service"
-        feedback_service = f"course-explorer-{key}{suffix}-feedback-sender.service"
-        assert sorted(path.name for path in unit_directory.iterdir()) == sorted(
-            (
-                web_service,
-                admin_service,
-                feedback_service,
-                f"{feedback_service.removesuffix('.service')}.timer",
-            )
-        )
         assert load_instance_settings().instance_key == key
         assert load_web_settings().web_port == web_port
         assert load_admin_web_settings().admin_web_port == admin_port
         assert load_admin_web_settings().admin_web_origin == f"https://localhost:{admin_port}"
         assert load_raw_database_settings().postgres_port == postgres_port
         site = editor.read_configuration_file("config/admin_web.toml").values
-        assert site["ADMIN_SITE_WEB_SERVICE_UNIT"] == web_service
-        assert site["ADMIN_SITE_ADMIN_SERVICE_UNIT"] == admin_service
+        assert not [name for name in site if name.startswith("ADMIN_SITE_")]
         web_values = editor.read_configuration_file("config/web.toml").values
         assert web_values["WEB_PREREQUISITES_ENABLED"] is (
             UNIVERSITIES[key].source_family == "sisu"
@@ -743,12 +730,23 @@ def test_setup_instances_use_independent_resources(
     assert projections["diak"]["POSTGRES_PORT"] == "15473"
     assert projections["example"]["EMBEDDING_PORT"] == "18081"
     assert projections["diak"]["EMBEDDING_PORT"] == "18121"
+    for key, _, _, _, _ in instances:
+        projection = projections[key]
+        assert projection["COURSE_EXPLORER_UID"] == str(os.getuid())
+        assert projection["COURSE_EXPLORER_GID"] == str(os.getgid())
+        assert projection["COURSE_EXPLORER_DOCKER_GID"] == str(socket_path.stat().st_gid)
+        assert projection["COURSE_EXPLORER_HOST_ROOT"] == str(tmp_path / f"instance-{key}")
+        assert projection["COURSE_EXPLORER_SSH_DIR"] == str(Path.home() / ".ssh")
+        assert projection["ADMIN_SHARED_ROOT"] == str(
+            host_home / f".local/share/course-explorer-{key}"
+        )
+        assert projection["ADMIN_STATE_ROOT"] == "data/admin"
 
 
 def test_setup_adopts_the_configured_shared_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A supplied existing shared directory keeps its file and gains the two layout directories."""
+    """A configured existing shared directory keeps its file and gains the two layout directories."""
     root = _checkout(tmp_path, "adopt")
     _prepare_environment(monkeypatch, root)
     _clear_written_port_overrides(monkeypatch)
@@ -756,19 +754,22 @@ def test_setup_adopts_the_configured_shared_directory(
     shared.mkdir()
     sentinel = shared / "model.gguf"
     sentinel.write_bytes(b"synthetic model bytes")
-    runner, events = _stub_example_host(monkeypatch, root, unit_directory=tmp_path / "adopt-units")
+    # The self-host script passes the shared directory in the settings environment, so the workflow
+    # adopts the configured value and writes it to the database settings.
+    monkeypatch.setenv("ADMIN_SHARED_ROOT", str(shared))
+    configuration.clear_configuration_caches()
+    runner, events = _stub_example_host(monkeypatch, root)
 
     setup_example(
         ExampleSetupInput(
+            serve_mode="local",
             instance_key="example",
             web_port=_WEB_PORT,
             admin_web_port=_ADMIN_PORT,
             postgres_port=15433,
             embedding_port=18081,
-            shared_root=shared,
             username="synthetic-operator",
             password=SecretStr("synthetic-password"),
-            mode="user",
         ),
         runner=runner,
         write=events.append,
@@ -784,6 +785,72 @@ def test_setup_adopts_the_configured_shared_directory(
     ] == str(shared)
 
 
+def test_stack_up_starts_the_configured_services_and_the_feedback_sender(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`up` starts the four core services and adds the sender and the same-machine worker.
+
+    A checkout whose environment file carries only the example placeholders starts no sender, a
+    configured token adds it, and a same-machine host adds the profile-gated worker. One step line
+    names every started service.
+    """
+    root = _checkout(tmp_path, "stack-up")
+    _prepare_environment(monkeypatch, root)
+    working_files.copy_example_files(root)
+
+    def write_worker(host_kind: str, project_root: str, ssh_target: str | None) -> None:
+        lines = [
+            f'WORKER_HOST_KIND = "{host_kind}"',
+            f'WORKER_PROJECT_ROOT = "{project_root}"',
+            "WORKER_SSH_CONNECT_TIMEOUT_SECONDS = 10",
+        ]
+        if ssh_target is not None:
+            lines.insert(1, f'WORKER_SSH_TARGET = "{ssh_target}"')
+        (root / "config" / "worker.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # The ordinary-test fixture injects the example worker aliases into the process environment,
+        # and a process value wins over the subsystem file, so the file is the only source here.
+        for alias in WORKER_CONNECTION_KEYS:
+            monkeypatch.delenv(alias, raising=False)
+        configuration.clear_configuration_caches()
+
+    write_worker("linux", "/home/synthetic/course-explorer", "worker-host")
+
+    def services(command: tuple[str, ...], verb: str) -> list[str]:
+        index = command.index(verb)
+        return [item for item in command[index + 1 :] if not item.startswith("-")]
+
+    core = ["db", "embedding", "web", "admin"]
+
+    local = _Runner()
+    events: list[str] = []
+    self_host.up_configured_stack(runner=local, write=events.append)
+
+    assert events == [f"start {', '.join(core)}"]
+    (local_build,) = [command for command in local.interactive_calls if "build" in command]
+    (local_start,) = [entry[0] for entry in local.runs if "up" in entry[0]]
+    assert services(local_build, "build") == core
+    assert services(local_start, "up") == core
+
+    (root / ".env").write_text(
+        "POSTGRES_PASSWORD='synthetic-password'\n"
+        "FEEDBACK_POSTGRES_PASSWORD='synthetic-password'\n"
+        "FEEDBACK_GITHUB_TOKEN='synthetic-sender-token'\n",
+        encoding="utf-8",
+    )
+    write_worker("same-machine", "/app", None)
+
+    published = _Runner()
+    published_events: list[str] = []
+    self_host.up_configured_stack(runner=published, write=published_events.append)
+
+    expected = [*core, "sender", "worker"]
+    assert published_events == [f"start {', '.join(expected)}"]
+    (published_build,) = [command for command in published.interactive_calls if "build" in command]
+    (published_start,) = [entry[0] for entry in published.runs if "up" in entry[0]]
+    assert services(published_build, "build") == expected
+    assert services(published_start, "up") == expected
+
+
 def test_real_database_workflow_serves_an_empty_initial_selection(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -791,22 +858,38 @@ def test_real_database_workflow_serves_an_empty_initial_selection(
     repeat."""
     root = _checkout(tmp_path, "checkout-real")
     _prepare_environment(monkeypatch, root)
-    _prepare_host_files(root)
-    self_host._copy_example_files(root)
-    web_shell, admin_shell = _write_shells(root)
+    working_files.copy_example_files(root)
     runner = _Runner()
     events: list[str] = []
     artifact = [b'{"courses":[]}']
     identities = ["selected"]
+    # The site container is stopped before the re-create and answers after it, so the workflow
+    # records no previous identity and proves the new selection.
+    sites: list[bool] = [False]
     _bind_http(
         monkeypatch,
-        web_shell=web_shell,
-        admin_shell=admin_shell,
         artifact=artifact,
         identities=identities,
         events=events,
+        site_running=lambda: sites[0],
     )
-    monkeypatch.setattr(self_host, "_require_native_libraries", lambda: None)
+    original_run = runner.run
+
+    def run(argv, **kwargs):
+        recreated = (
+            "up",
+            "-d",
+            "--wait",
+            "--force-recreate",
+            "--no-build",
+            "web",
+        )
+        command = tuple(argv)
+        if command[-len(recreated) :] == recreated:
+            sites[0] = True
+        return original_run(argv, **kwargs)
+
+    runner.run = run
     # The artifact builder, the migration upgrade and the verification read are the substituted
     # boundaries.
     monkeypatch.setattr(
@@ -826,14 +909,9 @@ def test_real_database_workflow_serves_an_empty_initial_selection(
         _write_catalogue(root, settings, artifact[0])
         return None
 
-    def stop_after_readiness(_seconds: float) -> None:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(self_host.time, "sleep", stop_after_readiness)
-
     name = "course_explorer_real_proof"
     report = setup_real_database(
-        RealDatabaseSetupInput(database_name=name, mode="foreground"),
+        RealDatabaseSetupInput(database_name=name),
         runner=runner,
         write=events.append,
     )
@@ -848,18 +926,78 @@ def test_real_database_workflow_serves_an_empty_initial_selection(
     assert selected.dataset_id == "0" * 32
     assert selected.database_name == name
     assert read_dataset_role(root / "data" / "admin", "working") is None
-    assert events.index("build") < events.index("http")
+    assert events.index("build") < events.index("identity:selected")
     assert "identity:selected" in events
+    # The one site re-create runs through the Compose bridge and names its service alone.
+    bridge = mechanics.compose_prefix(non_interactive=True, interpreter=True)
+    recreated = ("up", "-d", "--wait", "--force-recreate", "--no-build", "web")
+
+    def recreated_commands() -> list[tuple[str, ...]]:
+        return [command for command in runner.calls if command[len(bridge) :] == recreated]
+
+    assert len(recreated_commands()) == 1
 
     created = len(runner.created)
     builds = events.count("build")
-    requests = events.count("http")
     with pytest.raises(ValueError):
         setup_real_database(
-            RealDatabaseSetupInput(database_name=name, mode="foreground"),
+            RealDatabaseSetupInput(database_name=name),
             runner=runner,
             write=events.append,
         )
     assert len(runner.created) == created
     assert events.count("build") == builds
-    assert events.count("http") == requests
+    # The repeat refuses inside the enrollment owner, so it re-creates nothing.
+    assert len(recreated_commands()) == 1
+
+
+def test_listening_sockets_reports_a_bound_loopback_port() -> None:
+    """A loopback address and port bound in the listen state appears in the listen table read."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        assert ("127.0.0.1", port) in self_host.proxy.listening_sockets()
+
+
+def test_unpublish_removes_only_its_site_file_and_reloads_a_running_proxy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One instance's site file is removed, the other keeps its bytes, and a running proxy reloads."""
+    root = _checkout(tmp_path, "unpublish")
+    _prepare_environment(monkeypatch, root)
+    working_files.copy_example_files(root)
+    shared = tmp_path / "shared"
+    sites = shared / "proxy" / "sites"
+    sites.mkdir(parents=True)
+    removed = sites / "diak.caddy"
+    kept = sites / "metropolia.caddy"
+    removed.write_text("https://course-explorer-one.test {\n}\n", encoding="utf-8")
+    kept.write_text("https://course-explorer-two.test {\n}\n", encoding="utf-8")
+    runner = _Runner()
+    monkeypatch.setattr(self_host.proxy, "running", lambda process_runner, *, shared_root: True)
+
+    self_host.proxy.unpublish(runner, shared_root=shared, instance_key="diak")
+
+    reload = (
+        "exec",
+        "-T",
+        "proxy",
+        "caddy",
+        "reload",
+        "--config",
+        "/etc/caddy/Caddyfile",
+        "--adapter",
+        "caddyfile",
+        "--address",
+        "unix//tmp/caddy-admin.sock",
+    )
+    assert not removed.exists()
+    assert kept.read_text(encoding="utf-8") == "https://course-explorer-two.test {\n}\n"
+    assert [command for command in runner.calls if command[-len(reload) :] == reload]
+
+    # A stopped project serves nothing, so the second removal runs no Compose command.
+    monkeypatch.setattr(self_host.proxy, "running", lambda process_runner, *, shared_root: False)
+    calls = len(runner.calls)
+    self_host.proxy.unpublish(runner, shared_root=shared, instance_key="diak")
+    assert len(runner.calls) == calls

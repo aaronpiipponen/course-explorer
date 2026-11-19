@@ -5,8 +5,8 @@
  * Each report is its owning fixed command's own report read for the role the backend resolved:
  * Working first, Selected when Working is absent, and no report in a bootstrap state. The panel
  * names that role before the report. A build posts one empty request, reports its returned artifact
- * and count facts and states that the web supervisor reads the artifacts at start, so a build takes
- * effect after a full supervisor restart.
+ * and count facts and states that the supervisor reads the artifacts at start, so a build takes
+ * effect after the site container is re-created.
  */
 import { useCallback, useState } from "react";
 import { failureText, handleAdmissionFailure } from "../../api/http";
@@ -169,7 +169,7 @@ function EmbeddingCoverage({
         : wording.preparation.servingArtifactsBuiltWithoutEmbeddings
             .replace("{catalogue}", artifacts.catalogue_artifact_path)
             .replace("{roots}", `${artifacts.study_fragment_projectable}`);
-      setResult(`${built} ${wording.preparation.servingArtifactsRestart}`);
+      setResult(`${built} ${wording.preparation.servingArtifactsRecreate}`);
     } catch (error) {
       if (handleAdmissionFailure(error, onRefusal)) {
         return;

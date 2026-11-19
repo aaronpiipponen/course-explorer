@@ -1,7 +1,7 @@
 """Contracts for the unified administrative commands and the engine dispatcher.
 
-The engine CLI owns the parser, dispatch and safe failures. The wrapper delegates to it
-and is proven by the import/CLI gate.
+The tests load ``course_explorer_admin.cli`` and drive its parser, dispatch and safe failures
+through ``main``.
 """
 
 from __future__ import annotations
@@ -61,6 +61,9 @@ class _Sentinel:
         "dispose-nothing",
         "self-host-example",
         "self-host-real-database",
+        "self-host-publish",
+        "self-host-unpublish",
+        "deploy",
     ],
 )
 def test_operator_commands_report_status_refuse_bad_input_and_map_nothing(
@@ -71,33 +74,33 @@ def test_operator_commands_report_status_refuse_bad_input_and_map_nothing(
     Each parametrized invocation drives one coherent public adapter behavior. Invalid dataset setup
     combinations refuse at the public command entry, a not-ready preflight exits 1 with its report,
     a failed report or configuration save prints only its class token, the password command reads
-    hidden input, and ``dispose inference ... nothing`` maps to no disposition.
+    hidden input, the publication verbs and the deploy command each delegate once, and
+    ``dispose inference ... nothing`` maps to no disposition.
     """
     if case == "setup-preflight":
-        worker = _Sentinel("worker")
-        code_only = ProvisioningReport(
+        updated = ProvisioningReport(
             code=WorkerCodeReport(branch="main", revision="a" * 40, server_origin_differs=False),
             resources=None,
         )
+        preflight = _Sentinel("worker")
         enrollment = _Sentinel("enrollment")
         from course_explorer_admin import datasets as datasets_module
 
-        monkeypatch.setattr(commands, "prepare_worker", lambda *, branch, runner: worker)
         monkeypatch.setattr(
             commands,
             "update_worker_code",
-            lambda *, branch, runner: code_only.code,
+            lambda *, branch, runner: updated.code,
         )
-        monkeypatch.setattr(commands, "preflight_worker", lambda *, runner: worker)
+        monkeypatch.setattr(commands, "preflight_worker", lambda *, runner: preflight)
         monkeypatch.setattr(
             datasets_module,
             "initialize_selected_dataset",
             lambda *, runner: enrollment,
         )
 
+        # The worker choice updates the code and prepares no resource.
+        assert commands.run_administrative_setup("worker", branch="feature") == updated
         # Invalid dataset setup combinations refuse at the public command entry.
-        with pytest.raises(ValueError):
-            commands.run_administrative_setup("datasets", code_only=True)
         with pytest.raises(ValueError):
             commands.run_administrative_setup("datasets", branch="feature")
         return
@@ -275,13 +278,14 @@ def test_operator_commands_report_status_refuse_bad_input_and_map_nothing(
         return
 
     if case in {"self-host-example", "self-host-real-database"}:
-        # Each self-host verb reads one JSON input object from non-interactive stdin, delegates
-        # once, keeps both secrets out of the report and writes fixed progress to the error stream.
+        # A terminal standard input reaches a workflow's own prompts, and a piped standard input
+        # reads one JSON object. Either path delegates once, prints the report and writes fixed
+        # progress to the error stream, and neither secret reaches the report or the progress.
         called: list[object] = []
         report = _Sentinel(case)
 
-        def example_delegate(options, *, write, checkout_suffix=""):
-            called.append((options, checkout_suffix))
+        def example_delegate(options, *, write):
+            called.append(options)
             write("progress-step")
             return report
 
@@ -296,17 +300,25 @@ def test_operator_commands_report_status_refuse_bad_input_and_map_nothing(
                 def isatty(self) -> bool:
                     return True
 
-                def read(self) -> str:
-                    raise AssertionError("a terminal must not be read")
+            entered: list[object] = []
 
+            def interactive_entry(*, read, write):
+                entered.append(read)
+                write("progress-step")
+                return report
+
+            monkeypatch.setattr(_CLI_MODULE, "run_example_setup_interactive", interactive_entry)
             monkeypatch.setattr(sys, "stdin", _Tty())
-            assert _CLI_MODULE.main(["self-host", "example"]) == 1
+            assert _CLI_MODULE.main(["self-host", "example"]) == 0
+            assert len(entered) == 1
+            assert entered[0] is input
             captured = capsys.readouterr()
-            assert "operator menu" in captured.err
-            assert called == []
+            assert json.loads(captured.out)["label"] == case
+            assert "progress-step" in captured.err
 
             monkeypatch.setattr(_CLI_MODULE, "run_administrative_example_setup", example_delegate)
             payload = {
+                "serve_mode": "local",
                 "instance_key": "example",
                 "web_port": 18037,
                 "admin_web_port": 18039,
@@ -315,14 +327,13 @@ def test_operator_commands_report_status_refuse_bad_input_and_map_nothing(
                 "username": "synthetic-operator",
                 "password": "synthetic-password",
                 "publication_token": "synthetic-token",
-                "mode": "foreground",
                 "confirm_download": True,
             }
+            called.clear()
             monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
             assert _CLI_MODULE.main(["self-host", "example"]) == 0
             assert len(called) == 1
-            options, suffix = called[0]
-            assert suffix == ""
+            options = called[0]
             assert isinstance(options, commands.ExampleSetupInput)
             assert options.password.get_secret_value() == "synthetic-password"
             assert options.publication_token is not None
@@ -334,16 +345,27 @@ def test_operator_commands_report_status_refuse_bad_input_and_map_nothing(
             assert "progress-step" in captured.err
             assert "synthetic-password" not in captured.err
             assert "synthetic-token" not in captured.err
+
+            # A workflow failure at a terminal input reaches the handler, which returns 1.
+            def failing_interactive(*, read, write):
+                raise RuntimeError("terminal-payload-value")
+
+            monkeypatch.setattr(_CLI_MODULE, "run_example_setup_interactive", failing_interactive)
+            monkeypatch.setattr(sys, "stdin", _Tty())
+            assert _CLI_MODULE.main(["self-host", "example"]) == 1
+            captured = capsys.readouterr()
+            assert json.loads(captured.err.splitlines()[0]) == {"error": "RuntimeError"}
+            assert "terminal-payload-value" not in captured.err
+            assert "check the container host" in captured.err
             return
 
         monkeypatch.setattr(_CLI_MODULE, "run_administrative_real_database_setup", real_delegate)
-        payload = {"database_name": "course_explorer_real", "mode": "user"}
+        payload = {"database_name": "course_explorer_real"}
         monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
         assert _CLI_MODULE.main(["self-host", "real-database"]) == 0
         assert len(called) == 1
         assert isinstance(called[0], commands.RealDatabaseSetupInput)
         assert called[0].database_name == "course_explorer_real"
-        assert called[0].mode == "user"
         captured = capsys.readouterr()
         assert json.loads(captured.out)["label"] == case
         assert "progress-step" in captured.err
@@ -359,6 +381,38 @@ def test_operator_commands_report_status_refuse_bad_input_and_map_nothing(
         assert json.loads(captured.err.splitlines()[0]) == {"error": "RuntimeError"}
         assert "self-host-payload-value" not in captured.err
         assert "example workflow first" in captured.err
+        return
+
+    if case in {"self-host-publish", "self-host-unpublish"}:
+        # A publication verb delegates once, prints its report and writes its fixed step name.
+        report = _Sentinel(case)
+
+        def publication(*, write):
+            write("publication-step")
+            return report
+
+        delegate = (
+            "run_administrative_publish"
+            if case == "self-host-publish"
+            else "run_administrative_unpublish"
+        )
+        monkeypatch.setattr(_CLI_MODULE, delegate, publication)
+        verb = "publish" if case == "self-host-publish" else "unpublish"
+        assert _CLI_MODULE.main(["self-host", verb]) == 0
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["label"] == case
+        assert "publication-step" in captured.err
+        return
+
+    if case == "deploy":
+        # The deploy command runs the deployment owner and writes its fixed step names.
+        def containers(*, runner, write):
+            write("deploy-step")
+
+        monkeypatch.setattr(_CLI_MODULE.deploy, "deploy_containers", containers)
+        assert _CLI_MODULE.main(["deploy"]) == 0
+        captured = capsys.readouterr()
+        assert "deploy-step" in captured.err
         return
 
     # The explicit `dispose inference ... nothing` machine command maps to no disposition.

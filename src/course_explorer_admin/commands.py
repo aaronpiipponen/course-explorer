@@ -1,8 +1,8 @@
 """One operator surface over the stage owners: dispatch, reports, presentation, menu.
 
 This module is the one normal operator surface. It owns the stage/action dispatcher, the two
-separate setup choices (selected-dataset enrollment and worker preparation), the read-only worker
-preflight, the routine read-only server reports, the serving-artifact command surface, the
+separate setup choices (selected-dataset enrollment and the worker code update), the read-only
+worker preflight, the routine read-only server reports, the serving-artifact command surface, the
 server-only target-disposition entry, the presentation-only safe failure surface, and the numbered
 menu. Every call delegates exactly once to its owning module and returns that owner's exact DTO.
 The menu keeps running until Exit, EOF, or interrupt. Reports read the server state read-only.
@@ -15,7 +15,6 @@ import json
 import subprocess
 import warnings
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
@@ -32,6 +31,7 @@ from course_explorer.config import (
     load_instance_settings,
     load_usage_settings,
     load_web_settings,
+    load_worker_connection_settings,
 )
 from course_explorer.configuration import read_public_configuration
 from course_explorer.curriculum_repository import CurriculumRepository
@@ -87,19 +87,20 @@ from course_explorer_admin.mechanics import ControllerAction
 from course_explorer_admin.provisioning import (
     ProvisioningReport,
     preflight_worker,
-    prepare_worker,
+    require_code_update_supported,
     update_worker_code,
 )
 from course_explorer_admin.rebuild import AdminRebuildReport, AdminRestartReport, RebuildReport
 from course_explorer_admin.self_host import (
-    CheckoutRenamed,
     ExampleSetupInput,
+    PublicSiteReport,
     RealDatabaseSetupInput,
     SelfHostReport,
-    StartupMode,
-    prepare_checkout_path,
+    publish_configured_site,
     setup_example,
     setup_real_database,
+    unpublish_configured_site,
+    up_configured_stack,
 )
 from course_explorer_admin.server import ServerStatusReport
 
@@ -148,28 +149,23 @@ def run_administrative_setup(
     kind: Literal["datasets", "worker"],
     *,
     branch: str = "main",
-    code_only: bool = False,
     runner: mechanics.ProcessRunner | None = None,
 ) -> BaseModel:
     """Run exactly one separate setup choice through its owner.
 
-    Dataset enrollment and worker preparation are independent. ``code_only`` and a nondefault branch
-    belong to worker setup alone, and the branch validator and readiness are owned by provisioning.
+    Dataset enrollment and the worker code update are independent. A nondefault branch belongs to
+    the worker update alone, and its branch validation is owned by provisioning.
     """
     if kind not in {"datasets", "worker"}:
         raise ValueError("setup kind must be datasets or worker")
     process_runner = runner if runner is not None else mechanics.SubprocessRunner()
     if kind == "datasets":
-        if code_only:
-            raise ValueError("selected-dataset setup does not accept code-only")
         if branch != "main":
             raise ValueError("selected-dataset setup does not accept a branch")
 
         return datasets.initialize_selected_dataset(runner=process_runner)
-    if code_only:
-        code = update_worker_code(branch=branch, runner=process_runner)
-        return ProvisioningReport(code=code, resources=None)
-    return prepare_worker(branch=branch, runner=process_runner)
+    code = update_worker_code(branch=branch, runner=process_runner)
+    return ProvisioningReport(code=code, resources=None)
 
 
 def run_administrative_example_setup(
@@ -177,28 +173,10 @@ def run_administrative_example_setup(
     *,
     runner: mechanics.ProcessRunner | None = None,
     write: Callable[[str], None] = print,
-    checkout_suffix: str = "",
 ) -> SelfHostReport:
-    """Delegate once to the example self-host workflow with one resolved runner.
-
-    The checkout path is prepared first, so a clean clone is renamed and its environment rebuilt
-    before the workflow runs. A ``checkout_suffix`` adds its segment to the generated checkout and
-    user-unit names.
-    """
+    """Delegate once to the example self-host workflow with one resolved runner."""
     process_runner = runner if runner is not None else mechanics.SubprocessRunner()
-    prepare_checkout_path(
-        administration.repository_root(),
-        options.instance_key,
-        checkout_suffix,
-        runner=process_runner,
-        write=write,
-    )
-    return setup_example(
-        options,
-        runner=process_runner,
-        write=write,
-        checkout_suffix=checkout_suffix,
-    )
+    return setup_example(options, runner=process_runner, write=write)
 
 
 def run_administrative_real_database_setup(
@@ -210,6 +188,44 @@ def run_administrative_real_database_setup(
     """Delegate once to the named-database self-host workflow with one resolved runner."""
     process_runner = runner if runner is not None else mechanics.SubprocessRunner()
     return setup_real_database(options, runner=process_runner, write=write)
+
+
+def run_administrative_publish(
+    *,
+    runner: mechanics.ProcessRunner | None = None,
+    write: Callable[[str], None] = print,
+) -> PublicSiteReport:
+    """Delegate once to the configured publication owner and report the published site."""
+    process_runner = runner if runner is not None else mechanics.SubprocessRunner()
+    write("publish the configured site through the machine-wide proxy")
+    return PublicSiteReport(
+        site_address=publish_configured_site(process_runner),
+        published=True,
+    )
+
+
+def run_administrative_unpublish(
+    *,
+    runner: mechanics.ProcessRunner | None = None,
+    write: Callable[[str], None] = print,
+) -> PublicSiteReport:
+    """Delegate once to the configured publication owner and report the removed site."""
+    process_runner = runner if runner is not None else mechanics.SubprocessRunner()
+    write("unpublish the configured site from the machine-wide proxy")
+    return PublicSiteReport(
+        site_address=unpublish_configured_site(process_runner),
+        published=False,
+    )
+
+
+def run_administrative_stack_up(
+    *,
+    runner: mechanics.ProcessRunner | None = None,
+    write: Callable[[str], None] = print,
+) -> None:
+    """Delegate once to the configured stack build and start, with no report."""
+    process_runner = runner if runner is not None else mechanics.SubprocessRunner()
+    up_configured_stack(runner=process_runner, write=write)
 
 
 def run_administrative_preflight(
@@ -654,6 +670,10 @@ def operator_guidance(
         "feedback",
         "self-host-example",
         "self-host-real-database",
+        "self-host-publish",
+        "self-host-unpublish",
+        "self-host-up",
+        "deploy",
     ],
     *,
     configuration_error: bool = False,
@@ -677,7 +697,7 @@ def operator_guidance(
         )
     if operation == "server":
         return (
-            "check the configured site unit, this checkout, and the running database and "
+            "check the site container, this checkout, and the running database and "
             "embedding services, then retry"
         )
     if operation == "logs":
@@ -687,8 +707,8 @@ def operator_guidance(
         )
     if operation == "rebuild":
         return (
-            "check the prepared frontend, the prepared container images and the configured site "
-            "unit, then retry"
+            "check the container host, the site and administration images, and the site "
+            "container, then retry"
         )
     if operation == "usage":
         return (
@@ -700,10 +720,18 @@ def operator_guidance(
             "check the configured feedback definition, the feedback database connection and the "
             "stored submission identity, then retry"
         )
-    if operation in {"setup", "preflight"}:
+    if operation == "setup":
         return (
-            "finish or stop retained stages before updates, then check the checkout branch "
-            "and the configured origin"
+            "A same-machine operation runs inside the administration container. Check this "
+            "account's docker access and use the server deploy for a same-machine code update, "
+            "then check the checkout branch and the configured origin."
+        )
+    if operation == "preflight":
+        return (
+            "Check the worker connection, start the same-machine worker container, check the "
+            "checkout branch, the configured origin and the prepared worker resources, then run "
+            "the worker install, the worker code update, or the server deploy on a same-machine "
+            "host."
         )
     if operation == "migration":
         return (
@@ -712,20 +740,35 @@ def operator_guidance(
         )
     if operation == "self-host-example":
         return (
-            "use the operator menu for interactive entry, check the prepared environment, the "
-            "host tools and the loopback ports, confirm the pinned model download, and run the "
-            "workflow again after the reported step succeeds. A failed import leaves the copied "
-            "working files, .env, the account and the example schema in place; clear the example "
-            "database explicitly before a retry."
+            "check the container host and its ports, confirm the pinned model download, "
+            "and run the workflow again after the reported step succeeds. A failed import leaves the "
+            "copied working files, .env, the account and the example schema in place; clear the "
+            "example database explicitly before a retry."
         )
     if operation == "self-host-real-database":
         return (
-            "use the operator menu for interactive entry, run the example workflow first, keep "
-            "the database and embedding services running, stop every stage and end the foreground "
-            "pair before running this workflow again. A failed build or proof keeps the named "
-            "database, its initial receipt and Selected; inspect them with `datasets list` and use "
-            "the dataset owners for explicit maintenance before a retry."
+            "run the example workflow first, keep the database and embedding services running, and "
+            "stop every stage before running this workflow again. A failed build or proof keeps the "
+            "named database, its initial receipt and Selected; inspect them with `datasets list` and "
+            "use the dataset owners for explicit maintenance before a retry."
         )
+    if operation == "self-host-publish":
+        return (
+            "check this account's Docker socket access, the configured site address and the "
+            "machine-wide proxy project, then retry"
+        )
+    if operation == "self-host-unpublish":
+        return (
+            "check this account's Docker socket access and the machine-wide proxy project, "
+            "then retry"
+        )
+    if operation == "self-host-up":
+        return (
+            "check the container host, the ports and the configured publication credential, "
+            "then retry"
+        )
+    if operation == "deploy":
+        return "check the container host, the running services and the stage idle state, then retry"
     if operation == "target-read":
         return (
             "copy a dataset to Working first if none is copied, ensure the server db is "
@@ -739,7 +782,8 @@ def operator_guidance(
     if operation == "serving-artifacts":
         return (
             "complete the embedding stage on the served dataset, ensure the server db is running, "
-            "then retry and restart the web server after a successful build"
+            "then retry and re-create the site container with the App rebuild or `rebuild` after a "
+            "successful build"
         )
     if operation == "dataset-cleanup":
         return (
@@ -759,7 +803,7 @@ def operator_guidance(
     if operation == "dataset-promotion":
         return (
             "inspect the listed source, its database and serving artifacts with datasets list, "
-            "then promote it again with the serving restart confirmed once the reported step can "
+            "then run Copy to Selected again with the confirmation once the reported step can "
             "succeed"
         )
     if operation == "backup-list":
@@ -774,9 +818,9 @@ def operator_guidance(
         )
     if operation == "stage":
         return (
-            "copy a dataset to Working with datasets copy-to-working if none is copied, "
-            "inspect this tool's status, then retry its start, ordinary stop or resume as "
-            "appropriate"
+            "A same-machine stage runs inside the administration container. Copy a dataset to "
+            "Working with datasets copy-to-working if none is copied, inspect this tool's status, "
+            "then retry its start, ordinary stop or resume as appropriate."
         )
     return (
         "enroll a dataset or copy one to Working, ensure the server db is running at the "
@@ -811,7 +855,7 @@ _MAIN_OPTIONS = (
 _SETUP_OPTIONS = (
     ("1", "Enroll/select dataset"),
     ("2", "Copy dataset to Working"),
-    ("3", "Worker setup/update"),
+    ("3", "Worker code update"),
     ("4", "Read-only worker preflight"),
     ("5", "Migrate dataset"),
     ("6", "Dataset cleanup"),
@@ -820,17 +864,8 @@ _SETUP_OPTIONS = (
     ("9", "Rebuild app"),
     ("10", "Administration password"),
     ("11", "Rebuild administration console"),
-    ("12", "Set up example site"),
-    ("13", "Set up real empty database"),
     ("0", "Back"),
 )
-
-_STARTUP_OPTIONS = (
-    ("1", "User units"),
-    ("2", "Foreground"),
-    ("0", "Cancel"),
-)
-_STARTUP_MODES: dict[str, StartupMode] = {"1": "user", "2": "foreground"}
 
 _DOWNLOAD_OPTIONS = (
     ("1", "Confirm the pinned model download"),
@@ -841,6 +876,12 @@ _PUBLICATION_OPTIONS = (
     ("1", "Set up feedback publication"),
     ("0", "No publication"),
 )
+
+_SERVE_MODE_OPTIONS = (
+    ("1", "Local"),
+    ("2", "Domain"),
+)
+_SERVE_MODES = {"1": "local", "2": "domain"}
 
 # The terminal default for a named initial database. The workflow owner has no hidden default.
 _DEFAULT_REAL_DATABASE = "course_explorer_real"
@@ -980,6 +1021,10 @@ def _perform(
         "password",
         "self-host-example",
         "self-host-real-database",
+        "self-host-publish",
+        "self-host-unpublish",
+        "self-host-up",
+        "deploy",
     ],
     call: Callable[[], object],
 ) -> None:
@@ -987,8 +1032,6 @@ def _perform(
     try:
         result = call()
     except EOFError:
-        raise
-    except CheckoutRenamed:
         raise
     except Exception as exc:
         write(format_operator_error(exc))
@@ -1001,10 +1044,11 @@ def _perform(
 
 
 def _setup_worker(read: Callable[[str], str], write: Callable[[str], None]) -> None:
-    """Prepare or update the worker, asking for a non-main origin branch when the server is not
-    main.
+    """Update the worker code and its locked environment, asking for a non-main origin branch when
+    the server is not main.
     """
     try:
+        require_code_update_supported(load_worker_connection_settings())
         server_branch = (
             mechanics.SubprocessRunner()
             .run(("git", "branch", "--show-current"), cwd=administration.repository_root())
@@ -1131,19 +1175,22 @@ def _usage_menu(read: Callable[[str], str], write: Callable[[str], None]) -> Non
 
 
 def _rebuild_menu(read: Callable[[str], str], write: Callable[[str], None]) -> None:
-    """Confirm the site's frontend, container and web rebuild, then run it once."""
-    question = "Rebuild this site's frontend, containers and web server?"
+    """Confirm the site image build and container re-create, then run it once."""
+    question = (
+        "Rebuild the site image, re-create the database and embedding containers, re-create the "
+        "site container and prove its bind?"
+    )
     if _prompt(read, write, question, _REBUILD_OPTIONS) != "1":
         return
     _perform(write, "rebuild", run_administrative_rebuild)
 
 
 def _admin_rebuild_menu(read: Callable[[str], str], write: Callable[[str], None]) -> None:
-    """Confirm the administration console's rebuild, then build and queue its restart once.
+    """Confirm the administration console's image build, then build and re-create it detached once.
 
     The build delegate runs first, so a raised build failure stops the callback before the
-    restart delegate is reached and restarts nothing. The restart delegate's own acknowledgment is
-    the report the entry prints.
+    re-create delegate is reached and re-creates nothing. The re-create delegate's own
+    acknowledgment is the report the entry prints.
     """
     question = "Rebuild the administration console? This signs all operators out."
     if _prompt(read, write, question, _REBUILD_OPTIONS) != "1":
@@ -1206,11 +1253,6 @@ def _copy_to_working_menu(read: Callable[[str], str], write: Callable[[str], Non
     )
 
 
-def _startup_mode(read: Callable[[str], str], write: Callable[[str], None]) -> StartupMode | None:
-    """Ask whether the two backends run as user units or as owned foreground children."""
-    return _STARTUP_MODES.get(_prompt(read, write, "Startup mode", _STARTUP_OPTIONS))
-
-
 def _prompt_port(read: Callable[[str], str], title: str, default: int) -> int | None:
     """Return one entered TCP port, the default for a blank answer, or ``None`` for other text."""
     answer = read(f"{title} [{default}]: ").strip()
@@ -1222,141 +1264,136 @@ def _prompt_port(read: Callable[[str], str], title: str, default: int) -> int | 
         return None
 
 
-def _example_setup_menu(
-    read: Callable[[str], str],
-    write: Callable[[str], None],
-    *,
-    checkout_suffix: str = "",
-) -> None:
+def run_example_setup_interactive(
+    *, read: Callable[[str], str], write: Callable[[str], None]
+) -> SelfHostReport | None:
     """Ask the example workflow's instance and device choices, then run it once.
 
     The university menu lists the implemented map entries. The four ports default to the example
-    files, and a blank shared directory keeps the configured one. The app URL and administration
-    origin default to addresses derived from the chosen ports. The two administration password
-    entries and the optional publication token come from the hidden reader, never from the ordinary
-    input callback. A cancel, an end of input, an interrupt or a refused hidden entry writes nothing
-    and runs nothing. A ``checkout_suffix`` adds its segment to the generated checkout and user-unit
-    names.
+    files. The serve mode selects a local site or a domain served by the machine-wide proxy. A
+    local run's app URL defaults to an address derived from the chosen port, and a domain run asks
+    for the site's HTTPS address. The administration origin defaults to an address derived from
+    the chosen port. The two administration password entries and the optional publication token
+    come from the hidden reader, never from the ordinary input callback. An invalid answer writes
+    its fixed line and runs nothing. An end of input at a prompt or a hidden prompt is a cancel and
+    returns no report, while a refused hidden entry and any other reader failure propagate. A
+    workflow failure propagates to the command's handler, and a successful run returns the
+    workflow's report without printing it.
     """
+    defaults = read_public_configuration(
+        administration.repository_root() / "examples",
+        aliases=(
+            "WEB_PORT",
+            "ADMIN_WEB_PORT",
+            "POSTGRES_PORT",
+            "EMBEDDING_PORT",
+        ),
+    )
+    default_web_port = int(defaults["WEB_PORT"])
+    default_admin_port = int(defaults["ADMIN_WEB_PORT"])
+    default_postgres_port = int(defaults["POSTGRES_PORT"])
+    default_embedding_port = int(defaults["EMBEDDING_PORT"])
     try:
-        defaults = read_public_configuration(
-            administration.repository_root() / "examples",
-            aliases=(
-                "WEB_PORT",
-                "ADMIN_WEB_PORT",
-                "POSTGRES_PORT",
-                "EMBEDDING_PORT",
-                "ADMIN_SHARED_ROOT",
-            ),
+        instance_keys = tuple(UNIVERSITIES)
+        university_options = tuple(
+            (str(index), metadata.name_en)
+            for index, metadata in enumerate(UNIVERSITIES.values(), start=1)
         )
-        default_web_port = int(defaults["WEB_PORT"])
-        default_admin_port = int(defaults["ADMIN_WEB_PORT"])
-        default_postgres_port = int(defaults["POSTGRES_PORT"])
-        default_embedding_port = int(defaults["EMBEDDING_PORT"])
-        default_shared_root = str(defaults["ADMIN_SHARED_ROOT"])
-    except Exception as exc:
-        write(format_operator_error(exc))
-        write(operator_guidance("self-host-example"))
-        return
-    instance_keys = tuple(UNIVERSITIES)
-    university_options = tuple(
-        (str(index), metadata.name_en)
-        for index, metadata in enumerate(UNIVERSITIES.values(), start=1)
-    )
-    choice = _prompt(read, write, "University", (*university_options, ("0", "Cancel")))
-    if not choice.isdigit() or not 1 <= int(choice) <= len(instance_keys):
-        return
-    instance_key = instance_keys[int(choice) - 1]
-    web_port = _prompt_port(read, "Feature web port", default_web_port)
-    admin_web_port = _prompt_port(read, "Administration port", default_admin_port)
-    postgres_port = _prompt_port(read, "Database port", default_postgres_port)
-    embedding_port = _prompt_port(read, "Embedding port", default_embedding_port)
-    if (
-        web_port is None
-        or admin_web_port is None
-        or postgres_port is None
-        or embedding_port is None
-    ):
-        write("the four ports must be whole numbers; nothing was written")
-        return
-    shared_answer = read(f"Shared directory [{default_shared_root}]: ").strip()
-    shared_root = Path(shared_answer) if shared_answer else None
-    default_url = f"http://localhost:{web_port}/"
-    answer = read(f"App URL [{default_url}]: ").strip()
-    app_url: str | None = answer or None
-    default_origin = f"https://localhost:{admin_web_port}"
-    answer = read(f"Administration origin [{default_origin}]: ").strip()
-    admin_origin: str | None = answer or None
-    username = read("Administration username (0 to cancel): ").strip()
-    if username == "0":
-        return
-    mode = _startup_mode(read, write)
-    if mode is None:
-        return
-    download = (
-        _prompt(
-            read,
-            write,
-            "Download the pinned embedding model if it is absent?",
-            _DOWNLOAD_OPTIONS,
+        choice = _prompt(read, write, "University", (*university_options, ("0", "Cancel")))
+        if not choice.isdigit() or not 1 <= int(choice) <= len(instance_keys):
+            return None
+        instance_key = instance_keys[int(choice) - 1]
+        web_port = _prompt_port(read, "Feature web port", default_web_port)
+        admin_web_port = _prompt_port(read, "Administration port", default_admin_port)
+        postgres_port = _prompt_port(read, "Database port", default_postgres_port)
+        embedding_port = _prompt_port(read, "Embedding port", default_embedding_port)
+        if (
+            web_port is None
+            or admin_web_port is None
+            or postgres_port is None
+            or embedding_port is None
+        ):
+            write("the four ports must be whole numbers; nothing was written")
+            return None
+        serve_mode = _SERVE_MODES.get(_prompt(read, write, "Serve mode", _SERVE_MODE_OPTIONS))
+        if serve_mode is None:
+            write("serve mode must be 1 or 2; nothing was written")
+            return None
+        if serve_mode == "domain":
+            app_url: str | None = read("Site HTTPS address: ").strip() or None
+            if app_url is None:
+                write("domain mode needs the site's HTTPS address; nothing was written")
+                return None
+        else:
+            default_url = f"http://localhost:{web_port}/"
+            answer = read(f"App URL [{default_url}]: ").strip()
+            app_url = answer or None
+        default_origin = f"https://localhost:{admin_web_port}"
+        answer = read(f"Administration origin [{default_origin}]: ").strip()
+        admin_origin: str | None = answer or None
+        username = read("Administration username (0 to cancel): ").strip()
+        if username == "0":
+            return None
+        download = (
+            _prompt(
+                read,
+                write,
+                "Download the pinned embedding model if it is absent?",
+                _DOWNLOAD_OPTIONS,
+            )
+            == "1"
         )
-        == "1"
-    )
-    publication = _prompt(read, write, "Set up feedback publication?", _PUBLICATION_OPTIONS) == "1"
+        publication = (
+            _prompt(read, write, "Set up feedback publication?", _PUBLICATION_OPTIONS) == "1"
+        )
+    except EOFError:
+        return None
     try:
         token = (
             SecretStr(_read_hidden_secret("Feedback publication token: ")) if publication else None
         )
         password = _read_hidden_secret("Administration password: ")
         repeated = _read_hidden_secret("Repeat administration password: ")
-    except Exception as exc:
-        write(format_operator_error(exc))
-        write(
-            operator_guidance(
-                "self-host-example", configuration_error=isinstance(exc, ValidationError)
-            )
-        )
-        return
+    except EOFError:
+        return None
     if password != repeated:
         write("password entries must match; nothing was written")
-        return
-    _perform(
-        write,
-        "self-host-example",
-        lambda: run_administrative_example_setup(
-            ExampleSetupInput(
-                app_url=app_url,
-                admin_origin=admin_origin,
-                instance_key=instance_key,
-                web_port=web_port,
-                admin_web_port=admin_web_port,
-                postgres_port=postgres_port,
-                embedding_port=embedding_port,
-                shared_root=shared_root,
-                username=username,
-                password=SecretStr(password),
-                mode=mode,
-                confirm_download=download,
-                publication_token=token,
-            ),
-            checkout_suffix=checkout_suffix,
+        return None
+    return run_administrative_example_setup(
+        ExampleSetupInput(
+            serve_mode=serve_mode,
+            app_url=app_url,
+            admin_origin=admin_origin,
+            instance_key=instance_key,
+            web_port=web_port,
+            admin_web_port=admin_web_port,
+            postgres_port=postgres_port,
+            embedding_port=embedding_port,
+            username=username,
+            password=SecretStr(password),
+            confirm_download=download,
+            publication_token=token,
         ),
+        write=write,
     )
 
 
-def _real_database_setup_menu(read: Callable[[str], str], write: Callable[[str], None]) -> None:
-    """Ask the new database name and the startup mode, then run the workflow once."""
-    answer = read(f"Database name [{_DEFAULT_REAL_DATABASE}]: ").strip()
+def run_real_database_setup_interactive(
+    *, read: Callable[[str], str], write: Callable[[str], None]
+) -> SelfHostReport | None:
+    """Ask the new database name, then run the real-database workflow once.
+
+    A blank answer keeps the terminal default name, and an end of input writes nothing and runs
+    nothing. A workflow failure propagates to the command's handler, and a successful run returns
+    the workflow's report without printing it.
+    """
+    try:
+        answer = read(f"Database name [{_DEFAULT_REAL_DATABASE}]: ").strip()
+    except EOFError:
+        return None
     name = answer or _DEFAULT_REAL_DATABASE
-    mode = _startup_mode(read, write)
-    if mode is None:
-        return
-    _perform(
-        write,
-        "self-host-real-database",
-        lambda: run_administrative_real_database_setup(
-            RealDatabaseSetupInput(database_name=name, mode=mode)
-        ),
+    return run_administrative_real_database_setup(
+        RealDatabaseSetupInput(database_name=name), write=write
     )
 
 
@@ -1365,7 +1402,6 @@ def _setup_menu(
     write: Callable[[str], None],
     *,
     configuration_families: tuple[type[ConfiguredSettings], ...] = (),
-    checkout_suffix: str = "",
 ) -> None:
     while True:
         choice = _prompt(read, write, "Setup/preflight", _SETUP_OPTIONS)
@@ -1393,10 +1429,6 @@ def _setup_menu(
             _password_menu(read, write)
         elif choice == "11":
             _admin_rebuild_menu(read, write)
-        elif choice == "12":
-            _example_setup_menu(read, write, checkout_suffix=checkout_suffix)
-        elif choice == "13":
-            _real_database_setup_menu(read, write)
 
 
 def _password_menu(read: Callable[[str], str], write: Callable[[str], None]) -> None:
@@ -1658,16 +1690,14 @@ def run_operator_menu(
     run_command: Callable[..., BaseModel] | None = None,
     run_summary: Callable[..., BaseModel] | None = None,
     configuration_families: tuple[type[ConfiguredSettings], ...] = (),
-    checkout_suffix: str = "",
 ) -> int:
     """Run the numbered operator menu until Exit, EOF (0), or interrupt (130).
 
     An absent stage or summary callback resolves to the base command at entry. A supplied
     callback replaces that one call only, so a wrapper injects an extra route without a second menu
     or dispatcher. ``configuration_families`` reach the configuration entry alone, so a wrapper can
-    add the validation families of its own package. ``checkout_suffix`` reaches the example setup
-    entry alone, so a wrapper can name its own checkout and unit segment. Choices, scope, safe
-    failures, disposition and EOF behavior come from the base command.
+    add the validation families of its own package. Choices, scope, safe failures, disposition and
+    EOF behavior come from the base command.
     """
     commands = run_command if run_command is not None else run_administrative_command
     summaries = run_summary if run_summary is not None else run_administrative_summary
@@ -1681,7 +1711,6 @@ def run_operator_menu(
                     read,
                     write,
                     configuration_families=configuration_families,
-                    checkout_suffix=checkout_suffix,
                 )
             elif choice == "2":
                 _tool_menu(read, write, "ingestion", run_command=commands)
@@ -1695,9 +1724,6 @@ def run_operator_menu(
                 _reports_menu(read, write, run_summary=summaries)
             elif choice == "7":
                 _server_logs_menu(read, write)
-    except CheckoutRenamed as renamed:
-        write(str(renamed))
-        return 0
     except KeyboardInterrupt:
         return 130
     except EOFError:
@@ -1726,6 +1752,7 @@ __all__ = [
     "LogSessionsReport",
     "LogSource",
     "PasswordSetReport",
+    "PublicSiteReport",
     "RealDatabaseSetupInput",
     "REPORT_SCOPE",
     "RebuildReport",
@@ -1755,20 +1782,25 @@ __all__ = [
     "run_administrative_feedback_attachment",
     "run_administrative_feedback_delete",
     "run_administrative_feedback_list",
-    "run_administrative_serving_artifacts",
     "run_administrative_log_sessions",
+    "run_administrative_serving_artifacts",
     "run_administrative_migration",
     "run_administrative_password",
     "run_administrative_preflight",
+    "run_administrative_publish",
     "run_administrative_real_database_setup",
     "run_administrative_rebuild",
     "run_administrative_restart_admin",
     "run_administrative_server_status",
     "run_administrative_session_log",
     "run_administrative_setup",
+    "run_administrative_stack_up",
     "run_administrative_summary",
+    "run_administrative_unpublish",
     "run_administrative_usage",
+    "run_example_setup_interactive",
     "run_operator_menu",
+    "run_real_database_setup_interactive",
     "set_inference_target_disposition",
     "worker_origin_notice",
 ]

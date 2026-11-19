@@ -1,6 +1,6 @@
 # Interfaces
 
-The interfaces chapter covers the HTTP read surface, the command line, the administration backend, and the three shell launchers.
+The interfaces chapter covers the HTTP read surface, the command line, the administration backend, and the processes the images start.
 
 ## The HTTP read surface
 
@@ -8,13 +8,13 @@ The web server answers eight fixed dataset read commands plus one feature read u
 
 The feature read reports the site's three serving switches and that identity. The feedback surface reads the feedback definition and stores one submission through the feedback service. The browser sends its state as request inputs, and no route writes authoritative catalogue or user data, starts a stage, or reaches the worker. [Web API](/docs/backend/interfaces/web-api.md) lists the routes and the failure outcomes. [Web routes](/docs/backend/interfaces/web-routes.md), [Serving state](/docs/backend/interfaces/serving-state.md), [Web supervisor](/docs/backend/interfaces/web-supervisor.md) and [Front router](/docs/backend/interfaces/front-router.md) describe the application and its request models, the retained state its requests read, the supervisor that starts it and the front router that admits and records each request.
 
-With `ADMISSION_ENABLED` true in `config/admission.toml`, the front router gives each POST to one of the nine catalogue API paths a free, light or heavy class before it forwards the read, and with it off only that classification is skipped: the request body bound still applies and the feedback paths keep their own allowance. [Admission control](/docs/backend/interfaces/admission-control.md) states the bounds, the regimes and the refusals an operator relies on, and [Admission policy arithmetic](/docs/backend/interfaces/admission-policy.md) holds the cost curves and the arithmetic behind those bounds.
+With `ADMISSION_ENABLED` true in `config/admission.toml`, the front router gives each POST to one of the nine API read routes a free, light or heavy class before it forwards the read, and with it off only that classification is skipped: the request body bound applies and the feedback paths keep their own allowance. [Admission control](/docs/backend/interfaces/admission-control.md) states the bounds, the regimes and the refusals an operator relies on, and [Admission policy arithmetic](/docs/backend/interfaces/admission-policy.md) holds the cost curves and the arithmetic behind those bounds.
 
 The measurements of the serving path are collected in [Runtime, storage and serving experiments](/docs/experiments/runtime-storage-and-serving/README.md).
 
 ## The command line
 
-The feature read scripts call package commands and print one JSON report each. The administration command runs the operator menu and the machine commands that enroll a dataset, prepare the worker, run the stages, and report coverage. The example data loader fills the invented dataset, and shell scripts start the web server and the administration backend. [Command line](/docs/backend/interfaces/command-line.md) describes the read scripts and their inputs, [Administration commands](/docs/backend/interfaces/administration-commands.md) describes the administration command and its operations, and [Command adapters](/docs/backend/interfaces/command-adapters.md) describes the delegation.
+The feature read scripts call package commands and print one JSON report each. The administration command runs the operator menu and the machine commands that enroll a dataset, prepare the worker, run the stages, and report coverage. The example data loader fills the invented dataset, and the site and administration images start their own processes from a module command. [Command line](/docs/backend/interfaces/command-line.md) describes the read scripts and their inputs, [Administration commands](/docs/backend/interfaces/administration-commands.md) describes the administration command and its operations, [Self-host and deploy commands](/docs/backend/interfaces/self-host-and-deploy-commands.md) describes the setup workflows, the deployment and the serving artifact build, and [Command adapters](/docs/backend/interfaces/command-adapters.md) describes the delegation.
 
 ## Command ownership and the browser boundary
 

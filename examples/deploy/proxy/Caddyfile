@@ -1,0 +1,7 @@
+# Machine-wide public site proxy. Each instance publishes one site file in the project's `sites`
+# directory, and a site file names the proxy's bind address when `PROXY_BIND_ADDRESS` sets one.
+{
+	admin unix//tmp/caddy-admin.sock
+}
+
+import sites/*.caddy

@@ -15,20 +15,26 @@ import subprocess
 import sys
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import Engine, select
 
 from course_explorer import administration
-from course_explorer.administration import administrative_json
+from course_explorer.administration import administrative_json, utc_now
 from course_explorer.config import (
+    load_administrative_dataset_settings,
     load_database_settings,
     load_embedding_runtime_settings,
     load_raw_database_settings,
+    load_worker_connection_settings,
 )
-from course_explorer.datasets import read_dataset_verification, resolve_dataset_role
+from course_explorer.datasets import (
+    DatabaseSnapshot,
+    read_dataset_verification,
+    resolve_dataset_role,
+)
 from course_explorer.db.models import CourseVersion, DerivedCourseText
 from course_explorer.db.session import create_database_engine, create_session_factory, session_scope
 from course_explorer.enums import TeachingTextField
@@ -36,13 +42,27 @@ from course_explorer.serving_build import build_serving_artifacts
 from course_explorer_admin import machine_locks, mechanics, remote_stages
 from course_explorer_admin.datasets import copy_to_working, initialize_selected_dataset
 from course_explorer_admin.inference.controller import InferenceControllerWorkerState
-from course_explorer_admin.lifecycle import read_lifecycle_state
+from course_explorer_admin.lifecycle import (
+    LifecycleContext,
+    LifecycleSession,
+    LifecycleState,
+    TranslationOptions,
+    TranslationProgress,
+    read_lifecycle_state,
+    write_lifecycle_state,
+)
+from course_explorer_admin.remote import WorkerDatasetSession
 from course_explorer_admin.snapshots import dump_database, restore_database
 from course_explorer_admin.translation.controller import (
     TranslationControllerStatus,
     TranslationControllerWorkerState,
 )
-from course_explorer_admin.transport import WorkerCommandError, WorkerConnectionLost
+from course_explorer_admin.transport import (
+    KERNEL_BOOT_ID_PATH,
+    WorkerCommandError,
+    WorkerConnectionLost,
+    build_worker_transport,
+)
 from course_explorer_web.dataset import resolve_serving_dataset
 from tests.admin._remote_support import (
     LocalWorkerTransport,
@@ -67,6 +87,7 @@ from tests.config._support import (
     TRANSLATION_CONTROLLER_KEYS,
     TRANSLATION_KEYS,
 )
+from tests.datasets._support import sample_verification
 from tests.inference._job_support import seed_embeddings
 from tests.inference._scheduling_support import seed_courses
 
@@ -153,15 +174,15 @@ def configure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, initial_databa
     monkeypatch.setenv("EMBEDDING_CONTROLLER_STATE_ROOT", "state/embedding")
     monkeypatch.setenv("TRANSLATION_CONTROLLER_STATE_ROOT", "state/translation")
     monkeypatch.setenv("INFERENCE_CONTROLLER_STATE_ROOT", "state/inference")
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT", str(_REPO))
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", str(_REPO))
     monkeypatch.setenv("TEST_WORKER_DATA_ROOT", str(tmp_path / "worker-data"))
     monkeypatch.setenv("ADMIN_DATASET_DATABASE_PREFIX", "course_s7d_test")
     monkeypatch.setenv("ADMIN_WORKER_DATABASE_PREFIX", "course_s7d_worker_test")
     monkeypatch.setenv("ADMIN_DATABASE_OPERATION_TIMEOUT_SECONDS", "600")
     monkeypatch.setenv("INFERENCE_SELECTION_POOL_K", "50")
     monkeypatch.setenv("INFERENCE_SELECTION_FINAL_K", "50")
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_HEALTH_INTERVAL_SECONDS", "0.02")
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_STOP_TIMEOUT_SECONDS", "20")
+    monkeypatch.setenv("WORKER_HEALTH_INTERVAL_SECONDS", "0.02")
+    monkeypatch.setenv("WORKER_STOP_TIMEOUT_SECONDS", "20")
     monkeypatch.setenv("ADMIN_POLL_INTERVAL_SECONDS", "0.02")
     monkeypatch.setenv("ADMIN_STOP_TIMEOUT_SECONDS", "20")
     monkeypatch.setenv("ADMIN_STARTUP_ATTEMPTS", "400")
@@ -309,8 +330,8 @@ def _scenario(
     root = tmp_path / name
     root.mkdir()
     configure(monkeypatch, root, initial_database=initial_database)
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_STOP_TIMEOUT_SECONDS", stop_timeout)
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_HEALTH_INTERVAL_SECONDS", interval)
+    monkeypatch.setenv("WORKER_STOP_TIMEOUT_SECONDS", stop_timeout)
+    monkeypatch.setenv("WORKER_HEALTH_INTERVAL_SECONDS", interval)
     fake = fake_state_path(root)
     seed_fake(fake)
     transport = LocalWorkerTransport(fake)
@@ -356,6 +377,7 @@ def test_remote_due_checkpoint_reboots_and_continues_same_session(
     root, fake, runner = _scenario(
         tmp_path, monkeypatch, "reboot", initial_database=sql_source, stop_timeout="20"
     )
+    monkeypatch.setenv("WORKER_GPU_REBOOT_ENABLED", "true")
     monkeypatch.setenv("WORKER_GPU_REBOOT_INTERVAL_MINUTES", "1")
     try:
         started = remote_stages.run_translation_lifecycle_command(
@@ -386,6 +408,7 @@ def test_remote_due_checkpoint_reboots_and_continues_same_session(
     pause_root, pause_fake, pause_runner = _scenario(
         tmp_path, monkeypatch, "reboot-pause", initial_database=sql_source, stop_timeout="20"
     )
+    monkeypatch.setenv("WORKER_GPU_REBOOT_ENABLED", "true")
     monkeypatch.setenv("WORKER_GPU_REBOOT_INTERVAL_MINUTES", "1")
     try:
         started = remote_stages.run_inference_lifecycle_command(
@@ -661,7 +684,12 @@ def test_failed_return_is_recorded_and_rerun_stop_recovers(
             source_engine.dispose()
         selected_engine = create_database_engine(selected_settings)
         selected_content = selected_row_content(selected_engine)
-        for table in ("courses", "course_versions", "course_texts", "course_embedding_chunks"):
+        for table in (
+            "courses",
+            "course_versions",
+            "official_course_texts",
+            "course_embedding_chunks",
+        ):
             assert selected_content[table]
         selected_engine.dispose()
         selected_engine = None
@@ -788,6 +816,9 @@ def test_failed_return_is_recorded_and_rerun_stop_recovers(
 class _ScriptedTransport:
     """One scripted worker transport that answers one helper run at a time and records each argv."""
 
+    shares_worker_filesystem = False
+    owns_worker_database_service = True
+
     def __init__(self, payloads: list[bytes]) -> None:
         self._payloads = payloads
         self.calls: list[tuple[str, ...]] = []
@@ -806,7 +837,9 @@ def test_remote_reservation_round_trip_refuses_a_foreign_owner_and_releases_its_
         worker_module="course_explorer_admin.translation_controller",
         status_type=TranslationControllerStatus,
         load_connection=lambda: SimpleNamespace(
-            worker_project_root=Path("/srv/worker"), stop_timeout_seconds=30.0
+            worker_project_root=Path("/srv/worker"),
+            host_kind="wsl",
+            stop_timeout_seconds=30.0,
         ),
         startup_attempts=1,
         load_session=lambda session_id: (_ for _ in ()).throw(AssertionError("no session read")),
@@ -867,3 +900,177 @@ def test_remote_reservation_round_trip_refuses_a_foreign_owner_and_releases_its_
         SESSION_ID,
     )
     assert released == [("translation", SESSION_ID, ("checkout",))]
+
+
+class _SameMachineRunner:
+    """Record one same-machine stage's Compose bridge and worker-consult argv."""
+
+    def __init__(self, *, db_running: bool = True) -> None:
+        self.calls: list[tuple[str, ...]] = []
+        self.services: set[str] = set()
+        self.db_running = db_running
+
+    def run(self, argv, *, cwd=None, env=None, stdin_path=None, stdout_path=None, timeout=None):
+        command = tuple(argv)
+        self.calls.append(command)
+        stdout = self._exec(command[-1]) if "exec" in command else self._bridge(command)
+        return subprocess.CompletedProcess(
+            list(command),
+            0,
+            stdout=stdout,
+            stderr=b"\nCOURSE_EXPLORER_TRANSPORT_RESULT command 0\n",
+        )
+
+    def _bridge(self, command: tuple[str, ...]) -> bytes:
+        if "ps" in command and "--services" in command:
+            return ("\n".join(sorted(self.services)) + "\n").encode()
+        if "up" in command and "--wait" in command:
+            self.services.update(command[command.index("never") + 1 :])
+        return b""
+
+    def _exec(self, script: str) -> bytes:
+        if "ps --services --status running" in script:
+            services = self.services | ({"db"} if self.db_running else set())
+            return ("\n".join(sorted(services)) + "\n").encode()
+        if f"cat {KERNEL_BOOT_ID_PATH}" in script:
+            return b"11111111-1111-4111-8111-111111111111\n"
+        if "controller_worker prepare" in script:
+            return (
+                TranslationControllerStatus(
+                    session_id=SESSION_ID,
+                    lifecycle="prepared",
+                    course_limit=None,
+                    active_seconds=0.0,
+                )
+                .model_dump_json()
+                .encode()
+            )
+        return b""
+
+
+def test_same_machine_transport_reuses_the_mounted_session_and_owns_no_database_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A same-machine transport reuses the mounted session, copies beside it and owns no database.
+
+    The worker service starts through the bridge before the first exec, and reserve runs the
+    machine-lock read and acquire through that same exec seam. The transport reports the shared
+    filesystem and no owned database service, so a missing instance database refuses. A same-file
+    upload runs no command, a separate destination is one local copy, the download copy matches, and
+    the boot read is the container's exec of the host kernel boot identity. A reserve outside the
+    administration container refuses before any Compose command.
+    """
+    repository = administration.repository_root()
+    monkeypatch.setenv("WORKER_HOST_KIND", "same-machine")
+    monkeypatch.delenv("WORKER_SSH_TARGET")
+    monkeypatch.delenv("WORKER_WSL_DISTRIBUTION")
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", str(repository))
+    monkeypatch.setattr(
+        remote_stages, "load_instance_settings", lambda: SimpleNamespace(instance_key="example")
+    )
+    monkeypatch.setattr(remote_stages, "reserve_local_stage", lambda *args: True)
+    monkeypatch.setattr(remote_stages, "unreserve_local_stage", lambda *args: None)
+    connection = load_worker_connection_settings()
+    stage = remote_stages.RemoteStage(
+        name="translation",
+        worker_module="course_explorer_admin.translation.controller_worker",
+        status_type=TranslationControllerStatus,
+        load_connection=load_worker_connection_settings,
+        startup_attempts=1,
+        load_session=lambda session_id: (_ for _ in ()).throw(AssertionError("no session read")),
+        make_policy=lambda session_id: None,
+        configuration_sha256=lambda: "identity",
+    )
+    runner = _SameMachineRunner()
+    transport = build_worker_transport(runner, connection)
+    monkeypatch.setattr(remote_stages, "_transport", lambda _runner, _connection: transport)
+
+    stage.reserve(SESSION_ID, runner=runner)
+
+    first_exec = next(index for index, call in enumerate(runner.calls) if "exec" in call)
+    bridge_up = next(
+        index
+        for index, call in enumerate(runner.calls)
+        if "exec" not in call and "up" in call and "worker" in call
+    )
+    assert bridge_up < first_exec
+    assert transport.shares_worker_filesystem is True
+    assert transport.owns_worker_database_service is False
+
+    directory = remote_stages.worker_dataset_session_directory(SESSION_ID)
+    directory.mkdir(parents=True)
+    source = directory / "session.json"
+    source.write_bytes(b"session")
+    before = len(runner.calls)
+
+    # The server path and the container path of a mounted session file are one file.
+    transport.upload(source, PurePosixPath(str(source)), reuse_matching=True)
+    assert len(runner.calls) == before
+    assert source.read_bytes() == b"session"
+
+    # Another destination is one local copy, and a repeated upload of the same file reuses it.
+    second = directory / "policy.json"
+    transport.upload(source, PurePosixPath(str(second)))
+    assert second.read_bytes() == b"session"
+    transport.upload(source, PurePosixPath(str(second)), reuse_matching=True)
+    assert second.read_bytes() == b"session"
+    assert len(runner.calls) == before
+
+    destination = tmp_path / "downloaded.json"
+    transport.download(PurePosixPath(str(second)), destination)
+    assert destination.read_bytes() == b"session"
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+    assert transport.read_host_boot_id(timeout=1.0) == "11111111-1111-4111-8111-111111111111"
+
+    # A same-machine stage uses the instance's own db service, so a bring-up whose read reports
+    # none refuses through the stage's own entry.
+    lifecycle_session = LifecycleSession(
+        session_id=SESSION_ID,
+        stage="translation",
+        revision="a" * 40,
+        identity_sha256="a" * 64,
+        options=TranslationOptions(kind="translation"),
+        created_at=utc_now(),
+    )
+    lifecycle_root = tmp_path / "translation-lifecycle"
+    lifecycle_root.mkdir()
+    write_lifecycle_state(
+        lifecycle_root,
+        LifecycleState(
+            session_id=SESSION_ID,
+            lifecycle="starting",
+            requested_action="run",
+            progress=TranslationProgress(kind="translation"),
+            work_complete=False,
+            active_seconds=0.0,
+        ),
+    )
+    worker_session = WorkerDatasetSession(
+        session_id=SESSION_ID,
+        database_name=load_administrative_dataset_settings().database_name(SESSION_ID, worker=True),
+        stage="translation",
+        source_dataset_id="0" * 32,
+        input_snapshot=DatabaseSnapshot(
+            session_id=SESSION_ID,
+            database_name="course_explorer",
+            dump_sha256="c" * 64,
+            verification=sample_verification(),
+        ),
+    )
+    no_db = _SameMachineRunner(db_running=False)
+    with pytest.raises(ValueError):
+        stage._bring_up(
+            LifecycleContext(root=lifecycle_root, session=lifecycle_session, runner=no_db),
+            build_worker_transport(no_db, connection),
+            connection,
+            worker_session,
+            recovery=remote_stages.WorkerRecovery(connection),
+        )
+
+    # A host-run same-machine reserve refuses before any Compose command.
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", "/app")
+    host_run = _SameMachineRunner()
+    with pytest.raises(ValueError):
+        stage.reserve(SESSION_ID, runner=host_run)
+    assert host_run.calls == []

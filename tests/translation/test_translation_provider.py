@@ -23,7 +23,7 @@ CONTENT = "This course teaches the fundamentals of linear algebra."
 
 def settings(**overrides: Any) -> TranslationSettings:
     values: dict[str, object] = {
-        "TRANSLATION_ARTIFACT_PATH": "models/translategemma-12b-it-Q5_K_M.gguf",
+        "TRANSLATION_ARTIFACT_PATH": "models/translategemma-12b-it.Q5_K_M.gguf",
         **overrides,
     }
     return settings_factory(TranslationSettings, **values)

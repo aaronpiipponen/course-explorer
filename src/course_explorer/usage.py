@@ -145,9 +145,14 @@ def read_usage_report(
     return _summarize(window_start, window_end, windowed)
 
 
+def usage_root(root: Path) -> Path:
+    """Return the directory holding one checkout's usage file."""
+    return root / _USAGE_RELATIVE_PATH.parent
+
+
 def _usage_file(root: Path) -> Path:
     """Return the sole usage file beneath one checkout root."""
-    return root / _USAGE_RELATIVE_PATH
+    return usage_root(root) / _USAGE_RELATIVE_PATH.name
 
 
 def rounded_usage_hour(value: datetime) -> datetime:

@@ -14,7 +14,12 @@ from uuid import uuid4
 import pytest
 
 from course_explorer.administration import administrative_json, atomic_write_private_text
-from course_explorer.config import InferenceRerankSettings, InferenceSettings, TranslationSettings
+from course_explorer.config import (
+    InferenceRerankSettings,
+    InferenceSettings,
+    TranslationSettings,
+    WorkerGpuSettings,
+)
 from course_explorer_admin import mechanics
 from course_explorer_admin import runtime as runtime_module
 from course_explorer_admin.runtime import (
@@ -34,13 +39,13 @@ REVISION = "e" * 40
 ARTIFACT_BYTES = b"pinned-artifact"
 
 
-def _runtime_directory(home: Path) -> Path:
-    return home / ".local" / "src" / f"llama.cpp-{REVISION}"
+def _runtime_directory(home: Path, gpu_backend: str, gpu_target: str = "gfx1201") -> Path:
+    return home / ".local" / "src" / f"llama.cpp-{REVISION}-{gpu_backend}-{gpu_target}"
 
 
 def _prepare_runtime(home: Path) -> Path:
     """Create the one prepared runtime directory with an executable llama-server."""
-    directory = _runtime_directory(home)
+    directory = _runtime_directory(home, "rocm")
     (directory / "build" / "bin").mkdir(parents=True)
     executable = directory / "build" / "bin" / "llama-server"
     executable.write_bytes(b"binary")
@@ -55,12 +60,20 @@ def _artifact(home: Path) -> tuple[Path, str]:
     return artifact, hashlib.sha256(ARTIFACT_BYTES).hexdigest()
 
 
+def _gpu(gpu_backend: str = "rocm", target: str = "gfx1201", index: int = 3) -> WorkerGpuSettings:
+    return WorkerGpuSettings(
+        WORKER_GPU_BACKEND=gpu_backend,
+        WORKER_GPU_TARGET=target,
+        WORKER_GPU_DEVICE_INDEX=index,
+    )
+
+
 def _spec(home: Path, *, port: int = 18081) -> WorkerRuntimeSpec:
     artifact, digest = _artifact(home)
     return WorkerRuntimeSpec(
         mode="translation",
         argv=(
-            str(_runtime_directory(home) / "build" / "bin" / "llama-server"),
+            str(_runtime_directory(home, "rocm") / "build" / "bin" / "llama-server"),
             "--model",
             str(artifact),
         ),
@@ -69,6 +82,9 @@ def _spec(home: Path, *, port: int = 18081) -> WorkerRuntimeSpec:
         artifact_sha256=digest,
         host="127.0.0.1",
         port=port,
+        gpu_backend="rocm",
+        gpu_target="gfx1201",
+        environment=(("HIP_VISIBLE_DEVICES", "3"), ("HSA_ENABLE_DXG_DETECTION", "1")),
     )
 
 
@@ -172,16 +188,24 @@ def test_configured_runtime_builders_and_inference_mode_switch(
     inference = InferenceSettings()
     rerank = InferenceRerankSettings()
     first, second = inference.inference_local_variants
+    gpu = _gpu()
 
-    translation_spec = translation_runtime_spec(translation, tmp_path)
+    translation_spec = translation_runtime_spec(translation, tmp_path, gpu=gpu, host_kind="wsl")
     assert translation_spec.mode == "translation"
+    # A ROCm WSL child carries its card index and the ROCDXG device flag.
+    assert translation_spec.gpu_backend == "rocm"
+    assert translation_spec.environment == (
+        ("HIP_VISIBLE_DEVICES", "3"),
+        ("HSA_ENABLE_DXG_DETECTION", "1"),
+    )
     assert translation_spec.artifact == tmp_path / translation.translation_artifact_path
     assert translation_spec.artifact_sha256 == translation.translation_artifact_sha256
     assert translation_spec.revision == translation.translation_runtime_revision
     assert translation_spec.host == translation.translation_host
     assert translation_spec.port == translation.translation_port
 
-    rerank_spec = rerank_runtime_spec(rerank, tmp_path)
+    rerank_spec = rerank_runtime_spec(rerank, tmp_path, gpu=gpu, host_kind="wsl")
+    assert rerank_spec.environment == translation_spec.environment
     rerank_argv = rerank_spec.argv
     assert rerank_spec.mode == "rerank"
     assert rerank_spec.artifact == tmp_path / rerank.inference_rerank_artifact_path
@@ -190,23 +214,45 @@ def test_configured_runtime_builders_and_inference_mode_switch(
     assert rerank_spec.host == rerank.inference_rerank_host
     assert rerank_spec.port == rerank.inference_rerank_port
 
-    first_spec = generation_runtime_spec(inference, first, tmp_path)
+    first_spec = generation_runtime_spec(inference, first, tmp_path, gpu=gpu, host_kind="wsl")
+    assert first_spec.environment == translation_spec.environment
     assert first_spec.mode == "generation"
     assert first_spec.port == first.port
-    assert first_spec.artifact == tmp_path / inference.inference_primary_artifact_path
-    assert first_spec.artifact_sha256 == inference.inference_primary_artifact_sha256
+    assert first_spec.artifact == tmp_path / first.artifact_path
+    assert first_spec.artifact_sha256 == first.artifact_sha256
     assert first_spec.revision == inference.inference_runtime_revision
     assert first_spec.host == inference.inference_host
     assert "--spec-draft-n-max" in first_spec.argv
     assert first_spec.argv[first_spec.argv.index("--spec-draft-n-max") + 1] == str(
         first.mtp_draft_n_max
     )
-    second_spec = generation_runtime_spec(inference, second, tmp_path)
+    second_spec = generation_runtime_spec(inference, second, tmp_path, gpu=gpu, host_kind="wsl")
     assert "--spec-draft-n-max" not in second_spec.argv
     for argv in (translation_spec.argv, rerank_argv, first_spec.argv):
         joined = " ".join(argv)
         for forbidden in ("--api-key", "--host 0.0.0.0", "--model-url", "--webui"):
             assert forbidden not in joined
+
+    # A ROCm child on a native Linux worker carries the card index without the WSL device flag,
+    # and a CUDA child selects its card through CUDA_VISIBLE_DEVICES alone.
+    native = translation_runtime_spec(translation, tmp_path, gpu=gpu, host_kind="linux")
+    assert native.environment == (("HIP_VISIBLE_DEVICES", "3"),)
+    cuda = translation_runtime_spec(
+        translation,
+        tmp_path,
+        gpu=_gpu(gpu_backend="cuda", target="86"),
+        host_kind="wsl",
+    )
+    assert cuda.gpu_backend == "cuda"
+    assert cuda.environment == (("CUDA_VISIBLE_DEVICES", "3"),)
+    # The same-machine CUDA override exposes the configured card as the container's ordinal zero.
+    container = translation_runtime_spec(
+        translation,
+        tmp_path,
+        gpu=_gpu(gpu_backend="cuda", target="86"),
+        host_kind="same-machine",
+    )
+    assert container.environment == (("CUDA_VISIBLE_DEVICES", "0"),)
 
     owners: list[FakeOwner] = []
 
@@ -222,6 +268,8 @@ def test_configured_runtime_builders_and_inference_mode_switch(
         directory=tmp_path,
         settings=inference,
         rerank_settings=rerank,
+        gpu=gpu,
+        host_kind="wsl",
         health_attempts=3,
         interval=0.01,
         stop_timeout_seconds=5.0,
@@ -273,7 +321,13 @@ def test_owned_runtime_start_stop_and_unhealthy_cleanup(
     assert runner.popen_kwargs is not None
     assert runner.popen_kwargs["inherit_environment"] is False
     assert runner.popen_kwargs["start_new_session"] is True
-    assert set(runner.popen_kwargs["env"]) == {"HOME", "PATH", "HSA_ENABLE_DXG_DETECTION"}
+    assert set(runner.popen_kwargs["env"]) == {
+        "HOME",
+        "PATH",
+        "HIP_VISIBLE_DEVICES",
+        "HSA_ENABLE_DXG_DETECTION",
+    }
+    assert runner.popen_kwargs["env"]["HIP_VISIBLE_DEVICES"] == "3"
     assert runner.popen_kwargs["env"]["HSA_ENABLE_DXG_DETECTION"] == "1"
     record = json.loads((directory / "runtime.json").read_text(encoding="utf-8"))
     assert record["pid"] == 4242
@@ -311,6 +365,9 @@ def test_inference_runtime_rejects_exited_owned_child(
         artifact_sha256="0" * 64,
         host="127.0.0.1",
         port=18099,
+        gpu_backend="rocm",
+        gpu_target="gfx1201",
+        environment=(("HIP_VISIBLE_DEVICES", "0"),),
     )
     monkeypatch.setattr(runtime_module, "generation_runtime_spec", lambda *a, **k: spec)
     monkeypatch.setattr(runtime_module, "require_prepared_runtime", lambda **k: None)
@@ -362,6 +419,8 @@ def test_inference_runtime_rejects_exited_owned_child(
         directory=directory,
         settings=inference,
         rerank_settings=rerank,
+        gpu=_gpu(),
+        host_kind="wsl",
         health_attempts=3,
         interval=0.01,
         stop_timeout_seconds=5.0,

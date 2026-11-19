@@ -2,80 +2,62 @@
 
 The setup and preflight entries prepare and maintain this copy, its worker, its containers, its configuration and its administration account.
 
-The **Setup/preflight** entry holds the setup operations, the copy to Working, the read-only preflight, the role migration, the two cleanup entries, the configuration editor, the two rebuild scopes and the account password.
+First-run setup runs through `scripts/self-host.sh`, not through this menu. The **Setup/preflight** entry holds the dataset enrollment, the copy to Working, the read-only worker preflight, the role migration, the two cleanup entries, the configuration editor, the two rebuild scopes and the account password. Every machine command runs inside the administration container, which is the host's command surface.
 
 | Choice | Entry | Machine command |
 |---|---|---|
-| 1 | Enroll/select dataset | `uv run python scripts/admin.py setup datasets` |
-| 2 | Copy dataset to Working | `uv run python scripts/admin.py datasets copy-to-working SOURCE_DATASET_ID` |
-| 3 | Worker setup/update | `uv run python scripts/admin.py setup worker` |
-| 4 | Read-only worker preflight | `uv run python scripts/admin.py preflight` |
-| 5 | Migrate dataset | `uv run python scripts/admin.py migrate selected` or `migrate working` |
-| 6 | Dataset cleanup | `uv run python scripts/admin.py datasets list` and `datasets delete DATASET_ID [--confirm-working]` |
-| 7 | Backup cleanup | `uv run python scripts/admin.py backups list` and `backups delete NAME` |
-| 8 | Configuration | `uv run python scripts/admin.py config list`, `config read FILE` and `config set FILE KEY VALUE` |
-| 9 | Rebuild app | `uv run python scripts/admin.py rebuild` |
-| 10 | Administration password | `uv run python scripts/admin.py password --username USERNAME` |
-| 11 | Rebuild administration console | `uv run python scripts/admin.py rebuild-admin` and `restart-admin` |
-| 12 | Set up example site | `uv run python scripts/admin.py self-host example` |
-| 13 | Set up real empty database | `uv run python scripts/admin.py self-host real-database` |
+| 1 | Enroll/select dataset | `docker exec PROJECT-admin-1 python scripts/admin.py setup datasets` |
+| 2 | Copy dataset to Working | `docker exec PROJECT-admin-1 python scripts/admin.py datasets copy-to-working SOURCE_DATASET_ID` |
+| 3 | Worker code update | `docker exec PROJECT-admin-1 python scripts/admin.py setup worker` |
+| 4 | Read-only worker preflight | `docker exec PROJECT-admin-1 python scripts/admin.py preflight` |
+| 5 | Migrate dataset | `docker exec PROJECT-admin-1 python scripts/admin.py migrate selected` or `migrate working` |
+| 6 | Dataset cleanup | `docker exec PROJECT-admin-1 python scripts/admin.py datasets list` and `datasets delete DATASET_ID [--confirm-working]` |
+| 7 | Backup cleanup | `docker exec PROJECT-admin-1 python scripts/admin.py backups list` and `backups delete NAME` |
+| 8 | Configuration | `docker exec PROJECT-admin-1 python scripts/admin.py config list`, `config read FILE` and `config set FILE KEY VALUE` |
+| 9 | Rebuild app | `docker exec PROJECT-admin-1 python scripts/admin.py rebuild` |
+| 10 | Administration password | `docker exec -it PROJECT-admin-1 python scripts/admin.py password --username USERNAME` |
+| 11 | Rebuild administration console | `docker exec PROJECT-admin-1 python scripts/admin.py rebuild-admin` and `restart-admin` |
+
+`PROJECT` is the instance's Compose project, `course-explorer-<instance key>`. The menu opens inside the same container:
+
+```bash
+docker exec -it PROJECT-admin-1 python scripts/admin.py menu
+```
 
 The dataset enrollment starts the server database service, migrates the configured database to this checkout's migration head and enrolls it as the Selected initial dataset. An already-enrolled dataset is reused and returned as it is.
 
 The copy lists every receipt-bearing dataset and asks for one source id. It confirms the exact dataset before it copies, requires every stage idle, creates the verified copy and publishes it as Working. The confirmation names the dataset and its database.
 
-The worker setup fast-forwards the worker checkout to one origin branch, installs its locked environment, and prepares its pointed resources, including building the database service image through Compose. The menu reads the server checkout's branch first and asks for the origin branch only when that branch is not `main`. The question shows the server branch as its default, and an empty answer accepts it. The machine command sets the same branch with `--branch BRANCH`, and `--code-only` updates the code and its locked environment without preparing the pointed resources.
+The worker code update fast-forwards the worker checkout to one origin branch and installs its locked project environment. It prepares no resource and installs no system package. The worker's stack is installed on the worker itself by its own command, which also prepares the configured artifacts and runtimes and writes a chosen model preset into the worker's model configuration files. [A Windows WSL worker](/docs/getting-started/worker-wsl.md#install-the-worker) and [a Linux worker](/docs/getting-started/worker-linux.md#install-a-remote-worker) state what each host needs, and [Installing a worker](/docs/getting-started/worker-install.md#the-install-steps) states that command, its prompts and its steps.
 
-The preflight reads the branch and HEAD of the server checkout and of the worker checkout, checks the worker's locked environment, and reads the worker resources when that check passes. It installs nothing, and the machine command returns 1 when the locked environment or a resource is not ready.
+The menu reads the server checkout's branch first and asks for the origin branch only when that branch is not `main`. The question shows the server branch as its default, and an empty answer accepts it. The machine command sets the same branch with `--branch BRANCH`, and the default is `main`. Its report holds the worker branch, its revision, whether the server checkout's branch differs from its origin counterpart, and no resource readiness. A same-machine worker has no separate checkout. Its image is built from the server checkout, so one deployment updates it, and this entry refuses with that guidance.
+
+The preflight reads the branch and HEAD of the server checkout and of the worker checkout, checks the worker's locked environment, and reads the worker resources when that check passes. On a same-machine worker it reports the server checkout's branch and revision, because the worker image is built from that checkout. On a same-machine worker it reads the running worker container, because the first stage reservation starts the worker service. A preflight before that reservation reports the safe preflight failure.
+
+It installs, downloads and starts nothing, and it never elevates. The socket, daemon and image reads use Docker's plain command, and the Compose reads use the shared bridge, so an account outside the `docker` group reports the `docker` component instead of prompting. A same-machine operation runs inside the administration container, and a run outside it refuses with that one rule. A missing generation file is named `generation-artifact`, a second distinct generation file `generation-artifact-fallback`, and the translation artifact `translation-artifact` whether it is a published file or a local conversion. A configured GPU stack that does not answer is named `gpu-stack`, and each other missing resource carries its own fixed name. A GPU stack is host-provided: a ROCm worker's stack comes from its configured package source, and a CUDA worker's driver and toolkit are installed on the host. The machine command returns 1 when the locked environment or a resource is not ready.
 
 The migration asks for Selected or Working, then applies the migration head to that role's database as explicit maintenance. A Working migration requires every stage to be idle. The server database service must already be running.
 
-The worker setup and the preflight add one fixed notice when the server checkout's branch differs from its origin counterpart. The notice states that pushing is a separate manual step. The menu prints it after the report, and the machine command prints it to standard error.
+The worker code update and the preflight add one fixed notice when the server checkout's branch differs from its origin counterpart. The notice states that pushing is a separate manual step. The menu prints it after the report, and the machine command prints it to standard error.
 
-## The two self-host workflows
+## First-run setup
 
-Choice 12 opens the example workflow. It asks for a university, the feature web, administration, database and embedding ports, the shared directory, the feature app address and the administration origin, the administration username, the startup mode, the pinned-model download confirmation and the optional publication choice.
-
-The university picker lists one option per implemented university map entry, named by its English display name. The four ports default to the values of the example files and must differ. The shared directory prompt shows the example file's `ADMIN_SHARED_ROOT` as its default, and a blank answer leaves the configured value as it is. A blank app address or administration origin takes the port-derived address.
-
-The host preflight refuses a loopback port that another process holds, except the database port or the embedding port of a container this project already runs. Stop that listener or run the entry again with another port.
-
-The workflow then reads the publication token at a hidden prompt when the publication choice is yes, followed by the administration password twice at the hidden prompts. A cancel, an end of input and an interrupt write nothing and run nothing.
-
-Choice 13 opens the real-database workflow. It asks for the database name with `course_explorer_real` as its default and for the startup mode. The default is terminal wording alone, and the workflow owner accepts the name it is given.
-
-The two machine commands read one JSON object from non-interactive standard input and take no secret flag. Fixed step names go to standard error and the one report goes to standard output.
+The example workflow and the real-database workflow run from the host bootstrap, which builds the administration image and runs the workflow inside it with the checkout mounted at its own path. The host needs Docker, Docker Compose and Git alone.
 
 ```bash
-.venv/bin/python -c 'import getpass, json, warnings; warnings.simplefilter("error", getpass.GetPassWarning); print(json.dumps({"instance_key":"example","web_port":8037,"admin_web_port":8039,"postgres_port":5433,"embedding_port":8081,"username":"OPERATOR","password":getpass.getpass("Administration password: "),"mode":"user","confirm_download":True}))' | uv run python scripts/admin.py self-host example
-printf '%s\n' '{"database_name":"course_explorer_real","mode":"foreground"}' | uv run python scripts/admin.py self-host real-database
+scripts/self-host.sh example
+scripts/self-host.sh real-database
 ```
 
-A terminal standard input refuses with guidance to the menu, so no secret is read at a visible prompt.
-
-The example workflow names its checkout `course-explorer-<key>` before it writes anything. A checkout with no working file is renamed in its parent directory, its `.venv` is deleted and rebuilt, and the command prints the renamed path and returns without materializing a working file. A checkout that holds a working file or the runtime state directory `data/admin` retains its folder and prints the exact `mv` command, then continues to the workflow's own preconditions, which can refuse a populated installation. A linked worktree retains its checkout path and prints the exact `git worktree move` command instead.
-
-The workflow then materializes the absent working templates and writes the chosen instance key, the four ports, the feature app address and administration origin, the embedding and inference switches off, the prerequisites switch from the source family (on for Sisu and off for every other family, including the guide family), the shared directory and the two generated database passwords. It creates the administration account only when it is absent. The same PostgreSQL port is written to `POSTGRES_PORT` and `FEEDBACK_POSTGRES_PORT`.
-
-It then checks the host, downloads the pinned model after the confirmation, builds and starts the database and embedding services, migrates and loads the example dataset, prepares the feedback application store, builds the native libraries and both frontends, starts the two backends in the chosen mode, and proves both shells and the bootstrap catalogue and identity.
-
-The shared directory is resolved outside the checkout and created with its parents when absent. Its `models/` and `locks/` directories are created at mode 0700 inside it. A present directory is adopted with its other contents and permissions as they are, and setup writes no marker or inventory into it.
-
-The host check runs the prepared `.venv/bin/python` once to require Linux CPython 3.14 or newer with `os.memfd_create`, before the model download, the container build or the frontend build. An interpreter without that capability refuses with the environment-preparation guidance and runs none of them. The browser runtime is prepared in the installation step with `uv run playwright install chromium --only-shell`, and the host check has no browser item.
-
-The real-database workflow requires the working files, the running database and embedding services, every stage idle, and, in foreground mode, free feature and administration ports. It creates the named database, enrolls it as the initial Selected dataset, builds its serving artifacts, starts or restarts the site, and proves the selected catalogue and a changed identity. `POSTGRES_DB` is not edited, and the example database is left in the container.
-
-A repeated example run refuses at the example database's user-table check before it imports anything. A repeated real-database run refuses inside the named enrollment owner before it creates another database, migrates, builds or restarts a server. A failed create or migration preserves whatever it created for explicit maintenance. A failed build or proof leaves the created dataset, its dump and its artifacts for explicit deletion.
-
-A failed example import leaves the copied working files, the generated environment file, the administration account and the migrated example schema in place. Clear the example database through the database service before a retry. A failed real-database build or proof leaves the named database, its initial receipt and the Selected pointer. `uv run python scripts/admin.py datasets list` names them, and the dataset owners provide the explicit maintenance.
+[First-run installation reference](/docs/operations/first-run-setup.md) states the working files, the instance resources and the addresses, and [First-run troubleshooting](/docs/operations/first-run-troubleshooting.md) states the refusals. [The bootstrap](/docs/operations/first-run-setup.md#the-bootstrap) lists the verbs and the shared directory rules, and [the example prompts](/docs/operations/first-run-setup.md#the-example-prompts) states every prompt and the JSON input the non-interactive form accepts.
 
 ## Cleanup of datasets and backups
 
 Two entries delete one target the operator names.
 
-**Dataset cleanup** lists every receipt-bearing dataset and deletes one dataset. The machine commands are `uv run python scripts/admin.py datasets list` and `uv run python scripts/admin.py datasets delete DATASET_ID [--confirm-working]`.
+**Dataset cleanup** lists every receipt-bearing dataset and deletes one dataset. The machine commands are `docker exec PROJECT-admin-1 python scripts/admin.py datasets list` and `docker exec PROJECT-admin-1 python scripts/admin.py datasets delete DATASET_ID [--confirm-working]`.
 
-**Backup cleanup** lists the files under `data/backups` and deletes one of them. The machine commands are `uv run python scripts/admin.py backups list` and `uv run python scripts/admin.py backups delete NAME`.
+**Backup cleanup** lists the files under `data/backups` and deletes one of them. The machine commands are `docker exec PROJECT-admin-1 python scripts/admin.py backups list` and `docker exec PROJECT-admin-1 python scripts/admin.py backups delete NAME`.
 
 Both entries print the listing before they ask for a target, and `0` at the target prompt cancels the entry. An empty listing and a failed listing both return to the calling menu without a target prompt. An answer outside the printed listing, Selected and any dataset without a receipt in the listing are refused with one fixed line and delete nothing.
 
@@ -88,7 +70,7 @@ The two listing commands create no state. The dataset listing reads every receip
 
 ## Configuration
 
-Choice 8 reads one configuration file and saves one key of it. The machine commands are `uv run python scripts/admin.py config list`, `uv run python scripts/admin.py config read FILE` and `uv run python scripts/admin.py config set FILE KEY VALUE`.
+Choice 8 reads one configuration file and saves one key of it. The machine commands are `docker exec PROJECT-admin-1 python scripts/admin.py config list`, `config read FILE` and `config set FILE KEY VALUE`.
 
 The entry lists the registered subsystem files in composition order with the environment file last, prints the listing, and asks for a file the listing carries. It then prints every key of the chosen file as that file holds it and asks for a key the report carries. The value prompt takes one JSON literal that matches the broad type the key holds, and the entry does not strip or echo it.
 
@@ -101,48 +83,46 @@ A save of `CURRENT_ACADEMIC_YEAR` or `ACTIVE_ACADEMIC_YEAR_WINDOW` in `config/cu
 > [!CAUTION]
 > The read prints every value of the chosen file in plain text, the environment file included.
 
-A saved file reaches a running process when that process next builds its settings. [Configuration](/docs/backend/configuration.md#reading-and-writing-a-file) states the precedence between the files.
+A saved file reaches a running process when that process next builds its settings, which is when its container starts again. [Configuration](/docs/backend/configuration.md#reading-and-writing-a-file) states the precedence between the files.
 
 ## The two rebuild scopes
 
 Choice 9 rebuilds the app. Choice 11 rebuilds the administration console. The two scopes are separate, each has its own confirmation, and neither reaches the other's process or its resources.
 
-Choice 9 builds the site frontend, recreates the database and embedding containers, restarts the site's web server and checks its bind. The machine command is `uv run python scripts/admin.py rebuild`.
+Choice 9 builds the site image, recreates the database and embedding containers, re-creates the site container and proves its bind. The machine command is `docker exec PROJECT-admin-1 python scripts/admin.py rebuild`.
 
-The entry asks one confirmation, `Rebuild this site's frontend, containers and web server?`, and holds **1 Rebuild** and **0 Cancel**. Only the rebuild choice runs the command. A cancel and any other answer run nothing and return to the calling menu, and an end of input and an interrupt run nothing and leave the whole menu with exit status 0 and 130.
+The entry asks one confirmation, `Rebuild the site image, re-create the database and embedding containers, re-create the site container and prove its bind?`, and holds **1 Rebuild** and **0 Cancel**. Only the rebuild choice runs the command. A cancel and any other answer run nothing and return to the calling menu, and an end of input and an interrupt run nothing and leave the whole menu with exit status 0 and 130.
 
 The command runs four steps in this order, and the first failure stops it.
 
-1. The frontend build, `npm --prefix web run build`, in the checkout. It builds from the installed dependencies.
-2. The two prepared containers, `docker compose up -d --wait --force-recreate --no-build --pull never db embedding`. The step uses the prepared images, and the data volumes and databases are left as they are.
-3. A restart of the site's own web unit through the manager `ADMIN_SITE_WEB_SERVICE_SCOPE` names: `systemctl --user restart` in the user manager, or `sudo -n /usr/bin/systemctl restart` in the system manager. A system-manager restart needs the exact passwordless grant the host installs for that one unit and command.
-4. The bind check: the restarted process's main PID must own the configured `127.0.0.1:PORT` listener within `ADMIN_STARTUP_ATTEMPTS` polls spaced by `ADMIN_POLL_INTERVAL_SECONDS`. A listener that same process owns on an address that is not a loopback address fails at once. Listeners that another process owns on the same port belong to that process and are left alone.
+1. The site image build, `python -m course_explorer_admin.compose -- build web`, in the checkout. It builds the site target from `docker/server/Dockerfile` and the mounted checkout.
+2. The two prepared containers, `python -m course_explorer_admin.compose --non-interactive -- up -d --wait --force-recreate --no-build db embedding`. The step uses the prepared images, and the data volumes and databases are left as they are.
+3. The site container re-create, `up -d --wait --force-recreate --no-build web` through the same bridge. It reuses the image the first step wrote and waits for the container to become healthy.
+4. The bind proof: a loopback `GET /` with the configured `Host` must answer status 200 and a `text/html` content type within `ADMIN_STARTUP_ATTEMPTS` polls spaced by `ADMIN_POLL_INTERVAL_SECONDS`.
 
-The commands of the first three steps are bounded by `ADMIN_STOP_TIMEOUT_SECONDS`, and the bind wait by its poll count and interval. The report names the four steps and the verified bind, and it is the transient acknowledgment of the run. A failed step prints the shared safe failure and the rebuild guidance, and no further step runs. The rebuild leaves the checkout's Git state as it is, reaches no worker, and restarts only the site's own web unit.
+The two image builds are not bounded by a timeout. The container steps are bounded by `ADMIN_STOP_TIMEOUT_SECONDS`, and the bind wait by its poll count and interval. The report names the four steps and the verified bind, and it is the transient acknowledgment of the run. A failed step prints the shared safe failure and the rebuild guidance, and no further step runs. The rebuild leaves the checkout's Git state as it is, reaches no worker, and touches only the instance's own containers.
 
-The command holds the checkout reservation for its whole run, so it refuses before its first step while a preparation stage or a Working dataset operation holds the checkout. It validates the site's own loaded web unit, running from this checkout and executing this checkout's `scripts/run_web.sh`, before that first step. `ADMIN_SITE_WEB_SERVICE_UNIT` in `config/admin_web.toml` names that unit, and `ADMIN_SITE_WEB_SERVICE_SCOPE` names the manager that owns it.
+The command holds the checkout reservation for its whole run, so it refuses before its first step while a preparation stage or a Working dataset operation holds the checkout. [Administration commands](/docs/backend/interfaces/administration-commands.md#the-rebuild-commands) states each command's report and failure presentation.
 
-Choice 11 builds the administration frontend alone and then queues the restart of this checkout's own administration unit. The machine commands are `uv run python scripts/admin.py rebuild-admin` and `uv run python scripts/admin.py restart-admin`, and the entry runs the first and then the second.
+Choice 11 builds the administration image alone and then starts the detached re-create of this checkout's own administration service. The machine commands are `docker exec PROJECT-admin-1 python scripts/admin.py rebuild-admin` and `restart-admin`, and the entry runs the first and then the second.
 
-The entry asks one confirmation, `Rebuild the administration console? This signs all operators out.`, and holds **1 Rebuild** and **0 Cancel**. The warning states the sign-out because ending that backend process ends every session it holds in memory. Only the rebuild choice runs the sequence. A cancel and any other answer run nothing and return to the calling menu, and an end of input and an interrupt run nothing and leave the whole menu with exit status 0 and 130.
+The entry asks one confirmation, `Rebuild the administration console? This signs all operators out.`, and holds **1 Rebuild** and **0 Cancel**. The warning states the sign-out because replacing that backend container ends every session it holds in memory. Only the rebuild choice runs the sequence. A cancel and any other answer run nothing and return to the calling menu, and an end of input and an interrupt run nothing and leave the whole menu with exit status 0 and 130.
 
-The sequence runs two commands in this order, and a failed build stops it before the restart.
+The sequence runs two commands in this order, and a failed build stops it before the re-create.
 
-1. `rebuild-admin` builds the administration frontend with `npm --prefix admin-web run build`, from the installed dependencies. It recreates no container, opens no database and reaches no worker.
-2. `restart-admin` queues one non-blocking restart of this checkout's own administration unit and returns once that request is admitted.
+1. `rebuild-admin` builds the administration image with `python -m course_explorer_admin.compose -- build admin`, from the mounted checkout. The image build is not bounded by a timeout. It recreates no container, opens no database and reaches no worker.
+2. `restart-admin` starts one detached one-off container that runs `up -d --wait --force-recreate --no-build admin`, and returns once that container is started. The one-off runs as its own container, so it outlives the replacement of the service it performs.
 
-Each command is bounded by `ADMIN_STOP_TIMEOUT_SECONDS`. The report the entry prints is the restart command's own acknowledgment that the restart is queued. It states no observed restart and no verified bind, so the console's own restart and the following sign-in are what show the outcome.
-
-Both commands validate before they act that the administration unit named by `ADMIN_SITE_ADMIN_SERVICE_UNIT` in `config/admin_web.toml` is loaded, runs from this checkout and executes this checkout's `scripts/run_admin_web.sh`. A unit from another directory or with another launcher is refused, and a refused build restarts nothing. [Administration commands](/docs/backend/interfaces/administration-commands.md#the-rebuild-commands) states each command's report and failure presentation.
+The report the entry prints is the re-create command's own acknowledgment that the one-off is started. It states no observed restart and no verified bind, so the console's own restart and the following sign-in are what show the outcome.
 
 ## The administration password
 
-Choice 10 stores the site's one administration account. The machine command is `uv run python scripts/admin.py password --username USERNAME`.
+Choice 10 stores the site's one administration account. The machine command is `docker exec -it PROJECT-admin-1 python scripts/admin.py password --username USERNAME`.
 
 The entry asks `Username (0 to cancel): ` through the ordinary menu input, and `0` cancels it. It then asks for the password twice at the hidden prompts `Password: ` and `Repeat password: `, which the command itself owns, so no password is read from or written to the menu's own streams. Two different entries, a blank entry, an end of input and an interrupt each store nothing, and an end of input and an interrupt leave the whole menu with exit status 0 and 130.
 
 ```bash
-uv run python scripts/admin.py password --username OPERATOR
+docker exec -it PROJECT-admin-1 python scripts/admin.py password --username OPERATOR
 ```
 
 The command prints one acknowledgment line and stores the account's username and an argon2id hash in `data/admin-web/password`. [Administration commands](/docs/backend/interfaces/administration-commands.md#the-administration-password) states the command, the file, and the failure presentation.

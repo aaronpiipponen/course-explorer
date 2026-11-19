@@ -123,9 +123,6 @@ from course_explorer_admin.translation.controller import (
 from course_explorer_admin.translation.controller_worker import TranslationWorkerStage
 from course_explorer_web.dataset import resolve_serving_dataset
 from tests.admin._rebuild_support import (
-    _ADMIN_UNIT,
-    _OWNED_PROCESS,
-    _UNIT,
     _WEB_HOST,
     _WEB_PORT,
     _WEB_WORKERS,
@@ -274,7 +271,7 @@ def test_full_snapshot_return_and_rotation_preserve_database_state(
     # Translation policy/provenance loads are explicit and deterministic for the canonical worker.
     for key, value in TRANSLATION_KEYS.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT", str(worker_checkout))
+    monkeypatch.setenv("WORKER_PROJECT_ROOT", str(worker_checkout))
     monkeypatch.setenv("INGESTION_CONTROLLER_STATE_ROOT", f"{admin_state}/ingestion")
     monkeypatch.setenv("EMBEDDING_CONTROLLER_STATE_ROOT", f"{admin_state}/embedding")
     monkeypatch.setenv("TRANSLATION_CONTROLLER_STATE_ROOT", f"{admin_state}/translation")
@@ -1607,8 +1604,6 @@ def test_stage_requires_working_schema_head(
 
 PROMOTION_PREFIX = "course_tests_promotion"
 _PROMOTION_SESSION_ID = "d" * 32
-PROMOTION_UNIT = _UNIT
-PROMOTION_ADMIN_UNIT = _ADMIN_UNIT
 PROMOTION_HOST = _WEB_HOST
 PROMOTION_PORT = _WEB_PORT
 PROMOTION_WORKERS = _WEB_WORKERS
@@ -1617,7 +1612,7 @@ PROMOTION_WORKERS = _WEB_WORKERS
 def _bind_promotion_environment(
     monkeypatch: pytest.MonkeyPatch, *, prefix: str
 ) -> tuple[Path, str]:
-    """Bind one promotion site unit, timing policy, admin root and source database name."""
+    """Bind one promotion site bind, timing policy, admin root and source database name."""
     admin_state = f"data/admin-tests/{uuid.uuid4().hex}"
     initial = f"{prefix}_{uuid.uuid4().hex[:8]}"
     monkeypatch.setenv("POSTGRES_DB", initial)
@@ -1637,9 +1632,6 @@ def _bind_promotion_environment(
         "EMBEDDING_CONTROLLER_STATE_ROOT": f"{admin_state}/embedding",
         "TRANSLATION_CONTROLLER_STATE_ROOT": f"{admin_state}/translation",
         "INFERENCE_CONTROLLER_STATE_ROOT": f"{admin_state}/inference",
-        "ADMIN_SITE_WEB_SERVICE_UNIT": PROMOTION_UNIT,
-        "ADMIN_SITE_ADMIN_SERVICE_UNIT": PROMOTION_ADMIN_UNIT,
-        "ADMIN_SITE_WEB_SERVICE_SCOPE": "user",
         "WEB_HOST": PROMOTION_HOST,
         "WEB_PORT": str(PROMOTION_PORT),
         "WEB_WORKERS": str(PROMOTION_WORKERS),
@@ -1821,12 +1813,7 @@ def test_promotion_builds_a_copy_before_serving_it(
             source = working
         _write_busy_stage(admin_root)
 
-        boundary = _RebuildProcessBoundary(
-            root=repository,
-            unit=_UNIT,
-            listeners=((f"127.0.0.1:{PROMOTION_PORT}", _OWNED_PROCESS),),
-            real_compose=True,
-        )
+        boundary = _RebuildProcessBoundary(real_compose=True)
         bind_promotion_http(
             monkeypatch,
             _serve_catalogue(artifact, lambda: "after" if boundary.restarted else "before"),
@@ -1850,7 +1837,17 @@ def test_promotion_builds_a_copy_before_serving_it(
         assert _database_exists(runner, initial)
         assert _database_exists(runner, source.database_name)
         assert _database_exists(runner, receipt.database_name)
-        assert boundary.restart_commands == [("systemctl", "--user", "restart", PROMOTION_UNIT)]
+        assert boundary.recreate_commands == [
+            (
+                *mechanics.compose_prefix(non_interactive=True, interpreter=True),
+                "up",
+                "-d",
+                "--wait",
+                "--force-recreate",
+                "--no-build",
+                "web",
+            )
+        ]
         assert boundary.restarted is True
     finally:
         _drop_promotion_databases(runner, admin_root, initial)
@@ -1913,9 +1910,6 @@ def test_failed_promotion_preserves_the_previous_selection(
         if failure == "build":
             serving_root.chmod(0o500)
         boundary = _RebuildProcessBoundary(
-            root=repository,
-            unit=_UNIT,
-            listeners=((f"127.0.0.1:{PROMOTION_PORT}", _OWNED_PROCESS),),
             restart_failures=restart_failures,
             real_compose=True,
         )
@@ -1952,10 +1946,10 @@ def test_failed_promotion_preserves_the_previous_selection(
         assert _database_exists(runner, initial)
 
         if failure == "build":
-            assert boundary.restart_commands == []
+            assert boundary.recreate_commands == []
             assert not serving_database_root(admin_root, copy.database_name).exists()
         else:
-            assert len(boundary.restart_commands) == 2
+            assert len(boundary.recreate_commands) == 2
             assert serving_database_root(admin_root, copy.database_name).is_dir()
         assert selected_artifact_state(admin_root, old_settings.postgres_db) == old_artifacts
         assert _database_exists(runner, old_settings.postgres_db)

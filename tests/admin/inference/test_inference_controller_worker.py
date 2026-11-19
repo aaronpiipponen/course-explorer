@@ -42,6 +42,7 @@ def test_gpu_interval_yields_after_ce_and_generation_checkpoints(
 ) -> None:
     """The real adapter accrues only loaded CE/generation time and yields an unloaded paused state."""
     directory = seed_session(monkeypatch, tmp_path)
+    monkeypatch.setenv("WORKER_GPU_REBOOT_ENABLED", "true")
     monkeypatch.setenv("WORKER_GPU_REBOOT_INTERVAL_MINUTES", "1")
     monkeypatch.setattr(worker_module, "create_database_engine", lambda _settings: FakeEngine())
     monkeypatch.setattr(worker_module, "create_session_factory", lambda engine: object())
@@ -132,8 +133,8 @@ def test_interrupted_resume_retires_owned_runtime_before_rearming(
 ) -> None:
     """A dead runner with a live owned runtime is retired, then re-armed, without generation."""
     directory = seed_session(monkeypatch, tmp_path, lifecycle="running")
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_STOP_TIMEOUT_SECONDS", "0.01")
-    monkeypatch.setenv("TRANSLATION_CONTROLLER_HEALTH_INTERVAL_SECONDS", "0.005")
+    monkeypatch.setenv("WORKER_STOP_TIMEOUT_SECONDS", "0.01")
+    monkeypatch.setenv("WORKER_HEALTH_INTERVAL_SECONDS", "0.005")
     write_worker_control(
         directory,
         WorkerControl(

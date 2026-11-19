@@ -48,14 +48,20 @@ Without that option the script runs plain `sudo`, which may ask for a password. 
 
 The script copies every produced file into the target directory under a temporary name before it replaces any installed library, and it then replaces each installed library on its own. A build that produces no output raises `FileNotFoundError` naming the missing file, and every installed library stays as it was. A failure while replacing one library leaves the libraries replaced before it in place, so `native/` can hold a mix of the installed and the produced libraries until the command runs again.
 
-## What the host provides
+## The server image build
 
-The compiled modules are loaded by the host's dynamic linker when a Python loader first calls them, so the host must provide two shared libraries of its own:
+The `site` and `admin` targets compile the three serving libraries in the `native-build` stage of `docker/server/Dockerfile`, from `native/` with `g++`, `make` and `libpq-dev`, and each target copies the produced objects into `/app/native/`. The `worker` target copies none of them. The stage runs `make clean` and `make all`, so it produces the three serving libraries and no fixture library. The shared Python runtime stage supplies `libpq5` and `libstdc++6` for them to load against, and no image needs a compiler at run time. [Server containers](/docs/operations/server-containers.md) states the three image targets and what each carries.
 
-- `libpq`, which `libcourse_prerequisite.so` links for its per-worker database connection.
-- `libstdc++`, the C++ standard library that all three serving libraries and the fixture library link for their own code.
+## What the images provide
 
-The build image supplies the compiler, `make` and the development headers, so the host needs no toolchain and no header package. The identity digest comes from `native/sha256.h`, a SHA-256 written into the library, so the compiled modules load on a host whose OpenSSL is absent or of another major version. A host that lacks one of the two libraries fails the first read that loads the affected module, with the message that names `scripts/build_native.py`.
+The `site` and `admin` images install the two shared libraries the compiled modules load against, in the Python runtime stage of `docker/server/Dockerfile`, so an operating host provides neither:
+
+- `libpq5`, which `libcourse_prerequisite.so` links for its per-worker database connection.
+- `libstdc++6`, the C++ standard library that all three serving libraries and the fixture library link for their own code.
+
+The `native-build` stage supplies the compiler, `make` and the development headers, and it compiles the three serving libraries into the `site` and `admin` images. The identity digest comes from `native/sha256.h`, a SHA-256 written into the library, so the compiled modules load on a host whose OpenSSL is absent or of another major version.
+
+A source checkout runs the tests from the host and loads the libraries from `native/`, so it needs the two shared libraries and the built objects. The build runs in the container of `docker/native/Dockerfile`, so the host needs Docker and no compiler, libpq headers or PostgreSQL server headers. A host that lacks one of the two libraries fails the first read that loads the affected module, with the message that names `scripts/build_native.py`.
 
 ## Loading and version checks
 

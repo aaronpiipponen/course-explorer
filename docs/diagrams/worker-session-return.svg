@@ -2,11 +2,10 @@
      aria-labelledby="t d" font-family="system-ui, sans-serif">
   <title id="t">Worker session and dataset return</title>
   <desc id="d">The Working dataset is snapshotted into a verified input copy that the worker restores
-  into its own database, where the worker stage runs with its checkpoints. The stage exports a
-  verified return snapshot, and the dataset return downloads it, restores it and verifies it before
-  it publishes it as Working. The worker database cleanup drops the worker's copy after the import
-  receipt and the returned dataset receipt exist, and a dashed link shows the worker session's run
-  control.</desc>
+  into its own database, where the worker stage runs with its checkpoints and exports a verified
+  return snapshot. The dataset return restores and verifies that snapshot as Working, the worker
+  database cleanup drops the worker's copy once the import receipt and the returned dataset receipt
+  exist, and a dashed link shows the worker session's run control.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
             markerWidth="8" markerHeight="8" orient="auto-start-reverse">
@@ -50,7 +49,7 @@
   <line x1="656" y1="296" x2="656" y2="328" stroke="#a3a4b8" stroke-width="1.5" marker-end="url(#arrow)"/>
   <text x="668" y="318" font-size="14" fill="#a3a4b8">return snapshot</text>
   <line x1="656" y1="392" x2="656" y2="424" stroke="#a3a4b8" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="668" y="414" font-size="14" fill="#a3a4b8">download, restore and verify</text>
+  <text x="668" y="414" font-size="14" fill="#a3a4b8">return, restore and verify</text>
   <line x1="656" y1="488" x2="656" y2="520" stroke="#a3a4b8" stroke-width="1.5" marker-end="url(#arrow)"/>
   <text x="668" y="510" font-size="14" fill="#a3a4b8">receipts</text>
 

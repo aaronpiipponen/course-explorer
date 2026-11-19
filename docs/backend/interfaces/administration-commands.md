@@ -1,17 +1,24 @@
 # Administration commands
 
-The administration command runs the operator menu and the machine commands that enroll a dataset, prepare the worker, run the stages, report state and maintain the checkout.
+The administration command runs the operator menu and the machine commands that enroll a dataset, update the worker code, run the stages, report state and maintain the checkout.
 
 ## The administration command
 
 `scripts/admin.py` delegates to the administrative dispatcher, which owns one parser and one JSON emitter. Without a subcommand, and with `menu`, it starts the numbered operator menu, which continues until Exit, an end of input, or an interrupt. [Operator menu](/docs/operations/operator-menu.md) describes the menu and the operations it drives.
+
+Every command runs inside the administration container, which is the host's command surface:
+
+```bash
+docker exec PROJECT-admin-1 python scripts/admin.py server status
+docker exec -it PROJECT-admin-1 python scripts/admin.py menu
+```
 
 The machine commands fall into nine groups. [Command adapters](/docs/backend/interfaces/command-adapters.md#the-administrative-dispatcher) holds the parser, the argument grammar and the exit statuses.
 
 | Group | Commands |
 |---|---|
 | Menu | `menu`, and no subcommand |
-| Setup | `setup datasets`, `setup worker`, `preflight`, `self-host example`, `self-host real-database` |
+| Setup | `setup datasets`, `setup worker`, `preflight`, `self-host example`, `self-host real-database`, `self-host up`, `self-host publish`, `self-host unpublish`, `deploy` |
 | Stages | `ingestion`, `translation`, `embedding` and `inference`, each with `start`, `pause`, `resume`, `status` and `stop` |
 | Datasets | `migrate selected`, `migrate working`, `migrate database`, `datasets list`, `datasets copy-to-working SOURCE_DATASET_ID`, `datasets copy-to-selected SOURCE_DATASET_ID --confirm-restart`, `datasets ensure-selected`, `datasets delete DATASET_ID [--confirm-working]` |
 | Backups | `backups list`, `backups delete NAME` |
@@ -22,9 +29,11 @@ The machine commands fall into nine groups. [Command adapters](/docs/backend/int
 
 `coverage` takes `teaching-text`, `embedding` or `inference` as its kind, and `summary` takes `catalogue` or `inference`.
 
+Seven of the machine commands build, deploy and serve a copy's containers and artifacts, and [Self-host and deploy commands](/docs/backend/interfaces/self-host-and-deploy-commands.md) describes them with the services they build and start.
+
 The administration command differs from the read scripts in three ways.
 
-- It reports the state of the dataset roles and of the stages, and some of its commands write to a dataset or to the worker.
+- It reports the state of the dataset roles and of the stages, and some of its commands write to a dataset or to the worker checkout.
 - A failure prints one content-free JSON line holding the exception's class name, plus fixed guidance, to standard error, and returns exit status 1. A checked subprocess failure adds its return code. An interrupt returns 130, and a not-ready `preflight` prints its report and returns 1.
 
 ### The guidance line of each operation
@@ -35,71 +44,36 @@ whatever operation raised it.
 
 | Operation | Guidance |
 |---|---|
-| `setup` | `finish or stop retained stages before updates, then check the checkout branch and the configured origin` |
-| `preflight` | `finish or stop retained stages before updates, then check the checkout branch and the configured origin` |
-| `stage` | `copy a dataset to Working with datasets copy-to-working if none is copied, inspect this tool's status, then retry its start, ordinary stop or resume as appropriate` |
+| `setup` | `A same-machine operation runs inside the administration container. Check this account's docker access and use the server deploy for a same-machine code update, then check the checkout branch and the configured origin.` |
+| `preflight` | `Check the worker connection, start the same-machine worker container, check the checkout branch, the configured origin and the prepared worker resources, then run the worker install, the worker code update, or the server deploy on a same-machine host.` |
+| `stage` | `A same-machine stage runs inside the administration container. Copy a dataset to Working with datasets copy-to-working if none is copied, inspect this tool's status, then retry its start, ordinary stop or resume as appropriate.` |
 | `report` | `enroll a dataset or copy one to Working, ensure the server db is running at the current schema, then retry the report` |
 | `migration` | `ordinary-stop all four stages, copy a dataset to Working first when migrating Working, ensure the server db is running, then retry` |
 | `disposition` | `ordinary-stop all four stages, keep the verified returned or copied dataset as Working and the server db running at the current schema, then retry` |
 | `target-read` | `copy a dataset to Working first if none is copied, ensure the server db is running at the current schema, then retry the target read` |
-| `serving-artifacts` | `complete the embedding stage on the served dataset, ensure the server db is running, then retry and restart the web server after a successful build` |
+| `serving-artifacts` | ``complete the embedding stage on the served dataset, ensure the server db is running, then retry and re-create the site container with the App rebuild or `rebuild` after a successful build`` |
 | `dataset-cleanup` | `enroll the Selected dataset, pick a non-selected target from the dataset listing printed by this entry, and ensure the server db is running` |
 | `dataset-copy` | `pick a listed dataset whose database is present, stop every stage, ensure the server db is running, and retry` |
 | `dataset-list` | `run setup datasets when the state root holds dataset records without a Selected pointer, check the dataset state files, then retry the listing` |
-| `dataset-promotion` | `inspect the listed source, its database and serving artifacts with datasets list, then promote it again with the serving restart confirmed once the reported step can succeed` |
+| `dataset-promotion` | `inspect the listed source, its database and serving artifacts with datasets list, then run Copy to Selected again with the confirmation once the reported step can succeed` |
 | `backup-list` | `check that data/backups and every entry under it are a directory and regular files this account can read, with no symlink, then retry the listing` |
 | `backup-cleanup` | `pick a regular file from the backup listing printed by this entry and check its access permissions` |
 | `configuration` | `choose a listed configuration file and key, provide a valid JSON value, and check file permissions` |
-| `server` | `check the configured site unit, this checkout, and the running database and embedding services, then retry` |
+| `server` | `check the site container, this checkout, and the running database and embedding services, then retry` |
 | `logs` | `choose a session and source from the listed sessions, provide a positive line count, and check the worker connection for a worker read` |
-| `rebuild` | `check the prepared frontend, the prepared container images and the configured site unit, then retry` |
+| `rebuild` | `check the container host, the site and administration images, and the site container, then retry` |
 | `usage` | `request a positive hour window no longer than the configured retention, and check the usage file permissions` |
 | `password` | `provide a nonblank username, enter the same password twice at the hidden prompts, and check the file permissions of the administration state directory` |
 | `feedback` | `check the configured feedback definition, the feedback database connection and the stored submission identity, then retry` |
-| `self-host-example` | `use the operator menu for interactive entry, check the prepared environment, the host tools and the loopback ports, confirm the pinned model download, and run the workflow again after the reported step succeeds. A failed import leaves the copied working files, .env, the account and the example schema in place; clear the example database explicitly before a retry.` |
-| `self-host-real-database` | `use the operator menu for interactive entry, run the example workflow first, keep the database and embedding services running, stop every stage and end the foreground pair before running this workflow again. A failed build or proof keeps the named database, its initial receipt and Selected; inspect them with `datasets list` and use the dataset owners for explicit maintenance before a retry.` |
+| `self-host-example` | `check the container host and its ports, confirm the pinned model download, and run the workflow again after the reported step succeeds. A failed import leaves the copied working files, .env, the account and the example schema in place; clear the example database explicitly before a retry.` |
+| `self-host-real-database` | `run the example workflow first, keep the database and embedding services running, and stop every stage before running this workflow again. A failed build or proof keeps the named database, its initial receipt and Selected; inspect them with `datasets list` and use the dataset owners for explicit maintenance before a retry.` |
+| `self-host-up` | `check the container host, the ports and the configured publication credential, then retry` |
+| `self-host-publish` | `check this account's Docker socket access, the configured site address and the machine-wide proxy project, then retry` |
+| `self-host-unpublish` | `check this account's Docker socket access and the machine-wide proxy project, then retry` |
+| `deploy` | `check the container host, the running services and the stage idle state, then retry` |
 | any, on a configuration error | `check config/*.toml and this device's ignored .env, then retry the same command` |
 
 `coverage` and `summary` also print a fixed note to standard error, stating that the reports read the named role and not unreturned worker progress.
-
-## The self-host setup commands
-
-`self-host example` and `self-host real-database` run the two setup workflows. Each reads one JSON object from non-interactive standard input and validates it as its own closed input model. A terminal standard input refuses with guidance to the operator menu, so no secret is read at a visible prompt. Fixed step names go to standard error, and the one report goes to standard output.
-
-| Verb | Input fields |
-|---|---|
-| `example` | `instance_key`, `web_port`, `admin_web_port`, `postgres_port`, `embedding_port`, `shared_root`, `app_url`, `admin_origin`, `username`, `password`, `mode`, `confirm_download`, `publication_token` |
-| `real-database` | `database_name`, `mode` |
-
-`instance_key` selects one entry of the finite university map, which lists the implemented source families. The four ports must differ, and each validates as a TCP port. `shared_root` is an optional absolute or home-prefixed directory outside the checkout, and an absent value uses the configured `ADMIN_SHARED_ROOT`. `app_url` is the feature site's external root address, and an absent value derives `http://localhost:<web_port>/`. `admin_origin` is the administration backend's exact HTTPS origin, and an absent value derives `https://localhost:<admin_web_port>`. `mode` is `user` or `foreground`. `password` and `publication_token` are hidden from the input model's representation and its serialized form, and a validation error never echoes their inputs. The two commands take no secret flag.
-
-The two commands accept one closed input contract each, with a process runner and a writer. The report is transient: the address to open and the Selected dataset id, which is `null` for the example path.
-
-`self-host example` names its checkout `course-explorer-<key>`. On a clean checkout the first run renames the folder, rebuilds its `.venv` and returns with the new path, and the same command from that path continues. The continuing run materializes the absent templates, applies the supplied instance key, ports, origins, feature-switch defaults and shared directory, generates the two database passwords when it creates the environment file, creates the administration account when its leaf is absent, prepares the pinned artifact, builds and starts the two services, migrates and loads the example dataset, prepares the feedback application store, runs the documented builds, and starts and proves the chosen mode.
-
-The workflow writes the embedding and inference switches off, and it writes the prerequisites switch on when the configured entry's [source family](/docs/reference/glossary.md#configuration) is `sisu` and off for every other family.
-
-`self-host real-database` enrolls the named empty database as Selected, builds its artifacts, starts or restarts serving, and proves the Selected catalogue and identity. Both resolve the process runner once.
-
-No step list, hash, version, manifest, saved success record or installer log is retained. The two workflows appear in the operator menu as Setup choices 12 and 13, and the administration console offers no self-host action.
-
-## The serving artifact command
-
-```bash
-uv run python scripts/admin.py serving-artifacts [--dataset ID] [--prune]
-```
-
-`serving-artifacts` targets the Selected dataset, which is the configured database in bootstrap. `--dataset ID` targets a receipt-bearing dataset. The build and the prune take the same target options.
-
-A build writes the catalogue artifact and the study fragments into one versioned build directory under the configured administrative state root and switches the artifact family's `current` build. On a site that serves the embedding features it also writes the hub pair and the shared stores into the family's embedding directory for the running configuration and replaces the dataset's five derived tables in the same transaction. `--prune` is the separate housekeeping action, and it runs after a restart. [Serving artifact build](/docs/backend/text-and-vectors/serving-artifact-build.md#the-artifact-family-the-build-directory-and-the-embedding-directory) states the files and tables of each embedding mode and the prune's own retention rule.
-
-A failed command prints the content-free JSON line with `operator_guidance("serving-artifacts")` to standard error and returns exit status 1. That guidance names the embedding stage, the server database service, the retry and the web restart that a completed build needs. The error output carries the exception class name and the fixed guidance alone.
-
-The build report holds `embeddings_enabled`, the catalogue and study-fragment paths, the seven study-fragment values and, on a site that serves the embedding features, the five embedding paths, both chunk counts, the centroid and neighbour counts, and the packed search group and block counts. Every embedding path and count is `null` on a site with the features off. A prune report names the retained build or a `null` active build and every path it deleted.
-
-The embedding tool's `6` entry, **Build serving artifacts**, and the console preparation action call the same owner. The ingestion, translation and inference tools offer no artifact entry.
-
-The files, the table transaction, the recovery of a failed build and the prune's own rules are described in [Serving artifact build](/docs/backend/text-and-vectors/serving-artifact-build.md). The supervisor opens the build once before it forks its workers, and on a site that serves the embedding features every similarity read takes its hub pair from that opened set. [Web supervisor](/docs/backend/interfaces/web-supervisor.md#startup-and-validation) states that opening and the supervisor lifetime, and [Operations](/docs/operations/README.md#derived-files-served-data-and-the-web-restart) states the restart a completed build needs and the prune that follows it.
 
 ## Dataset and backup cleanup
 
@@ -109,7 +83,7 @@ The files, the table transaction, the recovery of a failed build and the prune's
 
 `datasets list` reports every receipt-bearing dataset, with the dataset id, the kind, the database name, the predecessor, the receipt's recorded migration head, the repository-relative retained dump path, the Selected and Working marks, the typed database presence and whether the dataset's artifact namespace exists. Role datasets are always listed, and any other dataset is listed when its database is present, its retained dump exists or its artifact namespace exists. One `psql` statement answers every known database name, and a bootstrap state root adds the configured database to that one probe without listing it as a dataset row. Actual service unavailability returns the typed `unavailable` presence with every known receipt listed. The report also carries the configured database of a bootstrap root and the four stage busy facts, so the console and the menu read one observation of each. The read creates no state or lock.
 
-`datasets copy-to-working SOURCE_DATASET_ID` requires every stage idle, dumps the source, restores a fresh derived database, writes a copied receipt and publishes the Working pointer. `datasets copy-to-selected SOURCE_DATASET_ID --confirm-restart` copies and builds one enrolled source, publishes it as Selected, restarts only the site's web unit and proves the served catalogue and a changed identity. It refuses without the confirmation before any mutation, and a failed restart or proof restores the previous Selected pointer and proves the previous catalogue. A failed build switches and restarts nothing. [Datasets](/docs/operations/datasets.md#promotion-to-selected) states the full outcome and the preserved failed-copy resources.
+`datasets copy-to-working SOURCE_DATASET_ID` requires every stage idle, dumps the source, restores a fresh derived database, writes a copied receipt and publishes the Working pointer. `datasets copy-to-selected SOURCE_DATASET_ID --confirm-restart` copies and builds one enrolled source, publishes it as Selected, re-creates only the site container and proves the served catalogue and a changed identity. It refuses without the confirmation before any mutation, and a failed re-create or proof restores the previous Selected pointer and proves the previous catalogue. A failed build switches and re-creates nothing. [Datasets](/docs/operations/datasets.md#promotion-to-selected) states the full outcome and the preserved failed-copy resources.
 
 The promotion owner reports each coarse step immediately before that step's work and reports the rollback once before it restores the previous pointer. The console streams those steps over its promotion route, the machine command prints the one final receipt, and the step reporting changes no output and retains nothing. `datasets ensure-selected` applies the deploy example-database exception and reports `bootstrap` or `enrolled`, and deploy reads that returned mode instead of probing the roles again.
 
@@ -117,7 +91,7 @@ The promotion owner reports each coarse step immediately before that step's work
 
 `backups list` reports every regular file under `data/backups` in lexical relative-path order with its size and its last modification time. `backups delete NAME` removes the one regular file that relative name identifies and refuses a name that leaves the root.
 
-All of these commands print their owner's report and return exit status 0. A failure prints the content-free JSON line and the operation's fixed guidance to standard error, and returns exit status 1. A refused promotion prints the promotion guidance, which names the listed source, its database and serving artifacts, and the serving restart confirmed. A refused cleanup prints the guidance of its cleanup kind. [Setup and preflight](/docs/operations/setup-and-preflight.md#cleanup-of-datasets-and-backups) holds the same cleanup operations behind a confirmation.
+All of these commands print their owner's report and return exit status 0. A failure prints the content-free JSON line and the operation's fixed guidance to standard error, and returns exit status 1. A refused promotion prints the promotion guidance, which names the listed source, its database and serving artifacts, and the confirmed Copy to Selected. A refused cleanup prints the guidance of its cleanup kind. [Setup and preflight](/docs/operations/setup-and-preflight.md#cleanup-of-datasets-and-backups) holds the same cleanup operations behind a confirmation.
 
 ## Configuration reads and writes
 
@@ -129,13 +103,13 @@ All of these commands print their owner's report and return exit status 0. A fai
 
 `config set FILE KEY VALUE` replaces the one key of the one listed file with `VALUE`, which is one JSON literal over the broad type the key holds. The write renders only that key's text and leaves every other key with its comments, its order and its line endings. An environment-file save also appends one absent binding, and only when a settings family declares the key as one of its credential aliases. The appended assignment is one quoted line and leaves every other byte as it is. A subsystem TOML file takes no absent key, and the interactive operator menu edits the keys its read displays instead.
 
-The save validates the whole candidate through the settings families that own the key, comparing the key and the aliases without case, reading the environment file freshly and parsing it strictly, and publishes the file atomically. A malformed assignment and a key assigned more than once in the environment file, ignoring case, each refuse the save. An environment-file save locates the stored binding without case and preserves its spelling. An environment-file write is mode 0600 and a subsystem file is published with its own permission bits. The acknowledgment holds the file and the key and no value.
+The save validates the whole candidate through the settings families that own the key, comparing the key and the aliases without case, reading the environment file freshly and parsing it strictly. A subsystem file is published atomically. The environment file is rewritten through its own inode, because inside the administration container it can be a single-file bind mount that no replacement can publish. That rewrite takes no lock, and a crash during it can leave a truncated file. A malformed assignment and a key assigned more than once in the environment file, ignoring case, each refuse the save. An environment-file save locates the stored binding without case and preserves its spelling. An environment-file write is mode 0600 and a subsystem file is published with its own permission bits. The acknowledgment holds the file and the key and no value.
 
 ```bash
-uv run python scripts/admin.py config list
-uv run python scripts/admin.py config read config/web.toml
-uv run python scripts/admin.py config set config/web.toml WEB_PORT 18026
-uv run python scripts/admin.py config set config/curriculum.toml CURRENT_ACADEMIC_YEAR '"2027-2028"'
+python scripts/admin.py config list
+python scripts/admin.py config read config/web.toml
+python scripts/admin.py config set config/web.toml WEB_PORT 18026
+python scripts/admin.py config set config/curriculum.toml CURRENT_ACADEMIC_YEAR '"2027-2028"'
 ```
 
 Every example uses a synthetic value, and an environment-file read is the only command output that renders a device credential.
@@ -147,7 +121,7 @@ An unlisted file, a key the file does not carry outside that one append case, a 
 `password --username USERNAME` stores the site's one administration account through one fixed command that runs in the administration command's own process. `--username` is required, and the password is read twice at the hidden terminal prompts `Password: ` and `Repeat password: `, so it never appears in the command line, in an argument, in an environment value or in a pipe. The credential owner hashes the entry with argon2id and publishes the credential file. An entry the terminal cannot hide is an error rather than an echoed fallback, two different entries are refused, and the acknowledgment names no credential.
 
 ```bash
-uv run python scripts/admin.py password --username OPERATOR
+python scripts/admin.py password --username OPERATOR
 ```
 
 The command prints one acknowledgment line and returns exit status 0. It neither deletes the site's lock nor resets the failed-attempt count, and no configuration command can read or write the credential file, because administration state is not configuration. [Setup and preflight](/docs/operations/setup-and-preflight.md#the-administration-password) holds the same command behind Setup choice 10. A failed command prints the content-free JSON line and the password guidance to standard error and returns exit status 1.
@@ -163,9 +137,9 @@ The command prints one acknowledgment line and returns exit status 0. It neither
 `feedback delete FEEDBACK_ID` deletes the named submission row and its attachment metadata in one database transaction, and removes the submission's stored files through the attachment store. The field directory and the attachment root belong to the store, and every other submission's rows and files are untouched. The command acts on the local store alone and reaches no remote issue or uploaded image. File removal and the database commit are not one transaction: a file failure can leave a partial removal, and a database failure after the file removal can leave the row. Both failures return exit status 1 instead of reporting a deletion.
 
 ```bash
-uv run python scripts/admin.py feedback list --query "login" --filters '{"role": "student"}'
-uv run python scripts/admin.py feedback attachment FEEDBACK_ID ATTACHMENT_ID
-uv run python scripts/admin.py feedback delete FEEDBACK_ID
+python scripts/admin.py feedback list --query "login" --filters '{"role": "student"}'
+python scripts/admin.py feedback attachment FEEDBACK_ID ATTACHMENT_ID
+python scripts/admin.py feedback delete FEEDBACK_ID
 ```
 
 A failure prints the content-free JSON line and the feedback guidance to standard error. [Configuration](/docs/backend/configuration.md#the-feedback-application-store) describes the feedback definition and the feedback application store.
@@ -177,8 +151,8 @@ A failure prints the content-free JSON line and the feedback guidance to standar
 `dispose inference TARGET_ID {nothing|done|failed}` sets that decision, and `nothing` maps to `null` before the call, so the stored decision records an automatic target rather than a terminal one. The menu's **Dispose target** entry reads the identity before it asks for the decision, so the operator sees what the decision applies to. A guard that refuses either command prints the content-free JSON line and the fixed guidance line to standard error, and the command returns exit status 1. A refused read prints the target-read guidance, and a refused decision prints the disposition guidance.
 
 ```bash
-uv run python scripts/admin.py target inference TARGET_ID
-uv run python scripts/admin.py dispose inference TARGET_ID done
+python scripts/admin.py target inference TARGET_ID
+python scripts/admin.py dispose inference TARGET_ID done
 ```
 
 The detailed `summary inference` report holds, beside its coverage, publication and failure members, the three configured inference policy values `routing_policy`, `recommendation_policy` and `finding_filter_policy`, projected from the loaded generation settings rather than from a stored duplicate.
@@ -193,20 +167,20 @@ The detailed `summary inference` report holds, beside its coverage, publication 
 
 | Member | Facts |
 |---|---|
-| `website` | The site's own web unit: its measured systemd state, its main PID, its start time and uptime, the configured loopback bind and process count, the checkout-relative entry point, and the branch and revision of the checkout this command reads |
+| `website` | The site container: its Compose state, health and image, its measured start instant and uptime, the configured loopback bind and process count, and the branch and revision of the checkout this command reads |
 | `host` | The host's measured uptime, CPU usage sampled over a short interval, total and used memory, the filesystem total and free bytes, and the total bytes of `data`, `models` and `data/backups` |
 | `database` | The database service's container state, image and health, the resolved database name, the database's own migration revision beside this checkout's expected head, its size, its connection count, and the container's shared-memory size |
 | `embedding` | The embedding service's container state, image and health, and the configured model, resolved artifact path, bind, context size, thread count, pooling and normalization. The artifact path is the configured `EMBEDDING_ARTIFACT_PATH`, resolved under `ADMIN_SHARED_ROOT` when it is relative and used as written when it is absolute. |
 | `serving` | The site's embedding feature switch, whether a Selected pointer exists, and the Selected receipt's id, kind, predecessor, pointer and recorded database head |
 | `hubs` | On a site that serves the embedding features, both embedding hub files of the configured embedding directory: their name, their repository-relative path, their modification time, and whether each is newer than the measured web start. On a site with them off the member is empty and no artifact path is resolved. |
 
-The report states which kind of fact each member carries: measured values from the unit, the kernel and the database, configured values from the settings, the Selected receipt's facts, and the checkout identity of the command itself. The configured bind and process count are the values `WEB_HOST`, `WEB_PORT` and `WEB_WORKERS` set, and the report labels them as configured facts.
+The report states which kind of fact each member carries: measured values from the container, the kernel and the database, configured values from the settings, the Selected receipt's facts, and the checkout identity of the command itself. The configured bind and process count are the values `WEB_HOST`, `WEB_PORT` and `WEB_WORKERS` set, and the report labels them as configured facts.
 
 The `serving` member records the database head the selected receipt's verification carries, which is neither the live database's own revision nor this checkout's expected head. The branch and the revision are the identity of the checkout this command reads, and the hub file-time comparison is a restart hint rather than proof of the served process's values.
 
 The database size, connection count and revision are reported while the database container runs, and a running container whose live read fails fails the whole command rather than reporting a guessed value. An optional fact the report finds none of is `null`: a service the Compose listing does not contain is `absent`, a configured embedding directory that does not hold a hub file has no modification time, a site with the embedding features off reports no hub entry, and every receipt fact is `null` while no Selected pointer exists.
 
-A read, parse or stat failure, a hub path that does not name a regular file, and an unloaded unit, a unit from another directory or a unit whose command line does not carry this checkout's `scripts/run_web.sh` each fail the command instead of reporting a fact.
+A read, parse or stat failure, a hub path that does not name a regular file, and a Compose listing that carries no site service each fail the command instead of reporting a fact.
 
 ### The fixed log reads
 
@@ -236,15 +210,15 @@ The remaining outcomes are:
 
 The `keepalive.log` of a translation session exists while that session's keepalive runs, and a stop removes it. The inference stage sends the keepalive output and the output of its server process to the null device, so both its keepalive log and its two runner streams are reported as unavailable.
 
-The two worker sources read over the same SSH/WSL transport the stages use, on demand. The read walks the derived path's ancestors on the worker and refuses a symlink or an unsearchable directory, and a path the worker does not hold at all is the one reported absence. The worker read installs nothing, prepares nothing and retries nothing. A read failure, an unreachable worker and a timeout print the content-free JSON line and the log guidance to standard error and return exit status 1, and no captured log text reaches that line.
+The two worker sources read over the same worker transport the stages use, on demand. The read walks the derived path's ancestors on the worker and refuses a symlink or an unsearchable directory, and a path the worker does not hold at all is the one reported absence. The worker read installs nothing, prepares nothing and retries nothing. A read failure, an unreachable worker and a timeout print the content-free JSON line and the log guidance to standard error and return exit status 1, and no captured log text reaches that line.
 
 `logs embedding --lines N` prints the last `N` lines of the embedding service's own container log. The read does not start the service, and a failed Compose command prints the content-free JSON line and the log guidance to standard error and returns exit status 1.
 
 ```bash
-uv run python scripts/admin.py server status
-uv run python scripts/admin.py logs sessions
-uv run python scripts/admin.py logs read inference SESSION_ID worker-runner --lines 50
-uv run python scripts/admin.py logs embedding --lines 100
+python scripts/admin.py server status
+python scripts/admin.py logs sessions
+python scripts/admin.py logs read inference SESSION_ID worker-runner --lines 50
+python scripts/admin.py logs embedding --lines 100
 ```
 
 ### The command-log read
@@ -254,23 +228,23 @@ uv run python scripts/admin.py logs embedding --lines 100
 The `failed-login` and `lock` outcomes are the authentication events of the same file, and no entry holds captured output, a password, a key value or a free-form argument. An entry records one explicit command, one failed automatic read, or one of the sign-in, failed sign-in and lock events. A console read that the console repeats on its own timer and that succeeds records no entry, so the polls of an open administration console do not fill the record. [Administration backend](/docs/backend/interfaces/admin-backend.md#the-command-log) states the owner, the bound and the record shape.
 
 ```bash
-uv run python scripts/admin.py logs commands
+python scripts/admin.py logs commands
 ```
 
 ### The rebuild commands
 
-`rebuild` builds the site frontend, recreates the database and embedding containers, restarts the site's web unit and checks its loopback bind. It works on the checkout as it stands, uses the prepared container images, reaches no worker, and restarts only the site's own web unit. The report names the four steps and the verified bind, and the first failing step prints the content-free JSON line and the rebuild guidance and returns exit status 1.
+`rebuild` builds the site image, re-creates the database and embedding containers, re-creates the site container and proves its loopback bind. It works on the mounted checkout, uses the prepared database and embedding images, reaches no worker, and touches only this instance's containers. The report names the four steps and the verified bind, and the first failing step prints the content-free JSON line and the rebuild guidance and returns exit status 1.
 
-`rebuild-admin` builds the administration frontend alone, and `restart-admin` queues one non-blocking restart of this checkout's own administration unit. Both read the required site identities `ADMIN_SITE_WEB_SERVICE_UNIT` and `ADMIN_SITE_ADMIN_SERVICE_UNIT` from `config/admin_web.toml`, and each verifies before it acts that the named administration unit is loaded, runs from this checkout and carries the exact `<checkout>/scripts/run_admin_web.sh` token. A unit of another directory, another launcher or another site is refused before anything changes. Neither command recreates a container, opens a database or contacts the worker.
+`rebuild-admin` builds the administration image from this checkout alone, reports its single step and changes no running container, and the build is unbounded. `restart-admin` starts one detached one-off `admin` container that re-creates this checkout's own administration service, and the wait for the replacement service belongs to that one-off container. Both act on this checkout's own image and service, and the call that starts the one-off is bounded by the configured stop timeout.
 
-`rebuild-admin` performs the one frontend build and reports its single step. A failed frontend build can change the administration frontend output directory, and it queues no restart. A terminal or menu sequence runs the two commands in order and reaches `restart-admin` only after a successful build: `rebuild-admin` followed by `restart-admin`.
+A failed image build changes no running container, and it starts no re-create. A terminal or menu sequence runs the two commands in order and reaches `restart-admin` only after a successful build: `rebuild-admin` followed by `restart-admin`.
 
-`restart-admin` returns after the restart request is admitted, and its report acknowledges the queueing alone. It claims no observed restart, no restarted process and no verified bind. A failed build and a refused restart each print the content-free JSON line and the rebuild guidance and return exit status 1.
+The one-off container outlives the service it performs, so `restart-admin` returns after the detached one-off is started, and its report acknowledges the request alone. It claims no observed restart, no restarted process and no verified bind. A failed build and a refused re-create each print the content-free JSON line and the rebuild guidance and return exit status 1.
 
 ```bash
-uv run python scripts/admin.py rebuild
-uv run python scripts/admin.py rebuild-admin
-uv run python scripts/admin.py restart-admin
+python scripts/admin.py rebuild
+python scripts/admin.py rebuild-admin
+python scripts/admin.py restart-admin
 ```
 
 [Setup and preflight](/docs/operations/setup-and-preflight.md#the-two-rebuild-scopes) holds both scopes behind their own confirmations.
@@ -288,7 +262,7 @@ The two percentiles use the exact nearest-rank definition. For `n` recorded dura
 [Front router](/docs/backend/interfaces/front-router.md#the-request-usage-record) describes the records the front router appends and the file they live in. The report and the serving append take one exclusive lock on the same file, so an append never interleaves with the report's rewrite and neither one loses a record. An absent usage file reports zero requests and creates no file, and a malformed line fails the command without rewriting the file and without putting any line content into the failure line.
 
 ```bash
-uv run python scripts/admin.py usage --hours 24
+python scripts/admin.py usage --hours 24
 ```
 
 [Operator menu](/docs/operations/operator-menu.md#server-and-log-reads) holds the same report behind its hours prompt.

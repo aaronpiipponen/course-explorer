@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 
 from course_explorer.config import ConfiguredSettings
 from course_explorer.feedback.service import parse_feedback_filters
+from course_explorer_admin import deploy, mechanics
 from course_explorer_admin.commands import (
     REPORT_SCOPE,
     ExampleSetupInput,
@@ -49,6 +50,7 @@ from course_explorer_admin.commands import (
     run_administrative_migration,
     run_administrative_password,
     run_administrative_preflight,
+    run_administrative_publish,
     run_administrative_real_database_setup,
     run_administrative_rebuild,
     run_administrative_restart_admin,
@@ -56,14 +58,17 @@ from course_explorer_admin.commands import (
     run_administrative_serving_artifacts,
     run_administrative_session_log,
     run_administrative_setup,
+    run_administrative_stack_up,
     run_administrative_summary,
+    run_administrative_unpublish,
     run_administrative_usage,
+    run_example_setup_interactive,
     run_operator_menu,
+    run_real_database_setup_interactive,
     set_inference_target_disposition,
     worker_origin_notice,
 )
 from course_explorer_admin.logs import LOG_SOURCES
-from course_explorer_admin.self_host import CheckoutRenamed
 
 _STAGES = ("ingestion", "translation", "embedding", "inference")
 _ACTIONS = ("start", "pause", "resume", "status", "stop")
@@ -76,14 +81,19 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="admin.py", description=__doc__)
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("menu", help="run the interactive operator menu")
-    setup = subparsers.add_parser("setup", help="enroll the selected dataset or prepare the worker")
+    setup = subparsers.add_parser(
+        "setup", help="enroll the selected dataset or update the worker code"
+    )
     setup.add_argument("kind", choices=["datasets", "worker"])
     setup.add_argument("--branch", default="main")
-    setup.add_argument("--code-only", action="store_true")
     self_host = subparsers.add_parser(
-        "self-host", help="run one self-host setup workflow from non-interactive JSON input"
+        "self-host",
+        help="run a self-host workflow, start the stack or manage a site publication",
     )
-    self_host.add_argument("verb", choices=["example", "real-database"])
+    self_host.add_argument(
+        "verb", choices=["example", "real-database", "up", "publish", "unpublish"]
+    )
+    subparsers.add_parser("deploy", help="deploy the admitted checkout to the running containers")
     subparsers.add_parser("preflight", help="read-only worker readiness check")
     migrate = subparsers.add_parser("migrate", help="explicit database maintenance")
     migrate.add_argument("kind", choices=["selected", "working", "database"])
@@ -108,15 +118,15 @@ def _parser() -> argparse.ArgumentParser:
     dataset_promotion = dataset_verbs.add_parser(
         "copy-to-selected",
         help=(
-            "copy one dataset, build it, switch Selected and restart serving; "
-            "the site is briefly unavailable"
+            "copy one dataset, build it and switch Selected; the site container is "
+            "re-created and is briefly unavailable"
         ),
     )
     dataset_promotion.add_argument("source_dataset_id")
     dataset_promotion.add_argument(
         "--confirm-restart",
         action="store_true",
-        help="confirm the serving restart; without it nothing is copied or changed",
+        help="confirm the site container re-create; without it nothing is copied or changed",
     )
     dataset_verbs.add_parser(
         "ensure-selected",
@@ -176,9 +186,11 @@ def _parser() -> argparse.ArgumentParser:
         "usage", help="read the windowed request usage report and prune past retention"
     )
     usage.add_argument("--hours", type=int, required=True)
-    subparsers.add_parser("rebuild", help="rebuild the frontend, containers and web server")
-    subparsers.add_parser("rebuild-admin", help="build the administration frontend alone")
-    subparsers.add_parser("restart-admin", help="queue this checkout's administration restart")
+    subparsers.add_parser("rebuild", help="rebuild the site image, containers and site container")
+    subparsers.add_parser("rebuild-admin", help="build the administration image alone")
+    subparsers.add_parser(
+        "restart-admin", help="start this checkout's detached administration re-create"
+    )
     dispose = subparsers.add_parser(
         "dispose", help="set one canonical inference target's operator decision"
     )
@@ -253,6 +265,10 @@ def _fail(
         "feedback",
         "self-host-example",
         "self-host-real-database",
+        "self-host-publish",
+        "self-host-unpublish",
+        "self-host-up",
+        "deploy",
     ],
 ) -> None:
     print(format_operator_error(exc), file=sys.stderr)
@@ -268,7 +284,6 @@ def main(
     run_command: StageCommand | None = None,
     run_summary: SummaryCommand | None = None,
     configuration_families: tuple[type[ConfiguredSettings], ...] = (),
-    checkout_suffix: str = "",
 ) -> int:
     """Parse one command and delegate once. Return 0 on success, 1 on failure, 130 on interrupt.
 
@@ -276,8 +291,7 @@ def main(
     replaces that one call only, so a wrapper can inject an extra route without owning dispatch.
     ``configuration_families`` reach the configuration save and the menu's configuration entry
     alone, so a wrapper can add the validation families of a package the base product does not
-    import. ``checkout_suffix`` reaches the menu and the example setup alone, so a wrapper can
-    append its own segment to the example checkout and user-unit names.
+    import.
     """
     args = _parser().parse_args(argv)
     if args.command is None or args.command == "menu":
@@ -285,32 +299,43 @@ def main(
             run_command=run_command,
             run_summary=run_summary,
             configuration_families=configuration_families,
-            checkout_suffix=checkout_suffix,
         )
     stage_command = run_command or run_administrative_command
     summary_command = run_summary or run_administrative_summary
     try:
+        if args.command == "deploy":
+            deploy.deploy_containers(runner=mechanics.SubprocessRunner(), write=_progress)
+            return 0
         if args.command == "self-host":
+            if args.verb == "up":
+                run_administrative_stack_up(write=_progress)
+                return 0
+            if args.verb == "publish":
+                _emit(run_administrative_publish(write=_progress))
+                return 0
+            if args.verb == "unpublish":
+                _emit(run_administrative_unpublish(write=_progress))
+                return 0
             if sys.stdin.isatty():
-                raise ValueError(
-                    "self-host reads one JSON input object from non-interactive stdin; "
-                    "use the operator menu instead"
+                report = (
+                    run_example_setup_interactive(read=input, write=_progress)
+                    if args.verb == "example"
+                    else run_real_database_setup_interactive(read=input, write=_progress)
                 )
+                if report is not None:
+                    _emit(report)
+                return 0
             payload = sys.stdin.read()
             if args.verb == "example":
                 example = ExampleSetupInput.model_validate_json(payload)
-                report = run_administrative_example_setup(
-                    example, write=_progress, checkout_suffix=checkout_suffix
-                )
+                report = run_administrative_example_setup(example, write=_progress)
             else:
                 real = RealDatabaseSetupInput.model_validate_json(payload)
                 report = run_administrative_real_database_setup(real, write=_progress)
             _emit(report)
             return 0
         if args.command == "setup":
-            report = run_administrative_setup(
-                args.kind, branch=args.branch, code_only=args.code_only
-            )
+            report = run_administrative_setup(args.kind, branch=args.branch)
             _emit(report)
             return 0
         if args.command == "preflight":
@@ -437,17 +462,22 @@ def main(
         return 0
     except KeyboardInterrupt:
         return 130
-    except CheckoutRenamed as renamed:
-        print(str(renamed), file=sys.stderr)
-        return 0
     except Exception as exc:
         operation = (
-            "setup"
+            "deploy"
+            if args.command == "deploy"
+            else "self-host-publish"
+            if args.command == "self-host" and args.verb == "publish"
+            else "self-host-unpublish"
+            if args.command == "self-host" and args.verb == "unpublish"
+            else "setup"
             if args.command == "setup"
             else "self-host-example"
             if args.command == "self-host" and args.verb == "example"
             else "self-host-real-database"
-            if args.command == "self-host"
+            if args.command == "self-host" and args.verb == "real-database"
+            else "self-host-up"
+            if args.command == "self-host" and args.verb == "up"
             else "preflight"
             if args.command == "preflight"
             else "migration"

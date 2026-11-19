@@ -1,10 +1,11 @@
 """Shared test support: committed public configuration values and common fixtures.
 
 This module owns the committed example TOML settings under ``examples/config/`` plus the committed
-``examples/.env.example`` credential template, the alias-keyed settings factory every package
-settings helper uses, the shared embedding configuration the compatible hashes derive from, the
-shared official catalogue builders and in-memory read double, and the shared derived-translation read
-double and DTO fixture builder. Its values come from the committed example tree and template.
+``examples/.env.example`` credential template, the local-conversion translation fixture, the
+alias-keyed settings factory every package settings helper uses, the shared embedding configuration
+the compatible hashes derive from, the shared official catalogue builders and in-memory read double,
+and the shared derived-translation read double and DTO fixture builder. Its values come from the
+committed example tree and template.
 """
 
 from __future__ import annotations
@@ -12,10 +13,12 @@ from __future__ import annotations
 import functools
 import json
 import shutil
+import tomllib
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import tomlkit
 from dotenv import dotenv_values
 from pydantic_settings import BaseSettings
 
@@ -120,6 +123,33 @@ def write_example_config_tree(root: Path) -> Path:
         shutil.copyfile(EXAMPLE_ROOT / relative, config / Path(relative).name)
     shutil.copyfile(EXAMPLE_ROOT / "config/feedback-form.json", config / "feedback-form.json")
     return root
+
+
+_TRANSLATION_ARTIFACT_SOURCE_KEYS = (
+    "TRANSLATION_ARTIFACT_REPOSITORY",
+    "TRANSLATION_ARTIFACT_REVISION",
+    "TRANSLATION_ARTIFACT_FILE",
+)
+
+
+def write_local_conversion_translation(path: Path) -> None:
+    """Write the committed example translation settings as a local-conversion settings file.
+
+    The three published artifact source keys are absent, so the file names an artifact the install
+    verifies against its recorded digest instead of downloading.
+    """
+    values = tomllib.loads(
+        (EXAMPLE_ROOT / "config" / "translation.toml").read_text(encoding="utf-8")
+    )
+    document = tomlkit.document()
+    document.add(
+        tomlkit.comment("Worker translation settings whose artifact is a local conversion.")
+    )
+    for key, value in values.items():
+        if key not in _TRANSLATION_ARTIFACT_SOURCE_KEYS:
+            document[key] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(tomlkit.dumps(document), encoding="utf-8")
 
 
 def _aliases(settings_type: type[BaseSettings]) -> tuple[str, ...]:

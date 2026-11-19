@@ -292,6 +292,12 @@
                 "path": "docs/backend/interfaces/administration-commands.md",
                 "nav": "Administration commands",
                 "children": []
+              },
+              {
+                "id": "self-host-and-deploy-commands",
+                "path": "docs/backend/interfaces/self-host-and-deploy-commands.md",
+                "nav": "Self-host and deploy",
+                "children": []
               }
             ]
           }
@@ -353,7 +359,7 @@
     },
     {
       "title": "Operations",
-      "description": "Running the administration command, the preparation stages, the worker, the Selected and Working datasets, and the setup workflows.",
+      "description": "Running the administration command, the preparation stages, the worker, the Selected and Working datasets, and the administration console.",
       "page": {
         "id": "operations",
         "path": "docs/operations/README.md",

@@ -96,7 +96,7 @@ def test_partial_worker_publication_preserves_unfinished_cycle_and_real_results(
         m.setenv("EMBEDDING_CONTROLLER_STATE_ROOT", f"{admin_state}/embedding")
         m.setenv("TRANSLATION_CONTROLLER_STATE_ROOT", f"{admin_state}/translation")
         m.setenv("INFERENCE_CONTROLLER_STATE_ROOT", f"{admin_state}/inference")
-        m.setenv("TRANSLATION_CONTROLLER_WORKER_PROJECT_ROOT", str(tmp_path / "worker"))
+        m.setenv("WORKER_PROJECT_ROOT", str(tmp_path / "worker"))
 
         _repository, fake_runtime, _boundary = prepare_job_case(
             factory,

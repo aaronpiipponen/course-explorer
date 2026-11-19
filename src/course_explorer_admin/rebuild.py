@@ -1,53 +1,37 @@
-"""The fixed short rebuilds of this checkout and the queued restart of its administration unit.
+"""The fixed short rebuilds of this checkout and the queued re-create of its administration service.
 
-This module owns the operator's rebuilds. ``rebuild_site`` builds the site frontend from the
-checkout's installed dependencies, recreates the already-prepared database and embedding containers,
-runs ``restart_web``, and proves the configured loopback listener belongs to the restarted
-process. ``restart_web`` restarts a caller-validated web unit through the configured manager and
-proves its loopback bind. ``rebuild_admin`` builds the administration
-frontend alone, and ``restart_admin`` queues one
-non-blocking restart of this checkout's own administration unit. Each is one bounded maintenance
-command over prepared resources.
-
-Every selected unit is validated through ``server.read_owned_site_unit`` before any mutation, so no
-rebuild and no restart can reach another application's service. The steps
-run in one fixed order, each bounded by the configured stop timeout, and the first failure stops the
-command without a later step, a rollback, a retry or a success report. The administration restart
-returns once the queue admits the request. ``rebuild_site`` holds the checkout reservation for its
-whole body, so it refuses while a preparation stage or a Working operation holds it. The
-administration build and the web-only restart take no reservation.
+This module owns the operator's rebuilds. ``rebuild_site`` builds the site image from the checkout,
+re-creates the database and embedding containers from their prepared images, re-creates the site
+container and proves the configured loopback site answers with its HTML shell. ``recreate_web`` is
+the one site re-create owner shared by the setup, the rebuild and the dataset promotion.
+``rebuild_admin`` builds the administration image alone, and ``restart_admin`` starts a detached
+one-off that re-creates this checkout's own administration service. The steps run in one fixed
+order, each bounded by the configured stop timeout except the two image builds, which are not, and
+the first failure stops the command without a further step, a rollback, a retry or a success report.
+``recreate_admin_queued`` returns once the one-off container is started, so the caller is not the
+process being replaced. ``rebuild_site`` holds the checkout reservation for its whole body, so it
+refuses while a preparation stage or a Working operation holds it. The administration build and the
+re-create take no reservation.
 """
 
 from __future__ import annotations
 
-import re
-import time
-from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
 from course_explorer import administration
-from course_explorer.config import (
-    load_administrative_site_settings,
-    load_local_lifecycle_settings,
-)
-from course_explorer_admin import machine_locks, mechanics, server
+from course_explorer.config import load_local_lifecycle_settings, load_web_settings
+from course_explorer_admin import machine_locks, mechanics
 
 # The exact ordered steps a completed rebuild names, as its transient acknowledgment.
-REBUILD_STEPS: tuple[str, ...] = ("frontend", "containers", "web", "bind")
+REBUILD_STEPS: tuple[str, ...] = ("image", "containers", "web", "bind")
 
-# The one step the administration build names: its own frontend.
-ADMIN_REBUILD_STEPS: tuple[str, ...] = ("frontend",)
+# The one step the administration build names: its own image.
+ADMIN_REBUILD_STEPS: tuple[str, ...] = ("image",)
 
-# The administration entry point this checkout's own administration unit runs, relative to the
-# checkout root.
-_ADMIN_ENTRY_POINT = "scripts/run_admin_web.sh"
-
-# The two services a rebuild recreates, in order. The volumes and images stay in place.
+# The two services a rebuild re-creates, in order. The volumes and images stay in place.
 REBUILD_SERVICES: tuple[str, ...] = ("db", "embedding")
-
-_SOCKET_OWNER_PATTERN = re.compile(r"pid=([0-9]+)")
 
 
 class RebuildReport(BaseModel):
@@ -64,8 +48,8 @@ class RebuildReport(BaseModel):
 class AdminRebuildReport(BaseModel):
     """One completed administration build: the ordered steps it ran.
 
-    The report holds the steps. The build writes the administration frontend output, and a separate
-    ``restart_admin`` invocation queues the restart.
+    The report holds the steps. The build writes the administration image, and a separate
+    ``restart_admin`` invocation starts the re-create of the administration service.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -75,10 +59,10 @@ class AdminRebuildReport(BaseModel):
 
 
 class AdminRestartReport(BaseModel):
-    """One acknowledged administration restart request.
+    """One acknowledged administration re-create request.
 
-    ``restart_queued`` is always true, because the report is returned only after the restart request
-    is admitted.
+    ``restart_queued`` is always true, because the report is returned only after the detached
+    one-off container is started.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -87,88 +71,80 @@ class AdminRestartReport(BaseModel):
     restart_queued: Literal[True] = True
 
 
-def _loopback(address: str) -> bool:
-    """Report whether one socket's local address is a loopback address."""
-    host, _, _ = address.rpartition(":")
-    return host == "127.0.0.1" or host.startswith("127.") or host == "[::1]"
+def recreate_web(*, runner: mechanics.ProcessRunner) -> None:
+    """Re-create the site container from its prepared image and wait for it to answer.
 
-
-def _read_web_listeners(
-    runner: mechanics.ProcessRunner, *, root: Path, port: int, pid: int, timeout: float
-) -> tuple[str, ...]:
-    """Return the local addresses of the listeners proven to belong to the web process.
-
-    Only the local address column is inspected, and only a listener whose process ownership names
-    the web process is accepted. An ownership this viewer cannot read therefore never passes the
-    check, and the bounded bind wait fails instead. A listener the web process owns on an address
-    that is not a loopback address fails at once, because the site answers on a loopback address
-    alone. Listeners of another process on the same port are not this web process and are left as
-    they are.
-    """
-    output = runner.run(("ss", "-H", "-ltnp", f"sport = :{port}"), cwd=root, timeout=timeout).stdout
-    owned: list[str] = []
-    for line in output.decode("utf-8").splitlines():
-        fields = line.split()
-        if len(fields) < 6:
-            continue
-        owners = {int(match) for match in _SOCKET_OWNER_PATTERN.findall(" ".join(fields[5:]))}
-        if pid not in owners:
-            continue
-        if not _loopback(fields[3]):
-            raise ValueError("the web process must not listen on a non-loopback address")
-        owned.append(fields[3])
-    return tuple(owned)
-
-
-def restart_web(website: server.WebsiteStatus, *, runner: mechanics.ProcessRunner) -> None:
-    """Restart this checkout's validated web unit and prove its loopback bind.
-
-    The caller supplies the already validated unit from ``server.read_web_service``, and only the
-    configured manager scope's restart command runs. The restarted process must own
-    ``127.0.0.1:<configured port>`` within the configured startup attempts. No frontend build,
-    container change or administration restart runs.
+    The service is re-created without a build or a pull, so the command reuses the image the site
+    build wrote, and the wait returns only once the container is healthy. It is bounded by the
+    configured stop timeout.
     """
     root = administration.repository_root()
-    site = load_administrative_site_settings()
-    settings = load_local_lifecycle_settings()
-    timeout = settings.stop_timeout_seconds
-    restart = (
-        ("sudo", "-n", "/usr/bin/systemctl", "restart", website.unit)
-        if site.web_service_scope == "system"
-        else ("systemctl", "--user", "restart", website.unit)
-    )
-    runner.run(restart, cwd=root, timeout=timeout)
-
-    restarted = server.read_web_service(runner=runner)
-    mechanics.await_state(
-        lambda: _read_web_listeners(
-            runner, root=root, port=restarted.port, pid=restarted.main_pid, timeout=timeout
+    runner.run(
+        (
+            *mechanics.compose_prefix(non_interactive=True, interpreter=True),
+            "up",
+            "-d",
+            "--wait",
+            "--force-recreate",
+            "--no-build",
+            "web",
         ),
-        lambda owned: f"127.0.0.1:{restarted.port}" in owned,
-        attempts=settings.startup_attempts,
-        interval=settings.poll_interval_seconds,
-        sleep=time.sleep,
+        cwd=root,
+        timeout=load_local_lifecycle_settings().stop_timeout_seconds,
+    )
+
+
+def recreate_admin_queued(*, runner: mechanics.ProcessRunner) -> None:
+    """Start a detached one-off that re-creates the administration service.
+
+    The one-off container performs the re-create of the administration service, so it survives the
+    replacement it performs. It is bounded by the configured stop timeout.
+    """
+    root = administration.repository_root()
+    runner.run(
+        (
+            *mechanics.compose_prefix(non_interactive=True, interpreter=True),
+            "run",
+            "--rm",
+            "-d",
+            "--no-deps",
+            "admin",
+            "python",
+            "-m",
+            "course_explorer_admin.compose",
+            "--non-interactive",
+            "--",
+            "up",
+            "-d",
+            "--wait",
+            "--force-recreate",
+            "--no-build",
+            "admin",
+        ),
+        cwd=root,
+        timeout=load_local_lifecycle_settings().stop_timeout_seconds,
     )
 
 
 def rebuild_site(*, runner: mechanics.ProcessRunner) -> RebuildReport:
-    """Rebuild the frontend, the two containers, the web unit and its verified bind.
+    """Build the site image, re-create the containers, re-create the site and prove its bind.
 
     The checkout reservation is held for the whole rebuild, so a preparation stage or a Working
-    operation refuses before the web-unit read and before any frontend output or container change.
-    Every step is checked. The frontend build runs from the checkout with its installed
-    dependencies, the containers are recreated from their prepared images without a build or a
-    download, the unit restarts through its configured manager, and the restarted unit must answer
-    on the configured loopback bind.
+    operation refuses before any image, container or serving change. Every step is checked. The
+    image build runs from the checkout and is not bounded, the database and embedding containers
+    are re-created from their prepared images without a build or a download, the site container is
+    re-created through the shared owner, and the site must answer on the configured loopback bind.
     """
     with machine_locks.checkout_reservation("rebuild_site"):
         root = administration.repository_root()
-        # The checkout's own unit is validated before any frontend output or container changes.
-        website = server.read_web_service(runner=runner)
-        settings = load_local_lifecycle_settings()
-        timeout = settings.stop_timeout_seconds
+        web = load_web_settings()
+        timeout = load_local_lifecycle_settings().stop_timeout_seconds
 
-        runner.run(("npm", "--prefix", "web", "run", "build"), cwd=root, timeout=timeout)
+        runner.run_interactive(
+            (*mechanics.compose_prefix(interpreter=True), "build", "web"),
+            cwd=root,
+            timeout=None,
+        )
         runner.run(
             (
                 *mechanics.compose_prefix(non_interactive=True, interpreter=True),
@@ -177,43 +153,40 @@ def rebuild_site(*, runner: mechanics.ProcessRunner) -> RebuildReport:
                 "--wait",
                 "--force-recreate",
                 "--no-build",
-                "--pull",
-                "never",
                 *REBUILD_SERVICES,
             ),
             cwd=root,
             timeout=timeout,
         )
-        restart_web(website, runner=runner)
-        return RebuildReport(steps=REBUILD_STEPS, host=website.host, port=website.port)
+        recreate_web(runner=runner)
+        # The self-host module imports this one, so the proof owner is resolved at call time.
+        from course_explorer_admin import self_host
+
+        self_host.prove_web_shell()
+        return RebuildReport(steps=REBUILD_STEPS, host=web.web_host, port=web.web_port)
 
 
 def rebuild_admin(*, runner: mechanics.ProcessRunner) -> AdminRebuildReport:
-    """Build the administration frontend of this checkout after validating its own unit.
+    """Build the administration image of this checkout.
 
-    The command runs the administration frontend build from the checkout's installed dependencies.
-    A build failure propagates, and a separate ``restart_admin`` invocation queues the restart.
+    The command builds the administration target from the checkout and is not bounded. A build
+    failure propagates, and a separate ``restart_admin`` invocation starts the re-create.
     """
     root = administration.repository_root()
-    unit = load_administrative_site_settings().admin_service_unit
-    server.read_owned_site_unit(runner, unit, root=root, entry_point=_ADMIN_ENTRY_POINT)
-    timeout = load_local_lifecycle_settings().stop_timeout_seconds
 
-    runner.run(("npm", "--prefix", "admin-web", "run", "build"), cwd=root, timeout=timeout)
+    runner.run_interactive(
+        (*mechanics.compose_prefix(interpreter=True), "build", "admin"),
+        cwd=root,
+        timeout=None,
+    )
     return AdminRebuildReport(steps=ADMIN_REBUILD_STEPS)
 
 
 def restart_admin(*, runner: mechanics.ProcessRunner) -> AdminRestartReport:
-    """Queue one non-blocking restart of this checkout's own administration unit.
+    """Start the detached one-off that re-creates this checkout's administration service.
 
-    The unit comes from the site settings and is validated as this checkout's administration unit
-    before the request is admitted. The restart is queued rather than waited for, so the caller is
-    not the process being replaced. The returned report acknowledges queue admission alone.
+    The report acknowledges the started one-off alone, so the console answers again once the
+    re-create completes.
     """
-    root = administration.repository_root()
-    unit = load_administrative_site_settings().admin_service_unit
-    server.read_owned_site_unit(runner, unit, root=root, entry_point=_ADMIN_ENTRY_POINT)
-    timeout = load_local_lifecycle_settings().stop_timeout_seconds
-
-    runner.run(("systemctl", "--user", "--no-block", "restart", unit), cwd=root, timeout=timeout)
+    recreate_admin_queued(runner=runner)
     return AdminRestartReport()

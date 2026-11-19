@@ -1,13 +1,12 @@
-"""Product owner for the file, clock, and path primitives.
+"""The file, clock and path primitives shared by the administration and serving code.
 
-Long-running administrative controllers need a set of mechanics that are not product
-behavior: canonical one-line JSON, atomic mode-0600 publication, strict regular-file
-state loading, confined session directories, and one shared UTC clock default. Those
-primitives live here so every caller keeps its own closed DTOs and lifecycle decisions.
-
-Process ownership, Compose orchestration, action locking, and subprocess transport are
-administrative concerns and live in the sibling ``course_explorer_admin`` package. The
-primitives here take their environment and every state location from the caller.
+Long-running administrative controllers need one set of file, clock and path primitives: canonical
+one-line JSON, atomic publication for a file this process owns, an in-place rewrite for a file that
+is a single-file bind mount, strict regular-file state loading, confined session directories and one
+shared UTC clock default. Those primitives live here so every caller keeps its own closed DTOs and
+lifecycle decisions, while process ownership, Compose orchestration, action locking and subprocess
+transport live in the sibling ``course_explorer_admin`` package. Every primitive here takes its
+environment and state locations from the caller.
 """
 
 from __future__ import annotations
@@ -76,6 +75,35 @@ def load_private_model[ModelT: BaseModel](path: Path, model_type: type[ModelT]) 
         return model_type.model_validate_json(payload)
     except ValueError as exc:
         raise ValueError(f"state file does not match its closed schema: {path.name}") from exc
+
+
+def rewrite_private_text_in_place(path: Path, payload: str, *, mode: int = 0o600) -> None:
+    """Rewrite one text file through its own inode, then apply its owner-only permission bits.
+
+    A subsystem file this process owns is published atomically by :func:`atomic_write_private_text`.
+    An environment file can be a single-file bind mount, which can be neither replaced nor renamed
+    over, so the atomic directory write cannot publish it. The caller compares the file's device
+    with its directory's device and rewrites the file through its own inode: opened, written,
+    truncated to the payload's length and synced. The rewrite takes no lock, so one operator and
+    one writer keep it consistent, and a crash during the rewrite can leave a truncated file. The
+    target must be a regular non-symlink file, the payload must be nonblank, and a write failure
+    propagates.
+    """
+    if not isinstance(payload, str) or not payload:
+        raise ValueError("payload must be a nonblank string")
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("target file must be a regular non-symlink file")
+    encoded = payload.encode("utf-8")
+    descriptor = os.open(path, os.O_WRONLY)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.ftruncate(stream.fileno(), len(encoded))
+            os.fsync(stream.fileno())
+    finally:
+        os.close(descriptor)
+    os.chmod(path, mode)
 
 
 def atomic_write_private_text(path: Path, payload: str, *, mode: int = 0o600) -> None:

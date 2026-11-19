@@ -40,13 +40,13 @@ Each failed generation attempt is recorded once with its stage, its fixed reason
 
 ## The fit rule
 
-A generation request starts only when its rendered prompt tokens plus `INFERENCE_MAX_TOKENS` and `INFERENCE_FIT_HEADROOM_TOKENS` fit inside one configured local key. `INFERENCE_LOCAL_VARIANTS` names two ordered keys for the local language model, ordered by increasing context, and the first key that fits receives the request.
+A generation request starts only when its rendered prompt tokens plus `INFERENCE_MAX_TOKENS` and `INFERENCE_FIT_HEADROOM_TOKENS` fit inside one configured local key. `INFERENCE_LOCAL_VARIANTS` names two ordered keys for the local language model, ordered by increasing context, and the first key that fits receives the request. Each key names its own source model and artifact, so a preset may give the second key another file.
 
 | Key | Meaning | Example |
 |---|---|---|
 | `INFERENCE_MAX_TOKENS` | The output cap reserved inside the context of a local key | 8192 |
 | `INFERENCE_FIT_HEADROOM_TOKENS` | The template and JSON-mode margin reserved beside the output cap | 1024 |
-| `INFERENCE_LOCAL_VARIANTS` | The two ordered local keys, by increasing context | 131072 and 163840 tokens |
+| `INFERENCE_LOCAL_VARIANTS` | The two ordered local keys, by increasing context, each with its own model and artifact | 131072 and 262144 tokens |
 
 Every key is in `config/inference.toml`. A packet that fits neither key is never shortened. It fails as one capacity failure for that target course, with the reason `context_exceeded`, and no generation request is made for it. The rest of the run continues normally, and a following run retries the target course.
 
@@ -56,7 +56,7 @@ The measured context each key holds is recorded with the sizing corrections in [
 
 The worker restarts after a configured amount of model run time. A [periodic reboot](/docs/reference/glossary.md#administration) is taken at a safe point: the clock counts only the time a local model is loaded, and it samples at a completed target unit and at every recorded failed generation attempt, so repeated local failures cannot postpone the restart.
 
-`WORKER_GPU_REBOOT_INTERVAL_MINUTES` in `config/worker.toml` sets the interval, and the example sets 120. After the restart the run continues with the same cycle and the pending work, and a completed stage is not repeated.
+`WORKER_GPU_REBOOT_ENABLED` in `config/worker.toml` turns the restart on, and the example leaves it off. `WORKER_GPU_REBOOT_INTERVAL_MINUTES` sets the interval, and the example sets 120. The restart runs on a WSL worker, on a native Linux worker and on a same-machine worker. After the restart the run continues with the same cycle and the pending work, and a completed stage is not repeated.
 
 ## Operator disposition
 
