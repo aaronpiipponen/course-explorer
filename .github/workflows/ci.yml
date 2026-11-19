@@ -138,7 +138,10 @@ jobs:
         env: *database_environment
         run: npm --prefix web run browser:test
       - name: uv run python -m course_explorer_admin.compose --non-interactive -- down --volumes
-        if: always()
+        # The Compose bridge reads the subsystem configuration files under `config/`, so the
+        # cleanup runs only when `config/database.toml` exists. A job that stopped before the
+        # file existed started no container stack.
+        if: always() && hashFiles('config/database.toml') != ''
         env: *database_environment
         run: uv run python -m course_explorer_admin.compose --non-interactive -- down --volumes
 
