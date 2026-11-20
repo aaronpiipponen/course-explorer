@@ -427,3 +427,12 @@ def test_operator_commands_report_status_refuse_bad_input_and_map_nothing(
     captured = capsys.readouterr()
     assert json.loads(captured.out)["label"] == "disposition"
     assert disposition_calls == [("disp-target", None)]
+
+
+def test_progress_prefixes_each_line_when_a_transcript_marker_is_configured(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A configured prefix reaches every deploy progress line on the error stream."""
+    monkeypatch.setenv("COURSE_EXPLORER_PROGRESS_PREFIX", "::notice::")
+    _CLI_MODULE._progress("deploy-step")
+    assert capsys.readouterr().err == "::notice::deploy-step\n"

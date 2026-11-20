@@ -61,6 +61,7 @@ jobs:
         # os.memfd_create, which the shared caches need, so the run installs the
         # distribution build and proves the capability before anything uses it.
         run: |
+          echo "::notice::Verify: setting up"
           sudo apt-get update
           sudo apt-get install -y software-properties-common
           sudo add-apt-repository -y ppa:deadsnakes/ppa
@@ -78,7 +79,9 @@ jobs:
       - name: Install administration console dependencies
         run: npm --prefix admin-web ci --no-audit --no-fund
       - name: uv run ruff check .
-        run: uv run ruff check .
+        run: |
+          echo "::notice::Verify: static checks and unit tests"
+          uv run ruff check .
       - name: uv run ruff format --check .
         run: uv run ruff format --check .
       - name: git diff --check HEAD^ HEAD
@@ -89,6 +92,7 @@ jobs:
         # The checks read runtime configuration and a Compose file copied from the committed
         # example tree into the runner's working copy.
         run: |
+          echo "::notice::Verify: server images and frontend"
           mkdir -p config
           cp examples/config/*.toml config/
           cp examples/config/wiki.json config/wiki.json
@@ -127,7 +131,9 @@ jobs:
           FEEDBACK_POSTGRES_PASSWORD: synthetic-ci-password
           POSTGRES_DB: course_explorer_test
           COMPOSE_PROJECT_NAME: course-explorer-ci
-        run: uv run python -m course_explorer_admin.compose --non-interactive -- build db
+        run: |
+          echo "::notice::Verify: integration and browser"
+          uv run python -m course_explorer_admin.compose --non-interactive -- build db
       - name: uv run python -m course_explorer_admin.compose --non-interactive -- up -d --wait db
         env: *database_environment
         run: uv run python -m course_explorer_admin.compose --non-interactive -- up -d --wait db
@@ -145,7 +151,9 @@ jobs:
         # file existed started no container stack.
         if: always() && hashFiles('config/database.toml') != ''
         env: *database_environment
-        run: uv run python -m course_explorer_admin.compose --non-interactive -- down --volumes
+        run: |
+          echo "::notice::Verify: cleanup"
+          uv run python -m course_explorer_admin.compose --non-interactive -- down --volumes
 
   deploy:
     needs: verify
@@ -161,6 +169,7 @@ jobs:
         working-directory: ${{ vars.SERVING_CHECKOUT }}
         env:
           TESTED_COMMIT: ${{ github.sha }}
+          COURSE_EXPLORER_PROGRESS_PREFIX: "::notice::"
         run: |
           set -euo pipefail
           # Admission runs before any file of the serving checkout executes. An ordinary

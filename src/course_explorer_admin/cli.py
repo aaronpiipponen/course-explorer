@@ -9,6 +9,7 @@ wrapper can inject an additional explicit route without a second parser or dupli
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Callable, Sequence
 from typing import Literal
@@ -235,8 +236,9 @@ def _emit(report: object) -> None:
 
 
 def _progress(line: str) -> None:
-    """Write one fixed workflow step name to the error stream."""
-    print(line, file=sys.stderr)
+    """Write one progress line, prefixed by the configured transcript marker when present."""
+    prefix = os.environ.get("COURSE_EXPLORER_PROGRESS_PREFIX", "")
+    print(f"{prefix}{line}", file=sys.stderr)
 
 
 def _fail(
