@@ -154,11 +154,7 @@ require_image() {
 run_image() {
     local tty=()
     local shared_env=()
-    local progress_env=()
     local shared_mount=()
-    if [[ -n "${COURSE_EXPLORER_PROGRESS_PREFIX:-}" ]]; then
-        progress_env=(--env "COURSE_EXPLORER_PROGRESS_PREFIX=$COURSE_EXPLORER_PROGRESS_PREFIX")
-    fi
     if [[ -t 0 && -t 1 ]]; then
         tty=(--tty)
     fi
@@ -178,7 +174,6 @@ run_image() {
         --env HOME=/home/course \
         --env "PYTHONPATH=$CHECKOUT/src" \
         ${shared_env[@]+"${shared_env[@]}"} \
-        ${progress_env[@]+"${progress_env[@]}"} \
         --env "COURSE_EXPLORER_HOST_ROOT=$CHECKOUT" \
         --env "COURSE_EXPLORER_HOST_HOME=$HOME" \
         --env "COURSE_EXPLORER_SSH_DIR=$SSH_DIR" \
